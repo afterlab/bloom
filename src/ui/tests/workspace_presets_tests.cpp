@@ -2,6 +2,8 @@
 // arrangement, panel preservation, user presets stored in application preferences, the "(edited)"
 // label, and the Export editor's reveal policy.
 
+#include "isolated_qt_settings.hpp"
+
 #include <bloom/ui/editor_area.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/kit/theme.hpp>
@@ -145,6 +147,9 @@ void testPanelsThePresetKeepsAreNotRebuilt(Expectations& expectations) {
 }
 
 void testUserPresetsSaveUpdateDelete(Expectations& expectations) {
+    // An empty store of its own for this case. The cases after it still write preferences, so
+    // the process's own settings folder comes back at its end (#749): a write after the store is
+    // removed must not make its folder again.
     QTemporaryDir directory;
     QSettings::setDefaultFormat(QSettings::IniFormat);
     QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, directory.path());
@@ -191,6 +196,7 @@ void testUserPresetsSaveUpdateDelete(Expectations& expectations) {
                             "\"Custom\"");
     }
     host.hide();
+    bloom::test_support::isolateQtSettings();
 }
 
 void testDraggingADividerMarksThePresetEdited(Expectations& expectations) {
@@ -267,6 +273,7 @@ void testExportRevealPolicy(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     bloom::ui::kit::installAfterlabTheme(application);
     Expectations expectations;
     testBuiltInArrangements(expectations);
