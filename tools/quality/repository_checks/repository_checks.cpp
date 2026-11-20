@@ -432,7 +432,7 @@ void appendRepositoryPolicyFindings(const Path& root, const std::span<const Path
 
 constexpr auto kKnownModules = std::to_array<std::string_view>(
     {"core", "platform", "document", "commands", "project", "render", "runtime", "media", "color",
-     "output", "host", "scripting", "mcp", "svgartwork", "update"});
+     "output", "host", "scripting", "mcp", "svgartwork", "update", "crash"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
         {"platform", "core"},      {"document", "core"},      {"commands", "core"},
@@ -464,6 +464,7 @@ constexpr auto kAllowedModuleDependencies =
         {"svgartwork", "platform"}, {"commands", "svgartwork"},
         {"runtime", "svgartwork"}, /* ADR 0038: the SVG artwork builder and expansion. */
         {"update", "core"},        {"update", "platform"}, /* ADR 0041: the self-update core. */
+        {"crash", "core"},         {"crash", "platform"}, /* #736: crash reports. */
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,

@@ -88,6 +88,11 @@ function(bloom_add_test)
         endif()
     endif()
 
+    # A crash during the suite is recorded in the build tree, never in the user's crash folder
+    # (src/crash/include/bloom/crash/crash_reports.hpp). A test that sets its own folder keeps it:
+    # the later entry wins.
+    list(PREPEND ARG_ENVIRONMENT "BLOOM_TEST_CRASH_DIRECTORY=${CMAKE_BINARY_DIR}/test-crash-reports")
+
     add_test(NAME "${ARG_NAME}" COMMAND ${ARG_COMMAND})
     set_tests_properties("${ARG_NAME}" PROPERTIES TIMEOUT "${ARG_TIMEOUT}")
     if(ARG_SKIP_RETURN_CODE)
