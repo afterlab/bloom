@@ -149,8 +149,8 @@ GpuOcioContextResult GpuOcioContextResolver::resolve(const color::GpuShaderCance
     }
 
     auto preparer = std::make_shared<GpuOcioProgramPreparer>(state_->request.preparerBudgets);
-    auto context =
-        std::make_shared<const GpuSceneOcioContext>(GpuSceneOcioContext{preparer, options});
+    auto context = std::make_shared<const GpuSceneOcioContext>(GpuSceneOcioContext{
+        .preparer = preparer, .compileOptions = options, .unavailableReason = {}});
     state_->preparer = std::move(preparer);
     state_->context = std::move(context);
     ++state_->counters.resolves;

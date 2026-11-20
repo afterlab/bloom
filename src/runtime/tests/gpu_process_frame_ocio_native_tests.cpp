@@ -40,6 +40,7 @@
 #include <bloom/runtime/qualified_display_preparation.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -407,7 +408,17 @@ int run(int argc, char** argv) {
     evaluatorOptions.loaderPath = options.loader_path;
     // Leave both numeric ceilings omitted. The production path resolves them from the sampled
     // processing root on the worker rather than probing the OS during options construction.
-    evaluatorOptions.ocioContext = ocioContext;
+    // #750: the context comes from its owner per frame, as the export provider supplies it. Until
+    // the owner has qualified the tools it hands out a context with no preparer that says why.
+    const auto qualified = std::make_shared<std::atomic<bool>>(false);
+    const auto unqualified = std::make_shared<const GpuSceneOcioContext>(GpuSceneOcioContext{
+        .preparer = nullptr,
+        .compileOptions = {},
+        .unavailableReason = "the GPU shader tools could not be prepared (Timeout): a test"});
+    evaluatorOptions.ocioContextProvider = [qualified, unqualified,
+                                            ocioContext](const bloom::runtime::CancellationToken&) {
+        return qualified->load() ? ocioContext : unqualified;
+    };
     evaluatorOptions.mediaContext = GpuSceneMediaContext::fromEvaluator(cpuEvaluator);
     expectations.expect(
         !evaluatorOptions.requestByteBudget && !evaluatorOptions.readbackByteBudget &&
@@ -446,6 +457,17 @@ int run(int argc, char** argv) {
     }
     const auto geometry = GpuOcioCommandGeometry{descriptor->dataWindow().extent().width(),
                                                  descriptor->dataWindow().extent().height()};
+
+    // Without a preparer the frame's colour transforms cannot run on the device, and the refusal
+    // names the owner's reason; once the owner has the context the same frame runs on the GPU.
+    const auto unprepared = evaluator->evaluate(plan, request, {}, {}, nullptr);
+    expectations.expect(unprepared.status != GpuProcessFrameStatus::Evaluated &&
+                            unprepared.diagnostic.message.find(
+                                "(the GPU shader tools could not be prepared (Timeout): a test)") !=
+                                std::string::npos,
+                        "a frame without the owner's context names why: " +
+                            unprepared.diagnostic.message);
+    qualified->store(true);
 
     // Prepare the display command from the SAME shared preparer the evaluator uses.
     auto configResolution = bloom::color::resolveOcioBuiltIn(

@@ -1047,7 +1047,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
     }
     if (ocioContext.preparer == nullptr) {
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
-                    "No GPU OCIO preparer is configured for image effects");
+                    gpuOcioPreparerMissing(ocioContext, "image effects"));
     }
     const auto config = resolveInputColorConfig(request.colorIntent);
     if (!config.has_value()) {

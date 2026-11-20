@@ -206,6 +206,13 @@ struct GpuProcessFrameEvaluatorOptions final {
     // media-source colour conversion and image-effect transforms. Null fails every non-identity
     // transform closed, so the caller keeps the CPU reference path rather than mis-rendering.
     std::shared_ptr<const GpuSceneOcioContext> ocioContext;
+    // Per-frame form of `ocioContext`, preferred when set. Called like `mediaContextProvider`, on
+    // the CALLING CPU worker during scene preparation (never on the GPU owner thread); it may block
+    // to qualify the packaged tools. An owner whose qualification failed (a busy machine can run
+    // past its deadline) qualifies again for a later frame rather than serving every frame of its
+    // life without GPU colour transforms. A null result fails those transforms closed.
+    std::function<std::shared_ptr<const GpuSceneOcioContext>(const CancellationToken&)>
+        ocioContextProvider;
     // Per-request media context. Preferred form is `mediaContextProvider`, which the evaluator
     // calls on the CALLING CPU worker during scene preparation (never on the GPU owner thread) so
     // callers without a captured source-base override observe current session context.

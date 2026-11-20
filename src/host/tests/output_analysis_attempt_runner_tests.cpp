@@ -100,6 +100,7 @@ int main(const int argc, char** argv) {
     testGpuExportProviderQueuedBootstrapCancellationCompletes(expectations);
     testGpuDisplayConcurrentSetterPrepare(expectations);
     testGpuExportProviderFactoryDisplayPreparation(expectations);
+    testGpuExportProviderQualifiesAgainAfterAFailure(expectations);
     testGpuEvaluatorHostPath(expectations, requireDevice);
     testHeadlessRootBoundsTheProcessPools(expectations);
     // Last: it sets the process ledger's RAM headroom for the rest of this process.

@@ -1329,6 +1329,11 @@ shape and finite samples; and rejects unsupported OCIO resource forms. Shader co
 the UI and GPU service threads, and off the native GPU owner thread, as a bounded, cancellable child
 process of the packaged tools with no shell involved; the shared `GpuOcioContextResolver` qualifies
 the executable-relative package once on a CPU worker and publishes one `GpuOcioProgramPreparer`.
+Qualification hashes the tools under a deadline, which a busy machine can run past, so a failure is
+not remembered: an export provider whose bootstrap could not qualify them qualifies again for the
+next frame or display command that needs the preparer (on that frame's CPU worker), and until then
+each refusal names the failure ("No GPU OCIO preparer is configured for image effects (the GPU
+shader tools could not be prepared (...): ...)") rather than serving every later frame on the CPU.
 Bloom accepts the output only after SPIR-V structural validation and reflection exactly match the
 declared entry point, bindings, descriptor types, dimensions, and limits. Pipeline creation remains
 on the GPU service thread and is covered by device-loss containment. A timeout, tool crash,

@@ -139,9 +139,10 @@ prepareExportScene(const GpuProcessFrameEvaluatorOptions& options,
     if (assetBaseDirectory) {
         mediaContext.assetBaseDirectory = *assetBaseDirectory;
     }
+    const auto ocioContext = options.ocioContextProvider ? options.ocioContextProvider(cancellation)
+                                                         : options.ocioContext;
     const CpuGpuSceneBuilder builder(nullptr, mediaContext,
-                                     options.ocioContext != nullptr ? *options.ocioContext
-                                                                    : GpuSceneOcioContext{},
+                                     ocioContext != nullptr ? *ocioContext : GpuSceneOcioContext{},
                                      std::move(phase));
     // Final output owns this boundary. A request copied from interactive preview must never
     // import its retained-source availability policy into export, including a warm cache hit.

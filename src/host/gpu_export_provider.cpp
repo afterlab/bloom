@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -35,6 +36,49 @@ void applyDefaultProcessHeadroom(runtime::MemoryBudgetLedger& ledger) {
     ledger.setRamHeadroom(headroom);
 }
 
+// The provider's one shared OCIO context (one preparer + qualified compile options) for output
+// display and for the evaluator's media and effect transforms. Qualifying the packaged tools hashes
+// them under a deadline, which a busy machine can run past; a failed qualification is not
+// remembered by the resolver, so the next frame that needs the context qualifies again instead of
+// the provider serving every later frame without GPU colour transforms. Shared with the evaluator's
+// per-frame provider, never holding the provider's State (the evaluator is owned by it).
+struct OcioContextSlot final {
+    std::shared_ptr<runtime::GpuOcioContextResolver> resolver;
+    mutable std::mutex mutex;
+    std::shared_ptr<const runtime::GpuSceneOcioContext> context;
+    std::string failure;
+
+    [[nodiscard]] std::shared_ptr<const runtime::GpuSceneOcioContext> current() const {
+        const std::lock_guard lock(mutex);
+        return context;
+    }
+    // The context, qualifying the tools first when none is held. Blocking: a CPU worker only.
+    // Without one, a context with no preparer that names the last failure.
+    [[nodiscard]] std::shared_ptr<const runtime::GpuSceneOcioContext>
+    acquire(const runtime::GpuOcioCancellation& cancel) {
+        {
+            const std::lock_guard lock(mutex);
+            if (context != nullptr || resolver == nullptr)
+                return context;
+        }
+        // The resolver serializes concurrent callers and keeps the first success; this lock is not
+        // held across it.
+        const auto resolved = resolver->resolve(cancel);
+        const std::lock_guard lock(mutex);
+        if (resolved.hasValue()) {
+            context = resolved.context;
+            failure.clear();
+            return context;
+        }
+        if (resolved.error != runtime::GpuOcioContextError::Cancelled)
+            failure = "the GPU shader tools could not be prepared (" +
+                      std::string(runtime::gpuOcioContextErrorName(resolved.error)) +
+                      "): " + resolved.diagnostic;
+        return std::make_shared<const runtime::GpuSceneOcioContext>(runtime::GpuSceneOcioContext{
+            .preparer = nullptr, .compileOptions = {}, .unavailableReason = failure});
+    }
+};
+
 } // namespace
 
 struct GpuExportProvider::State final {
@@ -43,6 +87,12 @@ struct GpuExportProvider::State final {
         : options(std::move(optionsValue)),
           ownsProcessSampling(options.processingPhasePolicy == nullptr),
           bootstrapGate(std::move(gate)) {
+        ocio->context = options.ocioContext;
+        ocio->resolver = options.ocioResolver;
+        if (ocio->context == nullptr && ocio->resolver != nullptr)
+            options.ocioContextProvider = [slot = ocio](const runtime::CancellationToken& token) {
+                return slot->acquire([&token] { return token.isCancellationRequested(); });
+            };
         if (ownsProcessSampling) {
             packedHostOwner = runtime::PackedHostRetirementOwner::create();
             options.processingPhasePolicy =
@@ -96,9 +146,9 @@ struct GpuExportProvider::State final {
     // never destroy the preparer mid-prepare (UAF). The last reference retires it.
     std::shared_ptr<runtime::GpuOcioProgramPreparer> displayPreparer;
     // The production shared context: one off-UI preparer + qualified compile options resolved from
-    // the packaged tools by the owning provider's CPU-worker bootstrap. When present it is the ONE
-    // preparer used for output display and for the evaluator's media/effect transforms.
-    std::shared_ptr<const runtime::GpuSceneOcioContext> ocioContext;
+    // the packaged tools, first by the owning provider's CPU-worker bootstrap. When present it is
+    // the ONE preparer used for output display and for the evaluator's media/effect transforms.
+    const std::shared_ptr<OcioContextSlot> ocio = std::make_shared<OcioContextSlot>();
     bool bootstrapScheduled = false;
     bool bootstrapComplete = false;
     bool stopping = false;
@@ -260,21 +310,13 @@ void GpuExportProvider::prepare(runtime::TaskScheduler& scheduler) {
             }
             if (!stopping) {
                 state->refreshCapacity(context.cancellation());
-                // Qualify the packaged GPU shader tools exactly once on this CPU worker (never the
-                // UI thread or the evaluator's GPU owner thread) and publish the one shared context
-                // to both the evaluator it creates and its own output-display preparation. A typed
-                // refusal (missing/invalid tools, cancellation) leaves the context null and the
-                // caller on the unchanged CPU reference path; nothing is poisoned for a retry.
-                if (state->options.ocioContext == nullptr &&
-                    state->options.ocioResolver != nullptr) {
-                    const auto resolved = state->options.ocioResolver->resolve(
-                        [&context] { return context.isCancellationRequested(); });
-                    if (resolved.hasValue()) {
-                        state->options.ocioContext = resolved.context;
-                        std::lock_guard lock(state->displayMutex);
-                        state->ocioContext = resolved.context;
-                    }
-                }
+                // Qualify the packaged GPU shader tools on this CPU worker (never the UI thread or
+                // the evaluator's GPU owner thread) for both the evaluator it creates and its own
+                // output-display preparation. A typed refusal (missing/invalid tools, a deadline
+                // a busy machine ran past, cancellation) leaves the frames that need the context
+                // to qualify again, and each refused one names the failure.
+                static_cast<void>(
+                    state->ocio->acquire([&context] { return context.isCancellationRequested(); }));
                 // Interpreters explicitly share this neutral gate across owned provider roots.
                 // Only native construction/its failed or raced-stop cleanup is serialized; task
                 // and frame execution remain independent. Never wait under a state/registry lock.
@@ -366,8 +408,7 @@ bool GpuExportProvider::deviceAvailable() const {
 std::shared_ptr<const runtime::GpuSceneOcioContext> GpuExportProvider::sceneOcioContext() const {
     if (state_ == nullptr)
         return nullptr;
-    const std::lock_guard lock(state_->displayMutex);
-    return state_->ocioContext;
+    return state_->ocio->current();
 }
 
 std::shared_ptr<runtime::GpuProcessingPhasePolicy>
@@ -493,10 +534,12 @@ bool GpuExportProvider::gpuDisplayPreparationAvailable() const noexcept {
     if (state_ == nullptr) {
         return false;
     }
-    std::lock_guard lock(state_->displayMutex);
-    if (state_->ocioContext != nullptr && state_->ocioContext->preparer != nullptr) {
+    // A configured resolver can still qualify the tools for the next display command.
+    if (state_->ocio->resolver != nullptr)
         return true;
-    }
+    if (const auto context = state_->ocio->current(); context != nullptr && context->preparer)
+        return true;
+    std::lock_guard lock(state_->displayMutex);
     return state_->displayCompile.has_value() &&
            runtime::validGpuOcioCompileOptions(*state_->displayCompile);
 }
@@ -517,11 +560,21 @@ runtime::GpuOcioPreparationResult GpuExportProvider::prepareDisplayCommand(
     // only as a focused test seam and is itself lifetime-safe.
     runtime::GpuOcioCompileOptions compile;
     std::shared_ptr<runtime::GpuOcioProgramPreparer> preparer;
+    // Qualifies the tools first when an earlier qualification failed (this runs on a CPU task).
+    const auto shared = state_->ocio->acquire(cancel);
     {
         std::lock_guard lock(state_->displayMutex);
-        if (state_->ocioContext != nullptr && state_->ocioContext->preparer != nullptr) {
-            compile = state_->ocioContext->compileOptions;
-            preparer = state_->ocioContext->preparer;
+        if (shared != nullptr && shared->preparer != nullptr) {
+            compile = shared->compileOptions;
+            preparer = shared->preparer;
+        } else if (state_->ocio->resolver != nullptr) {
+            if (cancel && cancel())
+                return {nullptr, runtime::GpuOcioPreparationError::CompileCancelled,
+                        "the GPU shader tools' qualification was cancelled"};
+            return {nullptr, runtime::GpuOcioPreparationError::InvalidRequest,
+                    shared != nullptr && !shared->unavailableReason.empty()
+                        ? shared->unavailableReason
+                        : std::string("the GPU shader tools could not be prepared")};
         } else {
             if (!state_->displayCompile.has_value() ||
                 !runtime::validGpuOcioCompileOptions(*state_->displayCompile)) {

@@ -492,6 +492,77 @@ void testGpuExportProviderFactoryDisplayPreparation(Expectations& expectations) 
 #endif
 }
 
+// #750: qualifying the packaged tools can fail on a busy machine (it hashes them under a deadline).
+// The provider's bootstrap qualification used to be its only one, so every later frame of the
+// provider's life ran its colour transforms on the CPU and said only that no preparer was
+// configured. Here the tools are absent when the provider starts: the display command names that
+// failure, and once the tools are in place the next one qualifies them and prepares on the GPU.
+void testGpuExportProviderQualifiesAgainAfterAFailure(Expectations& expectations) {
+#if defined(BLOOM_GPU_TOOLS_AVAILABLE) && BLOOM_GPU_TOOLS_AVAILABLE
+    const auto package = host::packagedGpuShaderTools();
+    TempDirectory directory;
+    expectations.expect(package.has_value() && directory.isValid(),
+                        "requalify: the packaged tools and a directory are available");
+    if (!package.has_value() || !directory.isValid())
+        return;
+    const auto application = directory.path() / "application";
+    {
+        std::ofstream file(application, std::ios::binary);
+        file << "an application beside its tools";
+    }
+    auto resolver = host::makePackagedGpuOcioResolver(application);
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
+    options.enabled = false; // display preparation is CPU-only: no device needed here
+    options.ocioResolver = resolver;
+    runtime::TaskScheduler scheduler;
+    auto provider = host::GpuExportProvider::create(std::move(options));
+    provider->prepare(scheduler);
+    const auto deadline = std::chrono::steady_clock::now() + 20s;
+    while (!provider->prepared() && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::sleep_for(1ms);
+    expectations.expect(provider->prepared() && provider->sceneOcioContext() == nullptr,
+                        "requalify: the bootstrap could not qualify the absent tools");
+    expectations.expect(provider->gpuDisplayPreparationAvailable(),
+                        "requalify: a configured resolver keeps the display route open");
+
+    auto resolution = bloom::color::resolveOcioBuiltIn(
+        bloom::color::OcioConfigLocatorKind::BloomBuiltIn, bloom::color::kBloomNeutralV1ConfigUri,
+        bloom::color::kBloomNeutralV1ConfigDigest, runtime::kLinearRec709SceneColorSpaceId);
+    auto config = resolution.ready() ? std::move(resolution).takeResolved() : std::nullopt;
+    expectations.expect(config.has_value(), "requalify: the built-in config resolves");
+    if (!config.has_value()) {
+        static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+        return;
+    }
+    const runtime::GpuOcioCommandGeometry geometry{2, 2};
+    const auto refused =
+        provider->prepareGpuDisplayCommand(*config, config->displayName(), config->viewName(), geometry);
+    expectations.expect(!refused.hasValue() &&
+                            refused.diagnostic.starts_with(
+                                "the GPU shader tools could not be prepared ("),
+                        "requalify: a display command without the tools names their failure: " +
+                            refused.diagnostic);
+
+    std::error_code error;
+    std::filesystem::copy(host::currentExecutablePath().parent_path() / package->toolsDirectory,
+                          directory.path() / package->toolsDirectory,
+                          std::filesystem::copy_options::recursive, error);
+    expectations.expect(!error, "requalify: the tools are put in place: " + error.message());
+    const auto prepared =
+        provider->prepareGpuDisplayCommand(*config, config->displayName(), config->viewName(), geometry);
+    expectations.expect(prepared.hasValue(),
+                        "requalify: the next display command qualifies the tools and prepares: " +
+                            prepared.diagnostic);
+    const auto context = provider->sceneOcioContext();
+    expectations.expect(context != nullptr && context->preparer != nullptr,
+                        "requalify: the provider keeps the qualified context for its frames");
+    static_cast<void>(provider->shutdownAndWait(std::chrono::seconds(10)));
+#else
+    std::cout << "NotRun: requalify: this target publishes no packaged GPU shader tools\n";
+#endif
+}
+
 // A provider's private pool is rooted on its own host owner, survives escaped contexts safely, and
 // never survives owner close as an active store. Reusing the same CPU evaluator cannot bind it to
 // a closed private root. No pool keeps a host copy of an upload (ADR 0037).

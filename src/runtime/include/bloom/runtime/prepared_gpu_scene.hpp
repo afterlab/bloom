@@ -57,6 +57,7 @@
 #include <functional>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bloom::render {
@@ -771,7 +772,19 @@ struct PreparedGpuSceneBuildResult final {
 struct GpuSceneOcioContext final {
     std::shared_ptr<GpuOcioProgramPreparer> preparer;
     GpuOcioCompileOptions compileOptions;
+    // Without a preparer: why the owner has none (the shader tools' last qualification failure).
+    // Empty when none was attempted. A refusal for a missing preparer names it.
+    std::string unavailableReason = {};
 };
+
+// The refusal of a transform that needs the context's preparer, naming why there is none.
+[[nodiscard]] inline std::string gpuOcioPreparerMissing(const GpuSceneOcioContext& context,
+                                                        const std::string_view work) {
+    std::string message = "No GPU OCIO preparer is configured for " + std::string(work);
+    if (!context.unavailableReason.empty())
+        message += " (" + context.unavailableReason + ")";
+    return message;
+}
 
 // Stateless CPU scene preparation. The caller owns the plan and request; nothing is retained beyond
 // the returned scene.
