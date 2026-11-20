@@ -138,6 +138,11 @@ function(bloom_add_test)
     # (src/crash/include/bloom/crash/crash_reports.hpp). A test that sets its own folder keeps it:
     # the later entry wins.
     list(PREPEND ARG_ENVIRONMENT "BLOOM_TEST_CRASH_DIRECTORY=${CMAKE_BINARY_DIR}/test-crash-reports")
+    # Every signal or termination a process supervisor sends during the suite is logged, with its
+    # target and the target's name at that moment, beside CTest's own logs (local-validation.md):
+    # a test killed with no line naming it was not killed by a supervisor.
+    list(PREPEND ARG_ENVIRONMENT
+         "BLOOM_PROCESS_SIGNAL_LOG=${CMAKE_BINARY_DIR}/Testing/Temporary/process-signals.log")
 
     add_test(NAME "${ARG_NAME}" COMMAND ${ARG_COMMAND})
     set_tests_properties("${ARG_NAME}" PROPERTIES TIMEOUT "${ARG_TIMEOUT}")

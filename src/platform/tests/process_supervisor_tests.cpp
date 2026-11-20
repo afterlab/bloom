@@ -5,6 +5,7 @@
 #ifdef _WIN32
 #define _CRT_RAND_S // rand_s, before any standard header
 #endif
+#include <bloom/platform/private_temporary_directory.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
 #include <array>
@@ -14,6 +15,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -57,6 +60,18 @@ void expect(const bool condition, const std::string_view message) {
         ++gFailures;
         std::cerr << "FAILED: " << message << '\n';
     }
+}
+
+// Sets BLOOM_PROCESS_SIGNAL_LOG for this process, or removes it when `path` is empty.
+void setSignalLog(const std::string& path) {
+#ifdef _WIN32
+    _putenv_s("BLOOM_PROCESS_SIGNAL_LOG", path.c_str());
+#else
+    if (path.empty())
+        ::unsetenv("BLOOM_PROCESS_SIGNAL_LOG");
+    else
+        ::setenv("BLOOM_PROCESS_SIGNAL_LOG", path.c_str(), 1);
+#endif
 }
 
 // --- child modes ---------------------------------------------------------------------------
@@ -284,9 +299,41 @@ void testDeadlineCancelAndStop(const std::string& self) {
     expect(cancel != nullptr && cancel->code == ProcessError::Cancelled,
            "a cancelled read reports cancellation");
     expect(!child->waitExit(0ms).has_value(), "the hanging worker is still running");
+    // The signal log names every signal a supervisor sends, with its target, before it is sent
+    // (#750: a test process was once killed and nothing could say by whom).
+    const auto folder = bloom::platform::createPrivateTemporaryDirectory("bloom-signal-log-");
+    expect(folder.has_value(), "the signal log's folder is created");
+    const auto log = folder.value_or(std::filesystem::path{}) / "signals.log";
+    if (folder)
+        setSignalLog(log.string());
+    const auto pid = child->processId();
     child->stop();
+    setSignalLog({});
     expect(child->waitExit(0ms).has_value() || !child->memory().has_value(),
            "stop() ends and reaps a worker that ignores the request");
+    std::ifstream read(log);
+    const std::string logged{std::istreambuf_iterator<char>(read), std::istreambuf_iterator<char>()};
+    read.close();
+    std::cout << "signal log: " << logged;
+#ifdef _WIN32
+    const std::string sent = "sends TerminateJobObject to process group " + std::to_string(pid);
+#else
+    const std::string sent = "sends SIGTERM to process group " + std::to_string(pid);
+#endif
+    expect(logged.find(sent) != std::string::npos,
+           "the signal log names the stop's signal and its target: " + logged);
+    const auto program = std::filesystem::path(self).filename().string();
+    expect(logged.find("(started as " + program + ", now ") != std::string::npos,
+           "the signal log names the program the supervisor started there");
+#if defined(__linux__)
+    // The kernel's name for the target at that moment (at most 15 characters): the same program.
+    expect(logged.find(", now " + program.substr(0, 15) + "): ") != std::string::npos,
+           "the signal log names what the system says the target is");
+#endif
+    if (folder) {
+        std::error_code ignored;
+        std::filesystem::remove_all(*folder, ignored);
+    }
 }
 
 void testMemoryLimit(const std::string& self) {

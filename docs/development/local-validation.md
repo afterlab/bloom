@@ -213,6 +213,18 @@ declared card's live budget query goes unanswered. `bloom.cli.render-unsampled-c
 through it and checks that the render completes on admission's stated assumption and says what it
 assumed. The declaration is `src/core/include/bloom/core/test_fixed_memory_reading.hpp`.
 
+A test that ends by a signal it did not raise (CTest's "Subprocess killed") needs its sender named
+(#750). `bloom_add_test` sets `BLOOM_PROCESS_SIGNAL_LOG` for every test to
+`<build>/Testing/Temporary/process-signals.log`; while it names a file, every process supervisor
+appends one line there before each signal or termination it sends: the time, the sending process,
+the target process group, the signal, the program the supervisor started there, the name the system
+reports for the target at that moment (Linux and macOS) and why
+(`src/platform/process_signal_log.hpp`). A supervisor only ever signals the group of a child it has
+not yet reaped, so the two names match; a line whose names differ is a supervisor signalling a
+process it does not own, and a killed test that no line names was killed by something outside the
+supervisors. The cgroup memory limit is the other in-machine sender: the kernel log
+(`journalctl -k`) records each kill it makes. Nothing in the product sets the variable.
+
 The runner itself has a small local test suite:
 
 ```sh

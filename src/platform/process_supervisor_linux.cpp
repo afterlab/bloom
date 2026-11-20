@@ -3,6 +3,8 @@
 #include <bloom/platform/shared_frame_arena.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 
+#include "process_signal_log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -370,9 +372,13 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->input = Fd{};
     if (state_->waitUntil(Clock::now() + state_->options.messageGrace))
         return;
+    detail::recordProcessSignal(state_->pid, true, "SIGTERM", state_->options.executable,
+                                "it did not exit within the grace after its input closed");
     ::kill(-state_->pid, SIGTERM);
     if (state_->waitUntil(Clock::now() + state_->options.termGrace))
         return;
+    detail::recordProcessSignal(state_->pid, true, "SIGKILL", state_->options.executable,
+                                "it did not exit within the grace after SIGTERM");
     ::kill(-state_->pid, SIGKILL);
     while (::waitpid(state_->pid, &state_->status, 0) < 0 && errno == EINTR) {
     }

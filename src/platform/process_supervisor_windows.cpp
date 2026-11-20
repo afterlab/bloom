@@ -5,6 +5,8 @@
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
+#include "process_signal_log.hpp"
+
 #if !defined(_WIN32)
 #error "process_supervisor_windows.cpp requires Windows"
 #endif
@@ -511,12 +513,16 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     // program's libraries; the worker bootstrap drops this.
     if (tokens && !SetThreadToken(&created.hThread, tokens->impersonation.get())) {
         const auto error = static_cast<int>(GetLastError());
+        detail::recordProcessSignal(state->pid, false, "TerminateProcess", options.executable,
+                                    "its start token could not be set");
         TerminateProcess(state->process.get(), 1);
         WaitForSingleObject(state->process.get(), INFINITE);
         return ProcessFailure{ProcessError::Spawn, error};
     }
     if (!AssignProcessToJobObject(job.get(), state->process.get())) {
         const auto error = static_cast<int>(GetLastError());
+        detail::recordProcessSignal(state->pid, false, "TerminateProcess", options.executable,
+                                    "it could not be placed in its job");
         TerminateProcess(state->process.get(), 1);
         WaitForSingleObject(state->process.get(), INFINITE);
         return ProcessFailure{ProcessError::ResourceLimit, error};
@@ -532,6 +538,8 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     nul.reset();
     if (ResumeThread(state->thread.get()) == static_cast<DWORD>(-1)) {
         const auto error = static_cast<int>(GetLastError());
+        detail::recordProcessSignal(state->pid, true, "TerminateJobObject", options.executable,
+                                    "its first thread could not be resumed");
         TerminateJobObject(state->job.get(), 1);
         WaitForSingleObject(state->process.get(), INFINITE);
         return ProcessFailure{ProcessError::Spawn, error};
@@ -590,6 +598,8 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     // End of input is the cooperative stop request; give it the termination grace too.
     if (state_->waitUntil(Clock::now() + state_->options.termGrace))
         return;
+    detail::recordProcessSignal(state_->pid, true, "TerminateJobObject", state_->options.executable,
+                                "it did not exit within the grace after its input closed");
     TerminateJobObject(state_->job.get(), 1);
     WaitForSingleObject(state_->process.get(), INFINITE);
     state_->reaped = true;

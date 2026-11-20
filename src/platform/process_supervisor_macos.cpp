@@ -1,6 +1,8 @@
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 
+#include "process_signal_log.hpp"
+
 #include <algorithm>
 #include <array>
 #include <cerrno>
@@ -124,6 +126,8 @@ ProcessResult<std::size_t> transfer(int fd, std::span<std::byte> bytes,
             return ProcessFailure{ProcessError::Cancelled, 0};
         // Checked on every turn of the wait, at most ten milliseconds apart.
         if (overMemoryLimit(pid, memoryLimit)) {
+            detail::recordProcessSignal(pid, true, "SIGKILL", "the worker",
+                                        "its memory footprint is over its limit");
             ::kill(-pid, SIGKILL);
             return ProcessFailure{ProcessError::ResourceLimit, ENOMEM};
         }
@@ -356,9 +360,13 @@ void ProcessSupervisor::stop(std::span<const std::byte> message) {
     state_->input = Fd{};
     if (state_->waitUntil(Clock::now() + state_->options.messageGrace))
         return;
+    detail::recordProcessSignal(state_->pid, true, "SIGTERM", state_->options.executable,
+                                "it did not exit within the grace after its input closed");
     ::kill(-state_->pid, SIGTERM);
     if (state_->waitUntil(Clock::now() + state_->options.termGrace))
         return;
+    detail::recordProcessSignal(state_->pid, true, "SIGKILL", state_->options.executable,
+                                "it did not exit within the grace after SIGTERM");
     ::kill(-state_->pid, SIGKILL);
     while (::waitpid(state_->pid, &state_->status, 0) < 0 && errno == EINTR) {
     }
