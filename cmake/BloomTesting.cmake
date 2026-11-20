@@ -53,6 +53,18 @@ function(bloom_add_test)
         set_property(TARGET "${ARG_COMMAND}" PROPERTY CXX_CLANG_TIDY "")
     endif()
 
+    # Every test program finds the shared test support headers (tests/support), among them the
+    # per-process fixture folders of unique_temp_dir.hpp (#749).
+    list(GET ARG_COMMAND 0 bloom_test_target)
+    if(TARGET "${bloom_test_target}")
+        get_target_property(bloom_test_target_imported "${bloom_test_target}" IMPORTED)
+        get_target_property(bloom_test_target_type "${bloom_test_target}" TYPE)
+        if(NOT bloom_test_target_imported AND bloom_test_target_type STREQUAL "EXECUTABLE")
+            target_include_directories("${bloom_test_target}"
+                                       PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+        endif()
+    endif()
+
     # macOS has no system Vulkan; a test program finds the locked loader and driver beside itself
     # the way a packaged executable does. Nothing happens on other platforms.
     list(GET ARG_COMMAND 0 bloom_test_program)
