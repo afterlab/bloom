@@ -46,13 +46,33 @@ endif()
 message(STATUS "Bloom debug symbols: kept in ${BLOOM_DEBUG_SYMBOLS_DIR}, not in packages")
 
 # The commands that write the symbols of these targets into BLOOM_DEBUG_SYMBOLS_DIR, for a custom
-# target. Executables and loadable modules only.
+# target. Executables and loadable modules only. The folder is flat, so two targets whose symbol
+# files would have the same name stop the configuration instead of one replacing the other.
 function(bloom_debug_symbol_commands output)
     set(commands COMMAND "${CMAKE_COMMAND}" -E make_directory "${BLOOM_DEBUG_SYMBOLS_DIR}")
+    set(names "")
     foreach(target IN LISTS ARGN)
         if(NOT TARGET ${target})
             continue()
         endif()
+        # The base name of the symbol file: a PDB is named by PDB_NAME (Windows), any other by
+        # the program's file name; both fall back to OUTPUT_NAME, then to the target's name.
+        set(name "")
+        if(WIN32)
+            get_target_property(name ${target} PDB_NAME)
+        endif()
+        if(NOT name)
+            get_target_property(name ${target} OUTPUT_NAME)
+        endif()
+        if(NOT name)
+            set(name ${target})
+        endif()
+        string(TOLOWER "${name}" key)
+        if(key IN_LIST names)
+            message(FATAL_ERROR "Two shipped programs would write the debug symbols '${name}' "
+                "into ${BLOOM_DEBUG_SYMBOLS_DIR}; give ${target} a PDB_NAME or OUTPUT_NAME of its own")
+        endif()
+        list(APPEND names "${key}")
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             list(APPEND commands COMMAND "${CMAKE_OBJCOPY}" --only-keep-debug
                 "$<TARGET_FILE:${target}>"

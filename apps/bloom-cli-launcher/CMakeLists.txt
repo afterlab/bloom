@@ -3,8 +3,11 @@
 # package; the build puts it into a folder of its own so it never shares a name or a folder with
 # the real bloom-cli.exe.
 add_executable(bloom-cli-launcher main.cpp)
+# Its PDB has a name of its own as well: the release's debug symbols are collected into one folder
+# (cmake/BloomDebugSymbols.cmake), where a second bloom-cli.pdb would replace the real program's.
 set_target_properties(bloom-cli-launcher PROPERTIES
     OUTPUT_NAME bloom-cli
+    PDB_NAME bloom-cli-launcher
     RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/launcher")
 target_compile_features(bloom-cli-launcher PRIVATE cxx_std_20)
 bloom_enable_warnings(bloom-cli-launcher)

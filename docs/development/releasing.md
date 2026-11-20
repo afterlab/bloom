@@ -126,8 +126,11 @@ A crash report's minidump names code addresses only (issue #736,
 `BLOOM_DEBUG_SYMBOLS=ON` (`cmake/BloomDebugSymbols.cmake`): the same optimization with debug
 information added, and on Linux a GNU build id in every program. After the package is made, the
 `bloom-debug-symbols` target writes the symbols of each shipped program (the application,
-`bloom-cli`, `bloom-mcp`, the workers, the update helper, `bloom-crash-handler` and the Python
-extension module) into the build's `symbols` folder, and the job uploads it:
+`bloom-cli`, `bloom-mcp`, the workers, the update helper, `bloom-crash-handler`, the Python
+extension module and, on Windows, the `cli` folder's launcher, whose PDB is
+`bloom-cli-launcher.pdb`) into the build's `symbols` folder, and the job uploads it. The folder is
+flat, so a configuration where two programs' symbol files would have the same name stops with an
+error:
 
 | Artifact | What it holds | A minidump's module is matched by |
 | --- | --- | --- |
