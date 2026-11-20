@@ -210,19 +210,22 @@ revocation rule.
   `execute()`, `undo()` and `redo()` enqueue and wait. A lease's `history(redo, expectedRevision)`
   checks the revision on the owner thread in the slice that applies it. Leases keep reading the
   state they took after a replacement and refuse to commit.
-- **Preparation off the owner thread (#744).** A transaction is built, applied, proven and
-  validated on the client thread that commits it, never on the UI thread:
-  `commands::CommandStack::prepare` applies the operations to a draft of the newest mirror's
-  snapshot (`document::Draft::of`), reconciles entry layers, proves the render footprint and
-  validates and freezes the result (`Document::prepare`), touching neither the stack nor the
-  document. A commit is prepared only when it is first in the queue and nothing is publishing, so
-  it is based on every earlier commit. When the document has moved past its base in the meantime
-  (the artist's own edit), `CommandStack::rebaseNeeded` decides: a transaction that expects the
-  live revision, or none, goes back to its client with the live snapshot and is prepared again; one
-  that expects an older revision is refused with the stale-revision status
-  (`bloom.scripting.stale-revision` over MCP), as it would have been had the artist's edit landed
-  first. Undo, redo and the Viewer level stay owner-thread calls in the same FIFO queue, so they
-  wait behind a commit that is still preparing.
+- **Preparation off the owner thread (#744).** A transaction is built, applied, proven and validated
+  on the client thread that commits it, never on the UI thread: `commands::CommandStack::prepare`
+  applies the operations to a draft of the newest mirror's snapshot (`document::Draft::of`),
+  reconciles entry layers, proves the render footprint and validates and freezes the result
+  (`Document::prepare`), touching neither the stack nor the document. It also measures the size the
+  result would give the project file (#748, the mirror's `LiveSessionState::capacity`, see [Project
+  Format](project-format.md), "Project Capacity"), so a commit too large to save is refused at
+  publication from that measure and the owner thread never measures a prepared commit. A commit is
+  prepared only when it is first in the queue and nothing is publishing, so it is based on every
+  earlier commit. When the document has moved past its base in the meantime (the artist's own edit),
+  `CommandStack::rebaseNeeded` decides: a transaction that expects the live revision, or none, goes
+  back to its client with the live snapshot and is prepared, and measured, again; one that expects
+  an older revision is refused with the stale-revision status (`bloom.scripting.stale-revision` over
+  MCP), as it would have been had the artist's edit landed first. Undo, redo and the Viewer level
+  stay owner-thread calls in the same FIFO queue, so they wait behind a commit that is still
+  preparing.
 - **The work bound.** One live commit carries at most `kLiveCommitWorkLimit` (1,000,000) units of
   `Transaction::workUnits()`: one per operation, or one per key, keyframe or edit an operation lists
   (`Operation::workUnits()`; wrappers report what they wrap). A larger transaction is refused before

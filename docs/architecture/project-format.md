@@ -257,15 +257,48 @@ limits and the memory budget would still stop a larger save, so the only refusal
 work is the one at the edit. An edit that does not grow an exceeded dimension still applies, so a
 project opened above a limit (written by another tool) can still be edited down and saved.
 
-Measuring is incremental. The measure remembers each animation curve's counted contribution by the
-identity of its immutable shared record (`CanonicalCurveSizeMemo`), so an edit re-walks only the
-curves it replaced; the memo holds a strong reference to every record it remembers and forgets the
-ones a measure no longer sees. A memoized measure equals a whole measure exactly (bytes, values,
-largest container, longest string). Building a keyframe-dense project of 4.5 million values
-through MCP took 28.8 s with the check against 28.6 s without it, and one edit of that project
-answered in about 50 ms, the request included; the first measure of a session walks the whole
-document once. A measure that
-runs out of memory admits the edit rather than refusing it.
+Measuring never walks the whole document on the owner (UI) thread. The session keeps the size of
+its latest published snapshot as a `CanonicalDocumentSizeIndex` (`ProjectCapacityLedger` in
+`bloom_host`): what `document.json` holds, kept by composition and by record list (parameters,
+animation curves, nodes, edges, layers), built by the encoder's own counting pass.
+`advanceCanonicalDocumentIndex` takes an edited snapshot's size from it by counting only what
+differs between the two snapshots: for each composition whose content or own settings changed, the
+records its lists gained and lost (found by comparing the lists' shared records, as the undo charge
+does) and the composition's own members (settings, node layout, groups, layer stack); the project's
+root lists (assets, folders, data blocks, export queue, extension records) only when their storage
+changed; and the document's own members (name, color settings, id allocation). Its bytes and values
+equal a whole measure exactly. Its largest list and longest string never fall below the document's;
+after records were replaced or removed they may still count one that left with them until the next
+whole measure, so such an edit is never admitted past a limit, and at most an edit that regrows a
+list or string the project already held past a limit since then is admitted.
+
+| Measure | Where it runs | What it counts |
+| --- | --- | --- |
+| The size a session starts from | The opening thread (`OpenedArchive::sizeIndex`), or when a project is created | The whole document, once |
+| An edit made on the owner thread (`CommandStack::execute`: the artist's own edits) | The owner thread | The records it changed (each counted as it was and as it is), the edited compositions' own members, and a pointer comparison of the edited compositions' record lists; plus what any undo or redo since the last measured edit restored |
+| A live (agent or script) commit | Its preparation, on its client's thread (`CommandStack::prepare`) | The same, from the size the session knows; publication on the owner thread only reads the result, which was measured against the base publication requires to be current, and adopts it |
+| A commit re-based on a newer revision | Its new preparation | Measured again there, never at publication |
+
+Content installed without a size (an opening that ran out of memory measuring it) is measured on a
+background thread that stops when the content is replaced. Until that size is known, an edit made on
+the owner thread is admitted unmeasured rather than refused on a guess: refusing would block work
+that almost always fits, and the window lasts only until the background measure ends; once the
+size is known every later edit is measured, a project that is then past a limit admits only edits
+that do not grow it, and a save still names any failure. A preparation that finds no size known
+measures its own base whole, off the owner thread. A measure that runs out of memory admits the
+edit rather than refusing it.
+
+On a 252-layer project of about 274,000 vec2 keys (4.5 million JSON values), on an isolated
+offscreen Bloom in short runs (evidence, not a benchmark): opening measures the document in about
+120 ms on the opening thread. An artist's one-key edit through `CommandStack::execute` counts two
+curve records and takes 1.4 ms on the owner thread against 1.1 ms with no check, the first edit
+after opening included; measuring the whole document on each edit (the previous design, with its
+curve memo) took about 125 ms on the first edit and 2.3 ms after. Through MCP, the window's UI thread
+spent 12.9 ms on the first edit after opening and 15.7 ms (median of 300) on each one-key edit, and
+answered a probe within 4.3 ms while 20,160-key transactions applied.
+
+`measureCanonicalDocument` measures a whole document at once (with `CanonicalCurveSizeMemo`
+remembering curves between measures); the session no longer uses it.
 
 `OpenOptions` and `SaveOptions` default the per-operation resident budget to 2 GiB and may lower it.
 No operation budget may exceed the shared 4 GiB implementation ceiling. Per-operation and shared

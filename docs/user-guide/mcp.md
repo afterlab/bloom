@@ -740,7 +740,10 @@ applied: the project would hold 6,008,881 JSON values, more than the 6,000,000 o
 hold. Remove keyframes, layers or compositions you no longer need, or move part of the work into
 another project." The project as it stands still saves, and an edit that does not grow the project
 past the limit (a rename, removing keys) still applies. Bloom measures every edit with the same
-encoder a save uses, so the limit a `transact` meets is the limit the save would have met.
+encoder a save uses, so the limit a `transact` meets is the limit the save would have met. In the
+app the measure runs while the transaction is prepared, on the request's own thread, and counts
+only what the edit changed, so it never holds up the window; a transaction prepared again because
+the artist edited meanwhile is measured again.
 
 **Compile failures.** After a successful edit, every composition whose evaluation inputs it
 changed is compiled (never rendered); the edit's own commit names them, and a change outside any
