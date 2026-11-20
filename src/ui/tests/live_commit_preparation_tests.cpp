@@ -3,7 +3,7 @@
 // keeps turning, and the UI thread only publishes. An agent session's group (#746) still makes one
 // undo step and the artist's own edit still splits it; the artist's edit during an agent's
 // preparation lands at once and the agent's commit answers stale; shutdown during preparation
-// withdraws it.
+// withdraws it. #748: the agent's commit is measured for the project's size in its preparation.
 #include "await_qt.hpp"
 
 #include <QApplication>
@@ -26,6 +26,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -183,6 +184,49 @@ void artistEditDuringPreparation() {
             "only the artist's edit is in the history");
 }
 
+// #748: the agent's commit is measured for the project's size in its preparation, off the UI
+// thread, through the mirror the adapter publishes; the artist's own edit is measured on the UI
+// thread, from what it changed.
+void capacityIsMeasuredInPreparation() {
+    Fixture fixture;
+    const auto original = fixture.stack().capacityCheck();
+    require(original != nullptr, "the project has a capacity check");
+    using Thread = commands::CommandStack::CapacityCheck::Thread;
+    struct Calls final {
+        std::mutex mutex;
+        std::vector<std::pair<std::thread::id, Thread>> calls;
+    };
+    auto calls = std::make_shared<Calls>();
+    auto counted = std::make_shared<commands::CommandStack::CapacityCheck>();
+    counted->measure = [original, calls](const document::Snapshot& before,
+                                         const document::Snapshot& candidate, const Thread thread) {
+        {
+            const std::lock_guard lock(calls->mutex);
+            calls->calls.emplace_back(std::this_thread::get_id(), thread);
+        }
+        return original->measure(before, candidate, thread);
+    };
+    counted->published = original->published;
+    fixture.stack().setCapacityCheck(counted);
+    // The artist's edit; the mirror published after it carries the stack's check.
+    commands::Transaction artist("Artist", fixture.session.snapshot().revision());
+    artist.emplace<commands::SetProjectName>("Artist");
+    require(fixture.session.executeTransaction(std::move(artist)).succeeded(),
+            "the artist's edit applies");
+    auto commit = agentCommit(fixture, "Agent", nullptr);
+    const auto result = awaitResult(commit, "the agent's commit answers");
+    require(result.succeeded() && fixture.session.snapshot().project().name() == "Agent",
+            "the agent's commit publishes");
+    const std::lock_guard lock(calls->mutex);
+    require(calls->calls.size() == 2, "each edit is measured once");
+    require(calls->calls[0].first == std::this_thread::get_id() &&
+                calls->calls[0].second == Thread::Owner,
+            "the artist's edit is measured on the UI thread");
+    require(calls->calls[1].first != std::this_thread::get_id() &&
+                calls->calls[1].second == Thread::Preparation,
+            "the agent's commit is measured in its preparation, off the UI thread");
+}
+
 void shutdownDuringPreparation() {
     Fixture fixture;
     auto gate = std::make_shared<Gate>();
@@ -206,6 +250,7 @@ int main(int argc, char** argv) {
         uiThreadKeepsTurning();
         agentGroupAndArtistSplit();
         artistEditDuringPreparation();
+        capacityIsMeasuredInPreparation();
         shutdownDuringPreparation();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';

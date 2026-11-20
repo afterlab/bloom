@@ -23,6 +23,7 @@ target_sources(
         export_capacity_wait.cpp
         output_analysis_attempt_runner.cpp
         output_analysis_attempt_color_private.cpp
+        project_capacity_ledger.cpp
         project_color_choice.cpp
         project_session.cpp
         project_session_creation.cpp
@@ -257,6 +258,22 @@ if(BUILD_TESTING)
         bloom_add_test(
             NAME bloom.host.project-capacity
             COMMAND bloom_host_project_capacity_test
+            LABELS unit host persistence
+            TIMEOUT 300
+            RUN_SERIAL
+        )
+
+        # #748: the capacity check off the owner thread: an opened project arrives measured, an
+        # owner-thread edit counts only what it changed, and prepared commits are measured (and
+        # refused, and re-measured when re-based) during their preparation. Builds a project of
+        # about 6 million JSON values, so it runs alone.
+        add_executable(bloom_host_project_capacity_off_thread_test
+                       tests/project_capacity_off_thread_tests.cpp)
+        target_link_libraries(bloom_host_project_capacity_off_thread_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_project_capacity_off_thread_test)
+        bloom_add_test(
+            NAME bloom.host.project-capacity-off-thread
+            COMMAND bloom_host_project_capacity_off_thread_test
             LABELS unit host persistence
             TIMEOUT 300
             RUN_SERIAL

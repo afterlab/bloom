@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -202,6 +203,14 @@ struct ProjectCapacityRefusal {
     std::string message;
 
     friend bool operator==(const ProjectCapacityRefusal&, const ProjectCapacityRefusal&) = default;
+};
+
+// #748: what the owner of the project file format made of one edit's size: a refusal, or what the
+// project would hold after it (`size`, opaque here: commands does not know the format), handed back
+// when the edit publishes. Both empty when the edit was not measured.
+struct ProjectCapacityMeasure final {
+    std::optional<ProjectCapacityRefusal> refusal;
+    std::shared_ptr<const void> size;
 };
 
 struct OperationFailure {

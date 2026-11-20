@@ -11,6 +11,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/host/publication_coordinator.hpp>
+#include <bloom/project/canonical_document.hpp>
 #include <bloom/project/manifest_requirements.hpp>
 #include <bloom/project/project_io_memory.hpp>
 #include <bloom/project/round_trip_state.hpp>
@@ -632,18 +633,20 @@ enum class SessionInstallStatus : std::uint8_t {
 // optional display path.
 class DecodedReplacementContent final {
   public:
-    DecodedReplacementContent(std::unique_ptr<document::Document> document,
-                              document::ColorSettings colorSettings,
-                              std::optional<project::RoundTripState> roundTrip,
-                              std::uint32_t schemaMinor,
-                              std::vector<project::ManifestRequirement> requirements,
-                              DecodedProjectEditability editability,
-                              std::optional<ProjectDisplayPath> displayPath,
-                              std::optional<DecodedReplacementReservations> reservations) noexcept
+    // #748: `sizeIndex` is the document's size as the opening thread measured it
+    // (project::OpenedArchive::sizeIndex); null has the session measure it in the background.
+    DecodedReplacementContent(
+        std::unique_ptr<document::Document> document, document::ColorSettings colorSettings,
+        std::optional<project::RoundTripState> roundTrip, std::uint32_t schemaMinor,
+        std::vector<project::ManifestRequirement> requirements,
+        DecodedProjectEditability editability, std::optional<ProjectDisplayPath> displayPath,
+        std::optional<DecodedReplacementReservations> reservations,
+        std::shared_ptr<const project::CanonicalDocumentSizeIndex> sizeIndex = nullptr) noexcept
         : document_(std::move(document)), colorSettings_(std::move(colorSettings)),
           roundTrip_(std::move(roundTrip)), schemaMinor_(schemaMinor),
           requirements_(std::move(requirements)), editability_(editability),
-          displayPath_(std::move(displayPath)), reservations_(std::move(reservations)) {}
+          displayPath_(std::move(displayPath)), reservations_(std::move(reservations)),
+          sizeIndex_(std::move(sizeIndex)) {}
     DecodedReplacementContent(DecodedReplacementContent&&) noexcept = default;
     DecodedReplacementContent& operator=(DecodedReplacementContent&&) noexcept = default;
     DecodedReplacementContent(const DecodedReplacementContent&) = delete;
@@ -661,7 +664,35 @@ class DecodedReplacementContent final {
     DecodedProjectEditability editability_ = DecodedProjectEditability::Editable;
     std::optional<ProjectDisplayPath> displayPath_;
     std::optional<DecodedReplacementReservations> reservations_;
+    std::shared_ptr<const project::CanonicalDocumentSizeIndex> sizeIndex_;
 };
+
+// #748: what a session's project capacity check has done (ProjectSession::capacityWork()), for
+// tests and diagnostics. Every edit is measured from what it changed against the size the session
+// knows; the whole document is measured only when the project is opened (on the opening thread,
+// not counted here) or created, in the background when an opened project came without one, or by
+// a preparation that found none known.
+struct ProjectCapacityWork final {
+    // The size the next edit is measured from is known.
+    bool known = false;
+    // Whole-document measures the session took (created, background, or a preparation's).
+    std::uint64_t wholeMeasures = 0;
+    // Edits measured on the owner thread (CommandStack::execute), and the records and compositions'
+    // own members those measures counted.
+    std::uint64_t ownerMeasures = 0;
+    std::uint64_t ownerRecordsCounted = 0;
+    std::uint64_t ownerCompositionsCounted = 0;
+    // Edits measured during their preparation, off the owner thread, and of those the ones that had
+    // to measure their base whole first.
+    std::uint64_t preparationMeasures = 0;
+    std::uint64_t preparationWholeMeasures = 0;
+    // Owner-thread edits admitted unmeasured because no size was known yet.
+    std::uint64_t unmeasuredEdits = 0;
+    // Published edits whose measured size became the known one.
+    std::uint64_t adopted = 0;
+};
+
+class ProjectCapacityLedger;
 
 class ProjectSessionCreateResult;
 
@@ -693,6 +724,8 @@ class ProjectSession final {
     [[nodiscard]] bool isValid() const noexcept;
     [[nodiscard]] ProjectSessionStateSnapshot stateSnapshot() const;
     [[nodiscard]] DecodedProjectSnapshotResult decodedSnapshot() const;
+    // #748: what the project capacity check has done; all zero for preserved read-only content.
+    [[nodiscard]] ProjectCapacityWork capacityWork() const;
     // Borrowed current project colour settings for UI projections. Null for preserved read-only
     // content; the pointer remains valid until the next session replacement or the next change of
     // the settings (setColorSettings, undo, redo).
@@ -792,8 +825,11 @@ class ProjectSession final {
     void attachColorObserver();
     // #748: makes the command stack refuse an edit that would take the project past what one
     // project file can save (project::ProjectCapacityLimits), measured with this content's own
-    // color settings and preserved members. Called whenever a command stack is installed.
-    void installCapacityCheck();
+    // color settings and preserved members. Called whenever a command stack is installed: with the
+    // opened document's measured size, or for a new project `measureNow` (it is small); otherwise
+    // the size is measured in the background (ProjectCapacityLedger).
+    void installCapacityCheck(std::shared_ptr<const project::CanonicalDocumentSizeIndex> sizeIndex,
+                              bool measureNow);
     void followViewerDefaultExportView(const document::ColorSettings& previous,
                                        const document::ColorSettings& current,
                                        commands::Transaction& transaction);
@@ -865,6 +901,8 @@ class ProjectSession final {
     std::optional<DecodedReplacementReservations> decodedContentReservations_;
     std::unique_ptr<document::Document> document_;
     std::unique_ptr<commands::CommandStack> commandStack_;
+    // #748: this content's known size; the command stack's capacity check holds it too.
+    std::shared_ptr<ProjectCapacityLedger> capacity_;
     bool valid_ = false;
 };
 

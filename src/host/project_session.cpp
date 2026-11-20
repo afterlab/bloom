@@ -2,6 +2,8 @@
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/project_capacity.hpp>
 
+#include "project_capacity_ledger.hpp"
+
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -116,7 +118,9 @@ ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
       schemaMinor_(schemaMinor), retainedRequirements_(std::move(retainedRequirements)),
       document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {
     attachColorObserver();
-    installCapacityCheck();
+    // A project created here (new, or decoded by a caller) is measured now; one opened from a file
+    // is installed by installDecodedReplacement() with the size its opening measured.
+    installCapacityCheck(nullptr, true);
 }
 
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
@@ -144,7 +148,7 @@ ProjectSession::ProjectSession(ProjectSession&& other) noexcept
       retainedRequirements_(std::move(other.retainedRequirements_)),
       decodedContentReservations_(std::move(other.decodedContentReservations_)),
       document_(std::move(other.document_)), commandStack_(std::move(other.commandStack_)),
-      valid_(std::exchange(other.valid_, false)) {}
+      capacity_(std::move(other.capacity_)), valid_(std::exchange(other.valid_, false)) {}
 
 ProjectSessionCreateResult
 ProjectSession::createDecoded(ProjectSessionIdentitySource& identitySource,
@@ -462,7 +466,7 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
     roundTrip_ = std::move(sharedRoundTrip);
     schemaMinor_ = content.schemaMinor_;
     retainedRequirements_ = std::move(content.requirements_);
-    installCapacityCheck();
+    installCapacityCheck(std::move(content.sizeIndex_), false);
     contentKind_ = ProjectSessionContentKind::DecodedDocument;
     editability_ = content.editability_;
     displayPath_ = std::move(content.displayPath_);
@@ -496,6 +500,7 @@ ProjectSession::installPreservedReadOnlyReplacement(const OpenIntentCapture inte
     // Mirrors createPreservedReadOnly()'s internal state exactly.
     document_.reset();
     commandStack_.reset();
+    capacity_.reset();
     color_.reset();
     colorSettingsDirty_ = false;
     roundTrip_.reset();
@@ -590,51 +595,31 @@ ProjectCapacity projectCapacity() noexcept {
             .stringBytes = limits.stringBytes};
 }
 
-void ProjectSession::installCapacityCheck() {
-    if (commandStack_ == nullptr)
+void ProjectSession::installCapacityCheck(
+    std::shared_ptr<const project::CanonicalDocumentSizeIndex> sizeIndex, const bool measureNow) {
+    capacity_.reset();
+    if (commandStack_ == nullptr || document_ == nullptr || color_ == nullptr)
         return;
-    // The memo is the stack's own: one owner thread, and it keeps only the curves the latest
-    // measure saw, so measuring again after an edit walks only the curves the edit replaced.
-    auto memo = std::make_shared<project::CanonicalCurveSizeMemo>();
-    commandStack_->setCapacityCheck(
-        [color = color_, roundTrip = roundTrip_, schemaMinor = schemaMinor_,
-         memo = std::move(memo)](const document::Snapshot& before, const document::Snapshot& after)
-            -> std::optional<commands::ProjectCapacityRefusal> {
-            if (color == nullptr || !color->current.has_value())
-                return std::nullopt; // a save refuses such a project on its own
-            const auto measure =
-                [&](const document::Snapshot& snapshot) -> project::CanonicalDocumentMeasureResult {
-                return project::measureCanonicalDocument({.snapshot = &snapshot,
-                                                          .colorSettings = &*color->current,
-                                                          .roundTrip = roundTrip.get(),
-                                                          .schemaMinor = schemaMinor},
-                                                         {}, memo.get());
-            };
-            try {
-                const auto measured = measure(after);
-                const auto excess = measured ? project::projectCapacityExcess(measured.measure)
-                                             : project::projectCapacityExcessOf(measured.error);
-                if (!excess)
-                    return std::nullopt;
-                // An edit that does not grow what is already past a limit (a project opened at
-                // that size, a value changed in place, a deletion) stays allowed.
-                if (!excess->atLeast) {
-                    if (const auto previous = measure(before);
-                        previous && project::projectCapacityAmount(previous.measure,
-                                                                   excess->limit) >= excess->actual)
-                        return std::nullopt;
-                }
-                return commands::ProjectCapacityRefusal{
-                    .limit = std::string(project::projectCapacityLimitName(excess->limit)),
-                    .value = excess->value,
-                    .actual = excess->actual,
-                    .unit = std::string(project::projectCapacityLimitUnit(excess->limit)),
-                    .message = project::projectCapacityMessage(*excess)};
-            } catch (const std::bad_alloc&) {
-                // Not enough memory to measure: the edit goes on and a save names any failure.
-                return std::nullopt;
-            }
-        });
+    commandStack_->setCapacityCheck(nullptr);
+    try {
+        // The ledger is this content's: its color settings states, preserved members and schema
+        // minor.
+        auto ledger = std::make_shared<ProjectCapacityLedger>(roundTrip_, schemaMinor_);
+        for (const auto& [id, settings] : color_->states)
+            ledger->colorSettingsState(id, settings);
+        ledger->start(document_->snapshot(), std::move(sizeIndex), measureNow);
+        commandStack_->setCapacityCheck(ledger->check());
+        capacity_ = std::move(ledger);
+    } catch (const std::bad_alloc&) {
+        // Out of memory installing content: edits go unmeasured and a save names any failure,
+        // rather than the installation failing after it replaced the content.
+        commandStack_->setCapacityCheck(nullptr);
+        capacity_.reset();
+    }
+}
+
+ProjectCapacityWork ProjectSession::capacityWork() const {
+    return capacity_ != nullptr ? capacity_->work() : ProjectCapacityWork{};
 }
 
 void ProjectSession::attachColorObserver() {
@@ -674,6 +659,8 @@ ProjectSession::setColorSettings(document::ColorSettings settings) {
     const auto previous = color_->current;
     const auto id = color_->nextId++;
     color_->states.emplace(id, settings);
+    if (capacity_ != nullptr)
+        capacity_->colorSettingsState(id, settings);
     commands::Transaction transaction("Change Project Color Settings",
                                       document_->snapshot().revision());
     transaction.emplace<commands::SetProjectColorSettingsState>(id);

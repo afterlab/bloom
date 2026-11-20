@@ -72,6 +72,10 @@ struct LiveSessionState final {
     // The project file, absent for a never-saved project.
     std::optional<std::filesystem::path> projectPath;
     bool readOnly = false;
+    // #748: the document's project capacity check (commands::CommandStack::capacityCheck()), so a
+    // commit's preparation measures the size it would publish off the owner thread; null when the
+    // document has none.
+    std::shared_ptr<const commands::CommandStack::CapacityCheck> capacity{};
 };
 
 // Why no lease is available.

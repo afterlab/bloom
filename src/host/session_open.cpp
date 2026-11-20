@@ -129,7 +129,9 @@ installOpenedArchiveResult(ProjectSession& session, const OpenIntentCapture inte
         // Editability is always Editable in this slice: provider availability/degraded-editable
         // detection needs a capability registry that does not exist yet (see this task's design
         // decision 2) -- every opened archive installs as fully Editable here.
-        DecodedProjectEditability::Editable, std::move(displayPath), std::move(reservations));
+        DecodedProjectEditability::Editable, std::move(displayPath), std::move(reservations),
+        // #748: measured on the opening thread, so no edit walks the whole document to learn it.
+        std::move(openedValue.sizeIndex));
     return installDecodedAndReport(session, intent, std::move(content));
 }
 

@@ -428,6 +428,9 @@ struct PreparedTransaction::Detail final {
     std::optional<document::CompositionId> affectedComposition;
     std::optional<std::vector<document::CompositionId>> evaluationChangedCompositions;
     CommandStack::Work work;
+    // #748: the prepared state's size, measured during preparation by `capacityBy`.
+    std::optional<ProjectCapacityMeasure> capacity;
+    std::shared_ptr<const CommandStack::CapacityCheck> capacityBy;
 };
 
 PreparedTransaction::PreparedTransaction(std::unique_ptr<Detail> detail) noexcept
@@ -476,10 +479,11 @@ bool CommandStack::rebaseNeeded(const PreparedTransaction& prepared) const {
     return !expected.has_value() || *expected == live;
 }
 
-PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
-                                          Transaction&& transaction,
-                                          const std::function<bool()>& cancelled,
-                                          const std::function<void(std::size_t, std::size_t)>& progress) {
+PreparedTransaction
+CommandStack::prepare(const document::Snapshot& before, Transaction&& transaction,
+                      const std::function<bool()>& cancelled,
+                      const std::function<void(std::size_t, std::size_t)>& progress,
+                      const std::shared_ptr<const CapacityCheck>& capacity) {
     auto owned = std::make_unique<PreparedTransaction::Detail>(before, std::move(transaction));
     auto& prepared = *owned;
     const auto& ops = prepared.transaction;
@@ -739,6 +743,14 @@ PreparedTransaction CommandStack::prepare(const document::Snapshot& before,
     }
     if (renderAffecting && renderScopeKnown)
         prepared.affectedComposition = renderScope;
+    // #748: the size of what would publish, measured here so publication only reads it.
+    if (capacity != nullptr && capacity->measure && prepared.commit->ready()) {
+        if (stop())
+            return PreparedTransaction(std::move(owned));
+        prepared.capacity = capacity->measure(before, prepared.commit->snapshot(),
+                                              CapacityCheck::Thread::Preparation);
+        prepared.capacityBy = capacity;
+    }
     return PreparedTransaction(std::move(owned));
 }
 
@@ -796,12 +808,20 @@ CommandResult CommandStack::publishStep(PreparedTransaction&& preparedValue) {
     }
     const document::PreparedCommit& candidate = *prepared.commit;
     // #748: an edit that would make the project too large to save is refused here, at the edit,
-    // so a project Bloom lets you build always saves.
-    if (capacityCheck_) {
-        if (auto refusal = capacityCheck_(before, candidate.snapshot())) {
+    // so a project Bloom lets you build always saves. A prepared edit was measured during its
+    // preparation, on the base the checks above proved current, so it is only read here; an edit
+    // built on this thread (execute) is measured now, from the records it changed.
+    ProjectCapacityMeasure capacity;
+    if (capacityCheck_ != nullptr && capacityCheck_->measure) {
+        if (prepared.capacity.has_value() && prepared.capacityBy == capacityCheck_)
+            capacity = std::move(*prepared.capacity);
+        else
+            capacity =
+                capacityCheck_->measure(before, candidate.snapshot(), CapacityCheck::Thread::Owner);
+        if (capacity.refusal.has_value()) {
             auto result =
                 makeResult(CommandAction::Execute, CommandStatus::ProjectTooLarge, before, label());
-            result.capacityRefusal = std::move(*refusal);
+            result.capacityRefusal = std::move(capacity.refusal);
             notify(result);
             return result;
         }
@@ -985,6 +1005,8 @@ CommandResult CommandStack::publishStep(PreparedTransaction&& preparedValue) {
     historyCharge_.swap(stagedCharge);
     work_.historyEntriesRetired += oldestDropped;
     trackedRevision_ = after.revision();
+    if (capacityCheck_ != nullptr && capacityCheck_->published && capacity.size != nullptr)
+        capacityCheck_->published(after, capacity.size);
     notify(result);
     return result;
 }

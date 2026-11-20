@@ -198,6 +198,8 @@ void LiveSessionAdapter::publish() {
         state.renderSource.assetBaseDirectory = state.projectPath->parent_path();
     if (const auto* settings = project_.colorSettings())
         state.renderSource.colorSettings = *settings;
+    if (const auto* stack = project_.liveDocumentAndStack().second)
+        state.capacity = stack->capacityCheck();
     auto& context = state.context;
     context.project = snapshot.project().id().value();
     context.composition = session_.compositionId().value();

@@ -5,7 +5,8 @@
 // commit. #744 (A2): a transaction is prepared on its client's thread and only published by the
 // owner: a slow operation never runs on the owner thread, cancellation, deadline and shutdown stop
 // a commit during preparation, a revision race re-bases or refuses as stale, undo keeps its place
-// behind a preparing commit, and the work bound refuses before queueing.
+// behind a preparing commit, and the work bound refuses before queueing. #748: the project capacity
+// measure runs with each preparation, and a re-based commit is measured again in its new one.
 #include <bloom/commands/operations.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/scripting/live_session_host.hpp>
@@ -63,7 +64,8 @@ struct Owner final {
                                           .viewerDisplay = {},
                                           .viewerView = {},
                                           .projectPath = std::nullopt,
-                                          .readOnly = false};
+                                          .readOnly = false,
+                                          .capacity = session->commandStack()->capacityCheck()};
         state.context.layerGeometry = {};
         return state;
     }
@@ -500,6 +502,12 @@ void revisionRaceRebasesOrRefuses() {
         expect(owner.session->commandStack()->historyLabels() ==
                    std::vector<std::string>{"Artist", "Agent"},
                "the artist's edit and the agent's keep their order in the history");
+        // #748: each preparation measured the size it would publish, the re-based one again on
+        // the artist's revision; the owner measured only the artist's own edit.
+        const auto work = owner.session->hostSession()->capacityWork();
+        expect(work.known && work.preparationMeasures == 2 && work.ownerMeasures == 1 &&
+                   work.adopted == 2 && work.preparationWholeMeasures == 0,
+               "the re-based commit was measured again in its preparation, not on the owner");
     }
 }
 

@@ -109,6 +109,22 @@ class CommandStack final {
     CommandStack& operator=(CommandStack&&) = delete;
     ~CommandStack();
 
+    // #748: see setCapacityCheck().
+    struct CapacityCheck final {
+        // Where a measure runs: preparation may take its time off the owner thread; the owner
+        // thread (an edit built there, by execute()) must stay cheap.
+        enum class Thread : std::uint8_t { Preparation, Owner };
+        // Any thread, concurrently: `candidate` measured against `before`, the state it was
+        // built on.
+        std::function<ProjectCapacityMeasure(const document::Snapshot& before,
+                                             const document::Snapshot& candidate, Thread thread)>
+            measure;
+        // Owner thread: `published` became current with the size measure() reported for it.
+        std::function<void(const document::Snapshot& published,
+                           const std::shared_ptr<const void>& size)>
+            published;
+    };
+
     // execute() is prepare() on the live snapshot followed by publish(), on the calling thread.
     [[nodiscard]] CommandResult execute(Transaction&& transaction);
     // #744 (A2). Any thread; touches neither this stack nor the document. Applies `transaction` to
@@ -118,10 +134,13 @@ class CommandStack final {
     // is not applied: publish refuses it as stale, or rebaseNeeded() asks for a newer base.
     // #747: `progress`, when set, is told after each operation how many of the transaction's
     // operations have applied (applied, total), on the calling thread.
+    // #748: `capacity`, when set, measures the prepared state here, on the calling thread
+    // (CapacityCheck::Thread::Preparation), so publication only reads the result.
     [[nodiscard]] static PreparedTransaction
     prepare(const document::Snapshot& base, Transaction&& transaction,
             const std::function<bool()>& cancelled = {},
-            const std::function<void(std::size_t, std::size_t)>& progress = {});
+            const std::function<void(std::size_t, std::size_t)>& progress = {},
+            const std::shared_ptr<const CapacityCheck>& capacity = {});
     // #744 (A2). Owner thread. True when the document has moved past `prepared`'s base and the
     // transaction would still apply on the live revision (it expects that revision or none), so it
     // must be prepared again on the live snapshot before publish. Answers no for a transaction
@@ -132,14 +151,19 @@ class CommandStack final {
     // its charge, Document::publish and the events. A base the document has moved past is refused
     // as stale (call rebaseNeeded() first to re-base instead).
     [[nodiscard]] CommandResult publish(PreparedTransaction&& prepared);
-    // #748. Owner thread. A project Bloom lets you build must save: when set, every change
-    // execute() or publish() would make is first given to `check` with the current state and the
-    // state it would publish, and a refusal answers CommandStatus::ProjectTooLarge with nothing
-    // applied. The owner of the project file format supplies it (commands does not know the
-    // format). Undo and redo are not checked: every state they restore was admitted.
-    using CapacityCheck = std::function<std::optional<ProjectCapacityRefusal>(
-        const document::Snapshot& before, const document::Snapshot& candidate)>;
-    void setCapacityCheck(CapacityCheck check) { capacityCheck_ = std::move(check); }
+    // #748. A project Bloom lets you build must save. The owner of the project file format
+    // supplies the check (commands does not know the format); with one set, every change execute()
+    // or publish() would make is measured and a refusal answers CommandStatus::ProjectTooLarge
+    // with nothing applied. Undo and redo are not checked: every state they restore was admitted.
+    // Owner thread. prepare() measures with the check it is given (capacityCheck()), and publish()
+    // takes that measure as it is when the check is still this stack's: the prepared state was
+    // measured against the base it was prepared on, which publish() requires to be current.
+    void setCapacityCheck(std::shared_ptr<const CapacityCheck> check) {
+        capacityCheck_ = std::move(check);
+    }
+    [[nodiscard]] const std::shared_ptr<const CapacityCheck>& capacityCheck() const noexcept {
+        return capacityCheck_;
+    }
     [[nodiscard]] CommandResult undo(CommandOrigin origin = CommandOrigin::User);
     [[nodiscard]] CommandResult redo(CommandOrigin origin = CommandOrigin::User);
 
@@ -223,7 +247,7 @@ class CommandStack final {
     std::size_t historyChargedBytes_ = 0;
     std::unique_ptr<HistoryCharge> historyCharge_;
     Work work_;
-    CapacityCheck capacityCheck_;
+    std::shared_ptr<const CapacityCheck> capacityCheck_;
     document::Revision trackedRevision_;
     CommandOrigin currentOrigin_ = CommandOrigin::User;
     std::optional<OpenGroup> group_;

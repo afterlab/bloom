@@ -216,6 +216,8 @@ struct HostCore {
         // The newest mirror shows every earlier commit, which has published; the owner hands back
         // the live snapshot when the document moved on anyway.
         const auto base = commit->rebaseOn ? *commit->rebaseOn : mirror->renderSource.snapshot;
+        // #748: the size it would publish is measured with the preparation, on this thread.
+        const auto capacity = mirror->capacity;
         commit->rebaseOn.reset();
         auto transaction = std::move(*commit->transaction);
         commit->transaction.reset();
@@ -239,7 +241,7 @@ struct HostCore {
                     return commit->withdrawn.load() || control.stop.stop_requested() ||
                            Clock::now() >= control.deadline;
                 },
-                progress);
+                progress, capacity);
         } catch (const std::exception& error) {
             failure = error.what();
         }
