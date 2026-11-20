@@ -1,5 +1,6 @@
 #include "process_probe.hpp"
 #include "support.hpp"
+#include "unique_temp_dir.hpp"
 #include <atomic>
 #include <bloom/media/provider/worker_pool.hpp>
 #include <cerrno>
@@ -249,7 +250,7 @@ void run() {
     reaped(pid.load());
 #endif
     const auto marker =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-media-worker-test-" + std::to_string(bloom::test_support::currentProcessId()));
     struct Cleanup {
         std::filesystem::path path;

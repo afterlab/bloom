@@ -6,6 +6,7 @@
 
 #include "await_qt.hpp"
 #include "qt_update_transport.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/update_service.hpp>
@@ -169,7 +170,7 @@ struct Bench final {
         std::make_shared<std::atomic<bool>>(false);
 
     explicit Bench(const std::string& name)
-        : root(std::filesystem::temp_directory_path() /
+        : root(bloom::test_support::processTempDirectory() /
                ("bloom-update-ui-" + name + "-" + std::to_string(std::random_device{}()))) {
         std::filesystem::create_directories(root);
         bridge.start();

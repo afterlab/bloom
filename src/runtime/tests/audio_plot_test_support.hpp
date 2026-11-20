@@ -7,6 +7,7 @@
 // node evaluates. The file is written once under the scratch directory and probed by its content
 // digest, as an imported asset is.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/asset.hpp>
@@ -118,8 +119,8 @@ struct AudioFixture final {
             const auto name =
                 "bloom-audio-plot-" + std::to_string(device()) + "-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-            fixture =
-                makeAudioFixture(std::filesystem::temp_directory_path() / name, "plot_fixture.wav");
+            fixture = makeAudioFixture(bloom::test_support::processTempDirectory() / name,
+                                       "plot_fixture.wav");
         }
         Owned(const Owned&) = delete;
         Owned& operator=(const Owned&) = delete;

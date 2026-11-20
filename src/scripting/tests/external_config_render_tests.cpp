@@ -6,6 +6,7 @@
 // stops the render with its reason instead of falling back to another config.
 
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/node_definition_registry.hpp>
@@ -172,7 +173,7 @@ class Project final {
 // display transform must then run on the device too, from the program the helper reflected.
 // Returns false when that environment is absent and nothing was proven.
 bool run(const bool device, const bool requireDevice) {
-    const auto root = std::filesystem::temp_directory_path() /
+    const auto root = bloom::test_support::processTempDirectory() /
                       ("bloom-external-config-" +
                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root / "loose");

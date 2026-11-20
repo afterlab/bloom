@@ -1,6 +1,7 @@
 // bloom.platform.private-temporary-directory: each call makes a new, distinct directory under the
 // system temporary directory, owner-only on Linux and macOS, and a prefix with a path separator is
 // refused.
+#include "unique_temp_dir.hpp"
 #include <bloom/platform/private_temporary_directory.hpp>
 
 #include <filesystem>
@@ -34,7 +35,9 @@ int main() {
         expect(*first != *second, "each call makes a new directory");
         for (const auto& folder : {*first, *second}) {
             expect(fs::is_directory(fs::symlink_status(folder)), "a real directory, not a link");
-            expect(fs::equivalent(folder.parent_path(), fs::temp_directory_path()),
+            // The test's own folder is made directly under the system temporary directory too.
+            expect(fs::equivalent(folder.parent_path(),
+                                  bloom::test_support::processTempDirectory().parent_path()),
                    "the directory is under the system temporary directory");
             expect(folder.filename().string().starts_with("bloom-private-test-") &&
                        folder.filename().string().size() >

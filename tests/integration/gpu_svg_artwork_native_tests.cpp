@@ -16,6 +16,7 @@
 // The CPU assertions always run. Without a device the GPU half reports an explicit SKIP (exit 77)
 // after the CPU half passed; --require-device makes that a failure.
 
+#include "unique_temp_dir.hpp"
 #include "document_render_parity_support.hpp"
 #include "gpu_scene_effect_emission.hpp"
 #include "gpu_coverage_ocio_support.hpp"
@@ -149,7 +150,7 @@ std::string edgeSvg() {
 
 std::filesystem::path writeSvg(const std::string& name, const std::string& text) {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto path = std::filesystem::temp_directory_path() /
+    const auto path = bloom::test_support::processTempDirectory() /
                       ("bloom-gpu-svg-" + name + "-" + std::to_string(stamp) + ".svg");
     std::ofstream(path, std::ios::binary) << text;
     return path;

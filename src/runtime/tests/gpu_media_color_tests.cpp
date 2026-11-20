@@ -24,6 +24,7 @@
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include "video_player_reference.hpp"
 #include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/file_uri.hpp>

@@ -1,6 +1,7 @@
 // Between a verified download and the update helper: the new version is put beside the
 // installed one, the plan and the helper's copy are written, and a start settles what an
 // earlier run left.
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/update/staging.hpp>
@@ -39,7 +40,7 @@ void write(const path& file, const std::string_view text) {
 int main() {
     Expectations checks;
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error) /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom-update-staging-" + std::to_string(std::random_device{}()));
 
     // An AppImage is put beside the installed one, executable, and the download is gone.

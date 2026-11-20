@@ -1,4 +1,5 @@
 #include "command_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/document/new_project.hpp>
 #include <bloom/project/canonical_document.hpp>
 #include <bloom/project/document_decode.hpp>
@@ -47,7 +48,7 @@ bool writeWav(const std::filesystem::path& path, const std::uint32_t dataBytes) 
 bool mixedBatchImport() {
     namespace doc = bloom::document;
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mixed-import-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(directory);
@@ -120,7 +121,7 @@ bool mixedBatchImport() {
 // folder with no media is reported as one skipped item with a plain reason.
 bool folderImport() {
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-folder-import-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     struct RemoveDirectory final {
@@ -161,7 +162,7 @@ bool folderImport() {
 
 bool audioImportCancellationAndRecovery() {
     const auto path =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-audio-import-cancel-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".wav");
     struct RemoveFile final {

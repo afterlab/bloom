@@ -14,6 +14,7 @@
 #include "footage_interpretation_plan_support.hpp"
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -240,7 +241,7 @@ int main(const int argc, char** argv) {
 #else
         Expectations expectations;
         auto directory =
-            std::filesystem::temp_directory_path() / "bloom_gpu_footage_interpretation_test";
+            bloom::test_support::processTempDirectory() / "bloom_gpu_footage_interpretation_test";
         std::filesystem::remove_all(directory);
         std::filesystem::create_directories(directory);
         const auto still = directory / "still.exr";

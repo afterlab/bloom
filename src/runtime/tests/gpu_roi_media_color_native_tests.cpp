@@ -15,6 +15,7 @@
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -294,7 +295,8 @@ int main(const int argc, char** argv) {
         return 77;
 #else
         Expectations expectations;
-        auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_roi_media_color_test";
+        auto directory =
+            bloom::test_support::processTempDirectory() / "bloom_gpu_roi_media_color_test";
         std::filesystem::remove_all(directory);
         std::filesystem::create_directories(directory);
         const auto path = directory / "aces_ap0.exr";

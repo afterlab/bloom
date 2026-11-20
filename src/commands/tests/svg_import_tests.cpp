@@ -1,4 +1,5 @@
 #include "command_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/data_block_operations.hpp>
@@ -37,7 +38,8 @@ namespace bloom::commands::test {
 namespace {
 
 std::filesystem::path writeFile(const std::string& name, const std::string& text) {
-    const auto path = std::filesystem::temp_directory_path() / ("bloom-svg-import-" + name + ".svg");
+    const auto path =
+        bloom::test_support::processTempDirectory() / ("bloom-svg-import-" + name + ".svg");
     std::ofstream(path, std::ios::binary) << text;
     return path;
 }
@@ -148,7 +150,8 @@ void hostileFilesLeaveTheDocumentAlone(TestContext& test) {
         deep += "</g>";
     deep += "</svg>";
     refuse("deep", deep, "absurd nesting is refused");
-    const auto missing = std::filesystem::temp_directory_path() / "bloom-svg-import-missing.svg";
+    const auto missing =
+        bloom::test_support::processTempDirectory() / "bloom-svg-import-missing.svg";
     std::filesystem::remove(missing);
     test.expect(importFile(document, stack, composition, missing).status == CommandStatus::Rejected &&
                     signature(document, composition) == sigBefore,
@@ -516,7 +519,8 @@ void oneBlockPerFile(TestContext& test) {
 
 void oneLayerRefusesWhatItCannotHold(TestContext& test) {
     Session session;
-    const auto missing = std::filesystem::temp_directory_path() / "bloom-svg-import-no-such-file.svg";
+    const auto missing =
+        bloom::test_support::processTempDirectory() / "bloom-svg-import-no-such-file.svg";
     std::filesystem::remove(missing);
     const auto refused = session.import(missing);
     test.expect(!refused.succeeded() && countNodes(session.main(), document::kVectorArtworkNodeType) == 0,

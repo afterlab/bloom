@@ -4,6 +4,7 @@
 // sound.
 #include "await_qt.hpp"
 #include "mcp_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
@@ -626,7 +627,7 @@ void testIndicatorAndSound() {
 // The real service behind the real port: start on an ephemeral free port, see Running, stop.
 void testRealService() {
     namespace fs = std::filesystem;
-    const auto folder = fs::temp_directory_path() / "bloom-mcp-panel-smoke";
+    const auto folder = bloom::test_support::processTempDirectory() / "bloom-mcp-panel-smoke";
     std::error_code ignored;
     fs::remove_all(folder, ignored);
     bloom::runtime::TaskScheduler scheduler;

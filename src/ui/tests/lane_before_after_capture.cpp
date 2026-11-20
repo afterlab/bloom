@@ -7,6 +7,7 @@
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "node_interaction_test_support.hpp"
 #include "preferences_window.hpp"
+#include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 
 #include <QDir>
@@ -62,7 +63,7 @@ void save(const QImage& image, const char* issue, const QString& name) {
 }
 
 std::filesystem::path writeSvg() {
-    const auto svg = std::filesystem::temp_directory_path() / "lane-before-after-logo.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "lane-before-after-logo.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><clipPath id="c"><rect x="110" y="26" width="70" height="60"/></clipPath><rect x="100" y="0" width="100" height="120" fill="#3377ee" clip-path="url(#c)"/></svg>)svg";
     return svg;

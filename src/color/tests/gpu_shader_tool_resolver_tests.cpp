@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/color/gpu_shader_tool_resolver.hpp>
 #include <bloom/core/environment.hpp>
@@ -100,7 +101,7 @@ class Fixture final {
   public:
     Fixture(const std::string& glslang, const std::string& spirvVal) {
         std::error_code error;
-        const auto base = fs::temp_directory_path(error);
+        const auto base = bloom::test_support::processTempDirectory();
         for (int attempt = 0; attempt < 64 && root_.empty(); ++attempt) {
             auto candidate =
                 base /

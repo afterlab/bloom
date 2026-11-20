@@ -1,6 +1,7 @@
 // Native resident viewer interaction, cancellation recovery and safe teardown acceptance.
 #include "await_qt.hpp"
 #include "gpu_service_chain_fixture.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
@@ -83,7 +84,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
 
     const auto settingsRoot =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-resident-interaction-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(settingsRoot);
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -94,7 +95,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-resident-interaction-media-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

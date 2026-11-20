@@ -11,6 +11,7 @@
 // a Float32 tolerance on every pixel, including HDR highlights far above 1, a black diffuse colour,
 // and a small negative indirect sample a denoiser can leave behind. Nothing may be clamped.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -160,7 +161,7 @@ struct Fixture final {
 
     explicit Fixture(Passes& passes) {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-aov-rebuild-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         writeMultilayerExr(folder / "render.exr", passes);

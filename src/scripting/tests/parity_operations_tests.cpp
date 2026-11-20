@@ -2,6 +2,7 @@
 // exactly as transact and Python run it, makes one undo step, and undo/redo restores and replays
 // it. Every parity op also carries a full description.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/merge_entries.hpp>
@@ -1346,7 +1347,7 @@ void duplicateCompositionWithKeyframes() {
 
     // Save and reopen.
     const auto path =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-duplicate-keys-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bloom");
     std::filesystem::remove(path);

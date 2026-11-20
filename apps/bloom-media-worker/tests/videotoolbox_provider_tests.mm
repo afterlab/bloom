@@ -3,6 +3,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 
+#include "unique_temp_dir.hpp"
 #include "videotoolbox_provider.hpp"
 #include "videotoolbox_reader.hpp"
 
@@ -356,7 +357,7 @@ void testReopenedPcmIsExact(const std::string& codec) {
                    static_cast<std::streamsize>(bytes.size()));
         return file.good();
     };
-    const auto folder = std::filesystem::temp_directory_path();
+    const auto folder = bloom::test_support::processTempDirectory();
     const auto good = folder / ("bloom-vt-pcm-good-" + codec + ".mov");
     const auto wrong = folder / ("bloom-vt-pcm-wrong-" + codec + ".mov");
     const auto refusedWith = [](const provider::Result<videotoolbox::ReopenedPcm>& result,
@@ -443,8 +444,8 @@ void testRegistryQualification() {
 
 int main() {
     @autoreleasepool {
-        const auto path = (std::filesystem::temp_directory_path() / "bloom-vt-provider-test.mov")
-                              .string();
+        const auto path =
+            (bloom::test_support::processTempDirectory() / "bloom-vt-provider-test.mov").string();
         if (writeFixture(path)) {
             check(true, "fixture generated");
         } else {

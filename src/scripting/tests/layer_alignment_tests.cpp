@@ -4,6 +4,7 @@
 // matches the GPU scene preparation's bounds (the delivered GPU-resident frame's geometry) for the
 // same plan and time, and a save/reopen keeps the result.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_alignment_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
@@ -269,7 +270,7 @@ void testDistributeAndKeyedPosition() {
 
     // Save and reopen: the aligned document is ordinary document state.
     const auto path =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-layer-alignment-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bloom");
     std::filesystem::remove(path);
@@ -418,7 +419,7 @@ void testHeadlessBoundsMatchGpuScenePreparation() {
 // #693: Align works on an imported SVG's layer and on a part inside an editable SVG through the
 // JSON operation path MCP and Python use, as one undo step, and lines the part's bounds up.
 void testSvgLayerAndPartsAlign() {
-    const auto svg = std::filesystem::temp_directory_path() / "align-svg-parts.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "align-svg-parts.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/></g></svg>)svg";
     for (const char* mode : {"layer", "shapes"}) {

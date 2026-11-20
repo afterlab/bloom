@@ -48,7 +48,7 @@ struct Fixture final {
 
 [[nodiscard]] Fixture makeAcesFixture() {
     Fixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_media_color_test";
+    fixture.directory = bloom::test_support::processTempDirectory() / "bloom_gpu_media_color_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "aces_ap0.exr";

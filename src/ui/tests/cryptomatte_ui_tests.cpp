@@ -7,6 +7,7 @@
 #include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
 #include "layer_parent_transform.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -89,7 +90,7 @@ struct Scene final {
               *document::CompositionFormat::create(width, height, core::PixelAspectRatio::square(),
                                                    *document::FrameRate::create(24, 1)))) {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-cryptomatte-ui-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         const auto first = folder / (sequence ? "crypto.0001.exr" : "crypto.exr");

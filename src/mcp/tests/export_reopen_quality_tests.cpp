@@ -3,6 +3,7 @@
 // output without them. A wrapper around the fake export run adds the measurements the worker
 // reports for a lossy movie.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/testing/fake_export_runner.hpp>
 #include <bloom/mcp/server_core.hpp>
@@ -209,7 +210,7 @@ yyjson_val* verificationOf(yyjson_doc* document, const std::uint64_t job) {
 
 void reopenQualityInStatus() {
     const auto captures =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mcp-reopen-quality-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(captures);

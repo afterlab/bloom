@@ -1,6 +1,7 @@
 // Interpret Footage (#381) on the CPU reference: a missing sequence frame that shows nothing, the
 // held frame it replaces, and a pixel aspect override that widens the layer's content.
 #include "footage_interpretation_plan_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 
@@ -27,7 +28,7 @@ void expect(const bool condition, const char* message) {
 int main() {
     try {
         const auto directory =
-            std::filesystem::temp_directory_path() / "bloom_footage_interpretation_cpu_test";
+            bloom::test_support::processTempDirectory() / "bloom_footage_interpretation_cpu_test";
         std::filesystem::remove_all(directory);
         std::filesystem::create_directories(directory);
         std::vector<ExrPixel> opaque(16, ExrPixel{0.5F, 0.25F, 0.125F, 1.0F});

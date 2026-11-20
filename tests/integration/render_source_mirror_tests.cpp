@@ -1,6 +1,7 @@
 // #718: a scripted or headless render reads a source the local mirror keeps exactly once. This
 // test spans scripting and the media cache, so it lives here and not in either module's tests.
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -56,7 +57,7 @@ std::vector<std::string> names(const std::filesystem::path& folder) {
 // bytes without reading the source.
 void testRendersReadSlowSourcesOnce() {
     namespace cache = media::cache;
-    const auto root = std::filesystem::temp_directory_path() / "bloom-render-mirror";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-render-mirror";
     std::filesystem::remove_all(root);
     auto config = runtime::TaskSchedulerConfig::defaults();
     config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;

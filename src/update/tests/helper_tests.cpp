@@ -1,6 +1,7 @@
 // The update helper's steps over folders and files made in a temporary directory, with a host
 // that fails or stops on command: an installation is replaced and confirmed, or put back, and at
 // no step is it lost.
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/update/apply.hpp>
@@ -208,7 +209,7 @@ struct Scene final {
 int main() {
     Expectations checks;
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error) /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom-update-helper-" + std::to_string(std::random_device{}()));
 
     // The plan file.

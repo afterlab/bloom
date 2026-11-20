@@ -8,6 +8,7 @@
 
 #include "cryptomatte_fixture_support.hpp"
 #include "gpu_coverage_fixture_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <Imath/half.h>
 #include <ImathBox.h>
@@ -67,7 +68,7 @@ struct ExrPixel final {
         Owned() {
             std::random_device device;
             directory =
-                std::filesystem::temp_directory_path() /
+                bloom::test_support::processTempDirectory() /
                 ("bloom-gpu-contract-media-" + std::to_string(device()) + "-" +
                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
             std::filesystem::create_directories(directory);

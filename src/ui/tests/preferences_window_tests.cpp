@@ -746,7 +746,8 @@ void testLocalCopyPreferences(Expectations& check) {
     if (!mode || !list)
         return;
     mode->chooseIndex(mode->findData(static_cast<int>(LocalCopyPreference::Never)));
-    const auto shots = QDir::temp().filePath(QStringLiteral("bloom-preferences-shots"));
+    const QTemporaryDir shotsParent;
+    const auto shots = shotsParent.filePath(QStringLiteral("bloom-preferences-shots"));
     window.addLocalCopyFolder(shots);
     window.addLocalCopyFolder(shots);
     window.addLocalCopyFolder(QStringLiteral("relative/folder"));

@@ -10,6 +10,7 @@
 #include "native_gesture_support.hpp"
 #include "node_editor_items.hpp"
 #include "node_interaction_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include "viewer_editor_internal.hpp"
 #include "window_fixture.hpp"
 
@@ -723,7 +724,7 @@ void testExportPanelFillsWidth() {
 // ---- #693 ------------------------------------------------------------------------------------
 
 void testAlignOnSvgLayerAndParts() {
-    const auto svg = std::filesystem::temp_directory_path() / "bug-batch-align.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "bug-batch-align.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/><path d="M120 80 L146 40 L172 80 Z" fill="#ffffff"/></g></svg>)svg";
     for (const auto mode : {commands::SvgImportMode::Layer, commands::SvgImportMode::Shapes}) {
@@ -963,7 +964,7 @@ void testImagePreviewPlaybackRepaints() {
 // #713: while a layer is dragged, every step is an edit the Viewer has to catch up with. The
 // alignment buttons depend on the selection, not on that, so they neither change nor repaint.
 void testAlignButtonsDoNotRepaintDuringDrag() {
-    const auto svg = std::filesystem::temp_directory_path() / "g1-align-drag.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "g1-align-drag.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/></svg>)svg";
     test::WindowFixture fixture([&](test::WindowFixture& f) {

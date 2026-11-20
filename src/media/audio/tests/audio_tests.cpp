@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <bloom/media/audio/audio.hpp>
 #include <bloom/media/audio/channel_layout.hpp>
 #include <bloom/media/audio/playback/audio_engine.hpp>
@@ -58,7 +59,7 @@ class TemporaryFile final {
   public:
     explicit TemporaryFile(const std::string_view suffix) {
         const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-        path_ = std::filesystem::temp_directory_path() /
+        path_ = bloom::test_support::processTempDirectory() /
                 ("bloom-audio-" + std::to_string(stamp) + std::string{suffix});
     }
 

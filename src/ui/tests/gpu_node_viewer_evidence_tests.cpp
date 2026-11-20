@@ -26,6 +26,7 @@
 // when there is no Wayland platform or device (and fails then with --require-device).
 
 #include "gpu_route_proof_harness_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/group_definition_operations.hpp>
@@ -469,7 +470,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // on a machine that never compiled it), so the first frame also pays the driver's pipeline
     // compile. Set before any device exists; the drivers that do not know a variable ignore it.
     const auto driverCache =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-node-viewer-driver-cache-" + std::to_string(QCoreApplication::applicationPid()));
     if (options.cold) {
         std::filesystem::create_directories(driverCache);
@@ -478,7 +479,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
 
     const auto settingsRoot =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-node-viewer-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(settingsRoot);
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -489,7 +490,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-node-viewer-media-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

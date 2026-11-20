@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <bloom/platform/source_identity.hpp>
 
 #include <chrono>
@@ -37,7 +38,7 @@ int main() {
     using namespace bloom::platform;
     Expectations expectations;
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-source-identity-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(directory);

@@ -34,6 +34,7 @@
 
 #include "document_render_parity_support.hpp"
 #include "gpu_coverage_ocio_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
@@ -76,7 +77,7 @@ constexpr std::uint64_t kGib = 1ULL << 30;
 
 std::filesystem::path writeSvg(const std::string& name, const std::string& text) {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto path = std::filesystem::temp_directory_path() /
+    const auto path = bloom::test_support::processTempDirectory() /
                       ("bloom-gpu-svg-layer-" + name + "-" + std::to_string(stamp) + ".svg");
     std::ofstream(path, std::ios::binary) << text;
     return path;

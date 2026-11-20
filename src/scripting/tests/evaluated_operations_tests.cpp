@@ -4,6 +4,7 @@
 // diagnostic, refuses without a project source, and stops when the caller's stop token fires.
 
 #include "cryptomatte_fixture_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/layer_operations.hpp>
@@ -53,7 +54,7 @@ void expect(const bool condition, const std::string& message,
 
 [[nodiscard]] std::filesystem::path scratch(const std::string& name) {
     std::mt19937_64 random{std::random_device{}()};
-    auto folder = std::filesystem::temp_directory_path() /
+    auto folder = bloom::test_support::processTempDirectory() /
                   ("bloom-evaluated-ops-" + name + "-" + std::to_string(random()));
     std::filesystem::create_directories(folder);
     return folder;

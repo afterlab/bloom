@@ -1,6 +1,7 @@
 // bloom.platform.storage-class (#535, #718): the storage classification that read-ahead and local
 // copies of source media follow. The pure rules of all three platforms run everywhere; the real
 // classification is checked on a folder this test creates, which is never on a network volume.
+#include "unique_temp_dir.hpp"
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/platform/storage_class.hpp>
 
@@ -245,7 +246,7 @@ void testRealFolder() {
     using bloom::platform::storageClass;
     using bloom::platform::storageVolume;
     const auto folder =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-storage-class-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);

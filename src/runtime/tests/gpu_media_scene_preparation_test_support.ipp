@@ -38,7 +38,7 @@ struct MediaFixture final {
 
 [[nodiscard]] MediaFixture makeFixture() {
     MediaFixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_media_scene_prep_test";
+    fixture.directory = bloom::test_support::processTempDirectory() / "bloom_gpu_media_scene_prep_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "signed_hdr.exr";

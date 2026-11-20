@@ -16,6 +16,7 @@
 
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 #include <bloom/core/file_uri.hpp>
 
@@ -202,7 +203,8 @@ struct Fixture final {
 
 [[nodiscard]] Fixture makeAcesFixture() {
     Fixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_working_space_test";
+    fixture.directory =
+        bloom::test_support::processTempDirectory() / "bloom_gpu_working_space_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     const auto path = fixture.directory / "aces_ap0.exr";

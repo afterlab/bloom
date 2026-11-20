@@ -14,6 +14,7 @@
 // be served from the content cache. An absent Wayland/device writes no proof and reports so.
 
 #include "gpu_route_proof_harness_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
@@ -97,7 +98,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
 
     const auto settingsRoot =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-viewer-route-proof-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(settingsRoot);
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -114,7 +115,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-viewer-route-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

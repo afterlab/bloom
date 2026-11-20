@@ -1,5 +1,6 @@
 #include "ocio_gpu_program_native_helpers.hpp"
 #include "tool_command.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -139,7 +140,7 @@ std::optional<std::vector<std::uint32_t>> compileGlsl(const std::string& glsl) {
         return std::nullopt;
     }
     static std::atomic<std::uint64_t> fixtureCounter{0};
-    const auto base = std::filesystem::temp_directory_path() /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom_ocio_fixture_" + std::to_string(std::random_device{}()) + "_" +
                        std::to_string(fixtureCounter.fetch_add(1)));
     std::error_code directoryError;

@@ -3,6 +3,7 @@
 // after Break Apart. Writes PNGs to the directory given as the first argument; the scale factor is
 // the environment's QT_SCALE_FACTOR. Not a ctest.
 #include "svg_import_mode_dialog.hpp"
+#include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 
 #include <QContextMenuEvent>
@@ -45,7 +46,7 @@ int main(int argc, char** argv) {
         }
     };
     try {
-        const auto svg = std::filesystem::temp_directory_path() / "logo.svg";
+        const auto svg = bloom::test_support::processTempDirectory() / "logo.svg";
         std::ofstream(svg, std::ios::binary)
             << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><defs><linearGradient id="g" x1="0" x2="1"><stop offset="0" stop-color="#ffcc33"/><stop offset="1" stop-color="#ee3377"/></linearGradient></defs><circle cx="60" cy="60" r="44" fill="url(#g)"/><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/><path d="M120 80 L146 40 L172 80 Z" fill="#ffffff"/></svg>)svg";
         ui::test::WindowFixture fixture([&](ui::test::WindowFixture& f) {

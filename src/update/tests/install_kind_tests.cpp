@@ -1,5 +1,6 @@
 // How a copy of Bloom was installed: the decision from what is found around the program, and the
 // finding itself over package trees made in a temporary directory.
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/update/install_kind.hpp>
@@ -91,7 +92,7 @@ int main() {
 
     // The finding itself, where this platform's layout can be made in a folder.
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error) /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom-install-kind-" + std::to_string(std::random_device{}()));
     std::map<std::string, std::string, std::less<>> variables;
     const EnvironmentReader environment =

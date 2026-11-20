@@ -1,5 +1,6 @@
 // A downloaded file is accepted only when its size, its SHA-256 and its Ed25519 signature are
 // the ones the verified feed gives. The three cases issue #734 names are the first three.
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/update/base64.hpp>
@@ -42,7 +43,7 @@ int main() {
     }
     const auto released = readFixture("update.bin");
     std::error_code error;
-    const auto folder = std::filesystem::temp_directory_path(error) /
+    const auto folder = bloom::test_support::processTempDirectory() /
                         ("bloom-update-verify-" + std::to_string(std::random_device{}()));
     std::filesystem::create_directories(folder, error);
     const auto path = folder / "update.bin";

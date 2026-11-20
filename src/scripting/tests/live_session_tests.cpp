@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <atomic>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -165,7 +166,7 @@ void savedColorIntent() {
     require(session->execute(std::move(overrideWorking)).succeeded(),
             "Set composition working-space override");
     const auto path =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-scripting-color-intent-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".bloom");
     require(session->saveAs(path).succeeded(), "Save project with ACES color intent");

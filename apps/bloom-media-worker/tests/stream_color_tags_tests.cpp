@@ -2,6 +2,7 @@
 // color with what the container says. These are real movies, encoded and muxed here with the
 // bundled encoder, whose stream and container agree and disagree in each tag.
 #include "ffmpeg_stream_color_tags.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -186,7 +187,7 @@ void run(const std::filesystem::path& folder, const std::string_view extension) 
 
 int main() {
     std::error_code error;
-    const auto folder = std::filesystem::temp_directory_path() / "bloom stream color tags";
+    const auto folder = bloom::test_support::processTempDirectory() / "bloom stream color tags";
     std::filesystem::create_directories(folder, error);
     run(folder, "mov");
     run(folder, "mp4");

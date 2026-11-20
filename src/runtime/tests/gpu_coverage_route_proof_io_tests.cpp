@@ -3,6 +3,7 @@
 // acceptance directory, and a synthetic proof never makes a route pass.
 
 #include "gpu_route_proof_io.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/runtime/gpu_coverage_contract.hpp>
 
@@ -67,7 +68,7 @@ constexpr std::string_view kUnitEvidenceDigest =
 
 [[nodiscard]] std::filesystem::path makeScratchDirectory() {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    return std::filesystem::temp_directory_path() /
+    return bloom::test_support::processTempDirectory() /
            ("bloom-route-proof-io-" + std::to_string(stamp));
 }
 

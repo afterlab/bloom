@@ -5,6 +5,7 @@
 // for a running process, really moving folders, really starting the new version, the log.
 //
 //   helper_program_tests <bloom-update-helper> <fake_app>
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/update/apply.hpp>
@@ -105,7 +106,7 @@ int main(const int argc, char* argv[]) {
     const path helper = argv[1];
     const path fakeApp = argv[2];
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error) /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom-update-program-" + std::to_string(std::random_device{}()));
     const auto host = makeSystemApplyHost();
 

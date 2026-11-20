@@ -17,6 +17,7 @@
 
 #include "channel_source_time.hpp"
 #include "document_render_parity_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/commands/animation_operations.hpp>
@@ -162,7 +163,7 @@ struct Fixture {
 
     Fixture() {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-precomp-channels-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         for (int member = 1; member <= 4; ++member)

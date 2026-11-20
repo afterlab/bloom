@@ -17,6 +17,7 @@
 //    one queue, so this is also the path of a device without a separate transfer queue.
 
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include "gpu_media_executor_test_support.hpp"
 
@@ -90,7 +91,8 @@ struct Fixture final {
 
 [[nodiscard]] Fixture makeFixture() {
     Fixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_upload_lookahead_test";
+    fixture.directory =
+        bloom::test_support::processTempDirectory() / "bloom_gpu_upload_lookahead_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     for (std::size_t source = 0; source < kSources; ++source) {

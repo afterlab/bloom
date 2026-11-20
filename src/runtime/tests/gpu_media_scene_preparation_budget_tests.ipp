@@ -148,7 +148,7 @@ void testSharedSourceBackingCharge(Expectations& expectations,
 // exclusive GPU output lifetimes into one artificial per-frame total, and a full-source upload must
 // keep its resolution. A follow-up request must still prepare (liveness after pressure).
 void testLargeSourceUnderDefaultAllowance(Expectations& expectations) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_large_source_test";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_gpu_large_source_test";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "large_4608x3164.exr";

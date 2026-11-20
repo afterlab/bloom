@@ -7,6 +7,7 @@
 // test reads the machine's real free space or waits for time to pass: the cache volume and the
 // clock are injected.
 #include "generated_jpeg.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/core/sha256.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
@@ -45,7 +46,7 @@ void expect(const bool condition, const std::string& message) {
 struct Scratch final {
     std::filesystem::path root;
     explicit Scratch(const std::string& name)
-        : root(std::filesystem::temp_directory_path() /
+        : root(bloom::test_support::processTempDirectory() /
                ("bloom-source-mirror-" + name + "-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()))) {
         std::filesystem::create_directories(root / "sources");
@@ -1096,7 +1097,7 @@ void testPolicy() {
     using cache::LocalCopyPolicy;
     using cache::LocalCopyPreference;
     const std::filesystem::path source =
-        std::filesystem::temp_directory_path() / "shots" / "a" / "plate.exr";
+        bloom::test_support::processTempDirectory() / "shots" / "a" / "plate.exr";
     const LocalCopyPolicy automatic;
     // Automatic: Network, Slow attached and Unknown are copied, Fast local never, and never a
     // source on the cache's own volume.
@@ -1126,7 +1127,7 @@ void testPolicy() {
                "an asset set to Never is not copied whatever the preference");
     }
     // A folder rule beats the preference; the longest folder that holds the source wins.
-    const auto shots = std::filesystem::temp_directory_path() / "shots";
+    const auto shots = bloom::test_support::processTempDirectory() / "shots";
     LocalCopyPolicy folders{LocalCopyPreference::Never, {{shots, true}, {shots / "a", false}}};
     expect(
         !keepsLocalCopy(folders, LocalCopyOverride::Inherit, source, StorageClass::Network, false),
@@ -1134,15 +1135,16 @@ void testPolicy() {
     expect(keepsLocalCopy(folders, LocalCopyOverride::Inherit, shots / "b" / "plate.exr",
                           StorageClass::FastLocal, false),
            "a folder rule beats the preference");
-    expect(!keepsLocalCopy(folders, LocalCopyOverride::Inherit,
-                           std::filesystem::temp_directory_path() / "shots-other" / "plate.exr",
-                           StorageClass::Network, false),
-           "a folder rule does not cover a sibling whose name merely starts the same");
+    expect(
+        !keepsLocalCopy(folders, LocalCopyOverride::Inherit,
+                        bloom::test_support::processTempDirectory() / "shots-other" / "plate.exr",
+                        StorageClass::Network, false),
+        "a folder rule does not cover a sibling whose name merely starts the same");
     expect(keepsLocalCopy(folders, LocalCopyOverride::Always, source, StorageClass::Network, false),
            "the asset's override beats a folder rule");
     folders.preference = LocalCopyPreference::Automatic;
     expect(keepsLocalCopy(folders, LocalCopyOverride::Inherit,
-                          std::filesystem::temp_directory_path() / "elsewhere" / "plate.exr",
+                          bloom::test_support::processTempDirectory() / "elsewhere" / "plate.exr",
                           StorageClass::Network, false),
            "a source no folder rule holds falls through to the preference");
 

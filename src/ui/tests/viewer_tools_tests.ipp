@@ -1082,7 +1082,7 @@ void exercise(ViewerFixture& fixture, Expectations& expectations, const std::str
 // #343: the points of an imported shape are editable and keyable, compound shapes included.
 void testImportedCompoundPointEditing(Expectations& expectations) {
     using namespace bloom;
-    const auto file = std::filesystem::temp_directory_path() / "bloom-compound-points.svg";
+    const auto file = bloom::test_support::processTempDirectory() / "bloom-compound-points.svg";
     {
         std::ofstream out(file);
         out << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">

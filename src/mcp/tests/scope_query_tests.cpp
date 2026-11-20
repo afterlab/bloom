@@ -3,6 +3,7 @@
 // and a picture are answered, a range gives one result per frame, and every refusal carries its
 // remedy. The project is one white-ish solid layer at quarter resolution, headless, no device.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/document/project.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -45,7 +46,7 @@ struct Server final {
     }();
     runtime::TaskScheduler scheduler;
     std::filesystem::path captures =
-        std::filesystem::temp_directory_path() / "bloom-scope-query-test";
+        bloom::test_support::processTempDirectory() / "bloom-scope-query-test";
     std::unique_ptr<mcp::McpServerCore> core;
     std::unique_ptr<mcp::McpProtocolSession> protocol;
     int nextId = 1;

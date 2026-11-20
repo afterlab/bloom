@@ -5,6 +5,7 @@
 // file is then moved away, and the project still opens and still validates: nothing reads the
 // file again.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
@@ -64,7 +65,8 @@ std::string readAll(const std::filesystem::path& path) {
 
 void importKeySaveAndReopen() {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto folder = std::filesystem::temp_directory_path() / ("bloom-svg-persistence-" + std::to_string(stamp));
+    const auto folder = bloom::test_support::processTempDirectory() /
+                        ("bloom-svg-persistence-" + std::to_string(stamp));
     std::filesystem::create_directories(folder);
     const auto file = folder / "art.svg";
     std::ofstream(file, std::ios::binary) << kSvg;

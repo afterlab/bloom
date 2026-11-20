@@ -14,6 +14,7 @@
 #include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
 #include "node_editor_items.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <ImathBox.h>
 #include <ImfChannelList.h>
@@ -112,7 +113,7 @@ int main(int argc, char** argv) {
     QApplication application(argc, argv);
     try {
         std::mt19937_64 random{std::random_device{}()};
-        const auto folder = std::filesystem::temp_directory_path() /
+        const auto folder = bloom::test_support::processTempDirectory() /
                             ("bloom-cryptomatte-sidecar-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         for (int frame = 1; frame <= 2; ++frame) {

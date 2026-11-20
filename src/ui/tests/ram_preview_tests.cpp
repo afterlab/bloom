@@ -6,6 +6,7 @@
 // all: a cache that works shows up as an invocation count that stops moving.
 #include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -2130,7 +2131,7 @@ void testLargeIndexedCoverageMetadata(Expectations& expectations) {
 // RAM preview prepares every frame, a warm one nothing, and an edit of one path invalidates it.
 void testImportedSvgPreviewAtHalfScale(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("Imported SVG preview", time(3, 25)));
-    const auto file = std::filesystem::temp_directory_path() / "bloom-ram-preview-art.svg";
+    const auto file = bloom::test_support::processTempDirectory() / "bloom-ram-preview-art.svg";
     {
         std::ofstream out(file);
         out << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="64" height="48"><g id="A">

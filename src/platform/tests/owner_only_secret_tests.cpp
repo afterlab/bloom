@@ -1,6 +1,7 @@
 // bloom.platform.owner-only-secret (ADR 0034, section 10): a secret is created owner-only, an
 // exposed file is reported and replaced, an atomic replace leaves no partial or temporary file, and
 // the value never appears in any message.
+#include "unique_temp_dir.hpp"
 #include <bloom/platform/owner_only_secret.hpp>
 
 #include <array>
@@ -32,7 +33,7 @@ fs::path scratchFolder() {
     std::string name = "bloom-secret-test-";
     for (const auto byte : random)
         name += std::to_string(std::to_integer<unsigned>(byte) % 10U);
-    return fs::temp_directory_path() / name;
+    return bloom::test_support::processTempDirectory() / name;
 }
 
 std::size_t entries(const fs::path& folder) {

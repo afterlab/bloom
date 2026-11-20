@@ -15,6 +15,7 @@
 #include "fixed_memory_budget.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_scene_executor_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <ImathBox.h>
 #include <ImfChannelList.h>
@@ -231,7 +232,7 @@ struct Fixture final {
 [[nodiscard]] Fixture makeAcesFixture() {
     Fixture fixture;
     fixture.directory =
-        std::filesystem::temp_directory_path() / "bloom_gpu_process_frame_ocio_test";
+        bloom::test_support::processTempDirectory() / "bloom_gpu_process_frame_ocio_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     const auto path = fixture.directory / "aces_ap0.exr";

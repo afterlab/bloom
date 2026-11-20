@@ -17,6 +17,7 @@
 // path for none. Without a device no proof is written, and the harness says so.
 
 #include "gpu_route_proof_harness_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
@@ -208,7 +209,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     }
 
     const auto scratch =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-host-painted-route-proof-" + std::to_string(QCoreApplication::applicationPid()));
     const auto settingsRoot = scratch / "settings";
     const auto mediaDirectory = scratch / "media";

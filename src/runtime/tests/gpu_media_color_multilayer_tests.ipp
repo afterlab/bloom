@@ -6,7 +6,7 @@
 void testMultilayerNoColourLayerNative(Expectations& expectations,
                                        bloom::render::GpuDevice& device,
                                        const GpuSceneOcioContext& ocioContext) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_media_multilayer";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_gpu_media_multilayer";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "multilayer.exr";

@@ -1,4 +1,5 @@
 #include "process_probe.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/color/gpu_shader_compiler.hpp>
 #include <bloom/core/executable_suffix.hpp>
@@ -86,7 +87,7 @@ class FixtureDirectory final {
   public:
     explicit FixtureDirectory(const std::string& helper) {
         std::error_code error;
-        const auto base = std::filesystem::temp_directory_path(error);
+        const auto base = bloom::test_support::processTempDirectory();
         if (error)
             return;
         const auto seed = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -294,7 +295,7 @@ std::optional<GpuShaderCompileError> errorCode(const bloom::color::GpuShaderComp
 void testSamePathReplacement(Expectations& expectations, const std::string& glslang,
                              const std::string& spirvVal) {
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error);
+    const auto base = bloom::test_support::processTempDirectory();
     const auto directory =
         base / ("bloom-gpu-shader-replace-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
@@ -429,7 +430,7 @@ void testConcurrentSameKey(Expectations& expectations, const std::string& glslan
 void testSameSizeSameMtimeReplacement(Expectations& expectations, const std::string& glslang,
                                       const std::string& spirvVal) {
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error);
+    const auto base = bloom::test_support::processTempDirectory();
     const auto directory =
         base / ("bloom-gpu-shader-mtime-" +
                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));

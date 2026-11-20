@@ -5,6 +5,7 @@
 // and a steep/small 1D curve that exposes sub-texel sampler quantization.
 
 #include "ocio_gpu_program_native_helpers.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -95,7 +96,7 @@ void verifySamplingAdapter(Expectations& expectations, const OcioGpuProgramDesc&
 
 void testFileTransform(Expectations& expectations, GpuDevice& device,
                        const ResolvedBloomNeutralConfig& resolved) {
-    const auto base = std::filesystem::temp_directory_path() /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom_ocio_ft_" + std::to_string(std::random_device{}()));
     std::error_code directoryError;
     std::filesystem::create_directories(base, directoryError);

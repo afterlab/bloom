@@ -2,6 +2,7 @@
 // Remove, Channel Copy and Shuffle compiled into one CompiledChannelShuffle and evaluated by the CPU
 // reference.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -124,7 +125,7 @@ struct Fixture {
     }
     explicit Fixture(const std::string& name) {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-channel-" + name + "-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         writeLayeredExr(folder / "layers.exr");

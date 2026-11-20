@@ -40,6 +40,7 @@
 #include "fixed_memory_budget.hpp"
 #include "gpu_preview_test_phase.hpp"
 #include "gpu_route_proof_harness_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -525,7 +526,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     qputenv("QT_VULKAN_LIB", options.loader.string().c_str());
 
     const auto settingsRoot =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-ram-route-proof-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(settingsRoot);
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -543,7 +544,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-ram-route-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

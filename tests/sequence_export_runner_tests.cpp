@@ -1,6 +1,7 @@
 #include "fixed_memory_budget.hpp"
 #include "gpu_route_proof_export_support.hpp"
 #include "process_probe.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <algorithm>
 #include <array>
@@ -701,7 +702,7 @@ void testGpuMediaDisplayParity(Fixture& f, const std::shared_ptr<host::GpuExport
                            .quality = runtime::EvaluationQuality::Reference,
                            .colorIntent = intent,
                            .pixelStorageByteLimit = 0},
-            .targetPath = std::filesystem::temp_directory_path() / "bloom-parity-unused.tiff",
+            .targetPath = bloom::test_support::processTempDirectory() / "bloom-parity-unused.tiff",
             .preset = output::OutputPresetV1::TiffRgba16SrgbV1,
             .gpuProvider = provider,
             .mediaDisplay = media,

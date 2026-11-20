@@ -15,6 +15,7 @@
 
 #include "fixed_memory_budget.hpp"
 #include "gpu_route_proof_export_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>

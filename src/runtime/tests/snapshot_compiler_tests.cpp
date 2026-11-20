@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include "case_timer.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/document/font_id.hpp>
@@ -1232,11 +1233,10 @@ void testReachabilityAndUnsupportedNodes(Expectations& expectations) {
                 return result;
             }
         };
-        const auto cacheRoot = std::filesystem::temp_directory_path() /
-                               ("bloom-plan-font-arrival-" +
-                                std::to_string(std::chrono::steady_clock::now()
-                                                   .time_since_epoch()
-                                                   .count()));
+        const auto cacheRoot =
+            bloom::test_support::processTempDirectory() /
+            ("bloom-plan-font-arrival-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
         runtime::fonts::FontResolver::Options options;
         options.cacheDirectory = cacheRoot;
         options.transport = std::make_shared<InterTransport>();

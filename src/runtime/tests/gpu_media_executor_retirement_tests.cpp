@@ -7,6 +7,7 @@
 
 #include "fixed_memory_budget.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include "gpu_media_executor_test_support.hpp"
 
@@ -61,7 +62,7 @@ struct MediaFixture final {
 [[nodiscard]] MediaFixture makeFixture() {
     MediaFixture fixture;
     fixture.directory =
-        std::filesystem::temp_directory_path() / "bloom_gpu_media_executor_retirement_test";
+        bloom::test_support::processTempDirectory() / "bloom_gpu_media_executor_retirement_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "signed_hdr.exr";

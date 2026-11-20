@@ -4,6 +4,7 @@
 // gone. With BLOOM_CAPTURE_DIR set, the card and Properties are also written as PNGs (the scale
 // factor is the environment's QT_SCALE_FACTOR), the review captures at DPR 1 and 1.5.
 #include "node_production_harness.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
@@ -56,7 +57,8 @@ void capture(const QString& name, QWidget& widget) {
 }
 
 void run(App& app) {
-    const auto path = std::filesystem::temp_directory_path() / "bloom-vector-artwork-row-logo.svg";
+    const auto path =
+        bloom::test_support::processTempDirectory() / "bloom-vector-artwork-row-logo.svg";
     std::ofstream(path, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect x="10" y="10" width="80" height="60" fill="#c33"/><circle cx="150" cy="50" r="30" fill="#36c"/></svg>)svg";
     const auto bytes = std::filesystem::file_size(path);

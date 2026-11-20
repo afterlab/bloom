@@ -130,8 +130,8 @@ class Scopes(unittest.TestCase):
         with self.assertRaises(Exception) as axis:
             bloom.scopes.read(0, signal='working', axis_maximum=3)
         self.assertIn('1, 2, 4, 8 or 16', str(axis.exception))
-        with self.assertRaises(Exception) as width:
-            bloom.scopes.image(os.path.join(tempfile.gettempdir(), 'x.png'), 0, width=9999)
+        with tempfile.TemporaryDirectory() as folder, self.assertRaises(Exception) as width:
+            bloom.scopes.image(os.path.join(folder, 'x.png'), 0, width=9999)
         self.assertIn('128 to 2048', str(width.exception))
 
 

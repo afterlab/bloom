@@ -56,7 +56,7 @@ void writeWindowedExr(const std::filesystem::path& path, const Imath::Box2i& dat
 // transform at the frame centre lands at its own offset, and GPU preparation reproduces the CPU
 // frame bit for bit at full and proxy resolution.
 void testExrDataWindowRegistration(Expectations& expectations) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_exr_ingest_windows";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_exr_ingest_windows";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "cropped.exr";
@@ -105,7 +105,7 @@ void testExrDataWindowRegistration(Expectations& expectations) {
 
 // NaN/Inf components and out-of-range alpha are repaired, reported and never fail the frame.
 void testExrNonFiniteRepair(Expectations& expectations) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_exr_ingest_repair";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_exr_ingest_repair";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "nonfinite.exr";
@@ -151,7 +151,7 @@ void testExrNonFiniteRepair(Expectations& expectations) {
 // the frame stays prepared instead of failing over to the CPU. Selecting the color layer prepares
 // its upload.
 void testExrNoColourLayerStaysPrepared(Expectations& expectations) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_exr_ingest_no_colour";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_exr_ingest_no_colour";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "multilayer.exr";

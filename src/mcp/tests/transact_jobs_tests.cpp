@@ -10,6 +10,7 @@
 // D3: bloom.animation.set-key-tracks keys many parameters in one operation, from inline tracks or
 // one data file, and applies nothing when any track is invalid.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -703,7 +704,7 @@ void keyTracks(const std::filesystem::path& folder) {
 } // namespace
 
 int main() {
-    const auto folder = std::filesystem::temp_directory_path() / "bloom-transact-jobs-test";
+    const auto folder = bloom::test_support::processTempDirectory() / "bloom-transact-jobs-test";
     std::error_code ignored;
     std::filesystem::remove_all(folder, ignored);
     try {

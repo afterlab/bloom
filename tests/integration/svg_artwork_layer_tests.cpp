@@ -16,6 +16,7 @@
 //   parses a block once per digest (VectorArtworkSceneCache: hit, miss, admission, retirement),
 //   cancels, refuses an unreadable SVG by name, and says which layers keep the resampled picture.
 
+#include "unique_temp_dir.hpp"
 #include "case_timer.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/composition_settings_operations.hpp>
@@ -76,7 +77,7 @@ void expect(const bool condition, const std::string& message) {
 
 std::filesystem::path writeSvg(const std::string& name, const std::string& text) {
     const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-    const auto path = std::filesystem::temp_directory_path() /
+    const auto path = bloom::test_support::processTempDirectory() /
                       ("bloom-svg-layer-" + name + "-" + std::to_string(stamp) + ".svg");
     std::ofstream(path, std::ios::binary) << text;
     return path;

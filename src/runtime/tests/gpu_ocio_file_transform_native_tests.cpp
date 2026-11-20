@@ -8,6 +8,7 @@
 // process/working space ids, so a changed LUT is a different command. No CPU colour-space processor
 // is used here. A missing device is an explicit SKIP unless --require-device is passed.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/color/ocio_cpu_file_transform_processor.hpp>
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -200,7 +201,7 @@ void writeCurve1dCube(std::ofstream& file) {
 void testFileTransform(Expectations& expectations, GpuDevice& device,
                        const bloom::color::ResolvedBloomNeutralConfig& resolved,
                        const GpuOcioCompileOptions& options) {
-    const auto base = std::filesystem::temp_directory_path() /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom_runtime_ft_" + std::to_string(std::random_device{}()));
     std::error_code directoryError;
     std::filesystem::create_directories(base, directoryError);

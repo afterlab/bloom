@@ -1,4 +1,5 @@
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/new_project.hpp>
@@ -235,7 +236,7 @@ int main() {
     bloom::runtime::TaskScheduler scheduler(schedulerConfig);
     bloom::runtime::SnapshotCompiler compiler(bloom::document::builtInNodeDefinitions());
     const auto outputPath =
-        std::filesystem::temp_directory_path() / "bloom-scripting-facade-frame-12.png";
+        bloom::test_support::processTempDirectory() / "bloom-scripting-facade-frame-12.png";
     {
         // A run that failed before its own cleanup leaves the file, and the render never replaces
         // one.

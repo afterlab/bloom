@@ -14,6 +14,7 @@
 // under tests/integration/ (mirroring media_asset_operations_tests.cpp) rather than under
 // src/commands/tests/, because it deliberately crosses into bloom/project for the encode/decode/
 // reconstruct round trip -- a dependency src/commands itself is not allowed to declare.
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
@@ -225,7 +226,7 @@ int main() {
     TestContext context;
 
     std::random_device randomDevice;
-    const auto scratchRoot = std::filesystem::temp_directory_path() /
+    const auto scratchRoot = bloom::test_support::processTempDirectory() /
                              ("bloom-netshare-locator-" + std::to_string(randomDevice()));
     // The project directory and the "mount" directory share only `scratchRoot` as a common
     // ancestor -- exactly the shape a real GVFS mount has relative to a project saved under the

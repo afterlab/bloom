@@ -8,6 +8,7 @@
 #include "await_qt.hpp"
 #include "channel_checklist_field.hpp"
 #include "node_editor_items.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -157,7 +158,7 @@ struct Scene final {
     }
     Scene() {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-channel-pickers-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         writeRootlessExr(folder / "render.exr");

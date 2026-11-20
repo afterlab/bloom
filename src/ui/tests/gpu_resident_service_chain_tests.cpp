@@ -14,6 +14,7 @@
 // exercised on their own documents/requests, never by relabelling a hand-lowered plan.
 
 #include "gpu_service_chain_fixture.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -126,7 +127,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-vertical-proof-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

@@ -1,5 +1,6 @@
 #include "ocio_gpu_program_test_support.hpp"
 #include "tool_command.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -573,7 +574,7 @@ void testWrapperFixtureCompiles(Expectations& expectations) {
         std::cout << "SKIP: pinned glslangValidator/spirv-val or wrapper fixture unavailable\n";
         return;
     }
-    const auto spv = std::filesystem::temp_directory_path() / "bloom_ocio_wrapper_fixture.spv";
+    const auto spv = bloom::test_support::processTempDirectory() / "bloom_ocio_wrapper_fixture.spv";
     const std::string compile = "\"" + glslang.string() + "\" --target-env vulkan1.2 -V \"" +
                                 fixture.string() + "\" -o \"" + spv.string() + "\"";
     // NOLINTNEXTLINE(bugprone-command-processor) -- bounded test fixture: pinned build tool path.

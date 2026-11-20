@@ -1,6 +1,7 @@
 // bloom.mcp.server-service (ADR 0034, section 10): the in-app server's lifecycle, typed refusals,
 // token, activity, events, client configuration and shutdown, against a headless live session.
 // The test thread is the owner (UI) thread.
+#include "unique_temp_dir.hpp"
 #include <bloom/mcp/server_service.hpp>
 #include <bloom/mcp/testing/server_service_driver.hpp>
 #include <bloom/platform/owner_only_secret.hpp>
@@ -38,7 +39,8 @@ fs::path scratch(const std::string& name) {
     std::string suffix;
     for (const auto byte : random)
         suffix += std::to_string(std::to_integer<unsigned>(byte) % 10U);
-    const auto folder = fs::temp_directory_path() / ("bloom-mcp-service-" + name + "-" + suffix);
+    const auto folder =
+        bloom::test_support::processTempDirectory() / ("bloom-mcp-service-" + name + "-" + suffix);
     fs::create_directories(folder);
     return folder;
 }

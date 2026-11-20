@@ -7,6 +7,7 @@
 // same asset, whose stamped members still read.
 #include "generated_jpeg.hpp"
 #include "image_source.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/color_settings.hpp>
@@ -48,7 +49,8 @@ void expect(const bool condition, const std::string& message) {
 
 struct Folder {
     std::filesystem::path path;
-    explicit Folder(const std::string& name) : path(std::filesystem::temp_directory_path() / name) {
+    explicit Folder(const std::string& name)
+        : path(bloom::test_support::processTempDirectory() / name) {
         std::error_code error;
         std::filesystem::remove_all(path, error);
         std::filesystem::create_directories(path);

@@ -16,6 +16,7 @@
 //   4. the additive cache sublimits leave the overall CPU cache budget and CPU entries untouched.
 
 #include "await.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -434,8 +435,8 @@ void testCapabilityFallback() {
 
 void testMediaContextFollowsSessionBaseDirectory() {
     CpuCompositionEvaluator evaluator;
-    const auto directoryA = std::filesystem::temp_directory_path() / "bloom_wiring_media_a";
-    const auto directoryB = std::filesystem::temp_directory_path() / "bloom_wiring_media_b";
+    const auto directoryA = bloom::test_support::processTempDirectory() / "bloom_wiring_media_a";
+    const auto directoryB = bloom::test_support::processTempDirectory() / "bloom_wiring_media_b";
 
     evaluator.setAssetBaseDirectory(directoryA);
     const auto before = bloom::ui::gpuSceneMediaContextFor(evaluator);

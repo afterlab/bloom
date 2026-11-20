@@ -5,6 +5,7 @@
 
 #include "await_qt.hpp"
 #include "cryptomatte_fixture_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <QApplication>
 #include <QImage>
@@ -254,7 +255,7 @@ int main(int argc, char** argv) {
                 extra.emplace_back(arguments[index].toStdString());
         }
         std::mt19937_64 random{std::random_device{}()};
-        const auto folder = std::filesystem::temp_directory_path() /
+        const auto folder = bloom::test_support::processTempDirectory() /
                             ("bloom-asset-validity-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         // A sidecar-style, Cryptomatte-only EXR sequence: CryptoAsset ranks, no RGB.

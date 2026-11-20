@@ -172,7 +172,7 @@ void testRealVideoColour(Expectations& expectations, bloom::render::GpuDevice& d
                             tag + ": missing media fails closed with a diagnostic");
 
         const auto corruptPath =
-            std::filesystem::temp_directory_path() /
+            bloom::test_support::processTempDirectory() /
             ("bloom_gpu_media_color_corrupt_" + std::to_string(idBase) + ".mov");
         {
             std::ofstream corrupt(corruptPath, std::ios::binary | std::ios::trunc);
@@ -431,7 +431,7 @@ void testPqInputSweep(Expectations& expectations, bloom::render::GpuDevice& devi
     if (!cache || !executor) {
         return;
     }
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_pq_sweep";
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom_gpu_pq_sweep";
     std::filesystem::create_directories(directory);
     constexpr int width = 128, height = 128;
     std::vector<ExrPixel> pixels;

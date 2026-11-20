@@ -16,6 +16,7 @@
 // proven externally.
 
 #include "gpu_service_chain_fixture.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/runtime/reference_display_preparation.hpp>
 
@@ -338,7 +339,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     // Isolate QSettings in a throwaway IniFormat path BEFORE any ViewerEditor is constructed, so
     // the proof never inherits a prior run's or the user's background/channel/overlay preferences.
     const auto settingsRoot =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-viewer-settings-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(settingsRoot);
     QSettings::setDefaultFormat(QSettings::IniFormat);
@@ -363,7 +364,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     Expectations checks;
     const auto mediaDirectory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-viewer-proof-" + std::to_string(QCoreApplication::applicationPid()));
     std::filesystem::create_directories(mediaDirectory);
     Fixture fixture(mediaDirectory);

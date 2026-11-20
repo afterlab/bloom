@@ -9,6 +9,7 @@
 #include "gpu_device_private.hpp"
 #include "gpu_path_coverage_test_support.hpp"
 #include "gpu_pipeline_cache_private.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <array>
 #include <chrono>
@@ -140,7 +141,7 @@ void testFileFormat(Expectations& checks) {
     std::random_device random;
     const auto name =
         "bloom-pipeline-cache-test-" + std::to_string(random()) + "-" + std::to_string(random());
-    return std::filesystem::temp_directory_path() / name;
+    return bloom::test_support::processTempDirectory() / name;
 }
 
 [[nodiscard]] std::vector<std::uint8_t> readFile(const std::filesystem::path& path) {

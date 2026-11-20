@@ -1,5 +1,6 @@
 // MCP usability fixes: ids as strings, name and role references, set-keys, key-range warnings,
 // duplicate composition id maps, asset import and export destinations, and error wording.
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/scripting/operation_registry.hpp>
@@ -228,9 +229,10 @@ int main() {
     expect(session->snapshot().project().assets().empty(), "a refused import adds nothing");
 
     // An unsaved project has no folder, so an absolute path imports with an external locator.
-    const auto folder = std::filesystem::temp_directory_path() /
-                        ("bloom-unsaved-import-" +
-                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto folder =
+        bloom::test_support::processTempDirectory() /
+        ("bloom-unsaved-import-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);
     const auto media = folder / "plate.png";
     writeSmallPng(media);

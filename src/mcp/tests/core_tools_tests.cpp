@@ -3,6 +3,7 @@
 // live_ui_port.hpp. One stdio transport check: it stops while its input is idle.
 
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/document/project.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -784,7 +785,7 @@ std::uint64_t jobOf(const std::string& response) {
 // queue retired it (export.log, export.status, export.wait), and capture carries its job and log.
 void retiredTransientJobs() {
     const auto captures =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mcp-core-tools-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(captures);
@@ -1442,7 +1443,7 @@ std::string text(yyjson_val* value, const char* key) {
 // be added again) says by name that the layer draws nothing; queries of layers and nodes carry it.
 void svgFootageWarningQuery() {
     Headless server;
-    const auto path = std::filesystem::temp_directory_path() / "bloom-mcp-legacy-logo.svg";
+    const auto path = bloom::test_support::processTempDirectory() / "bloom-mcp-legacy-logo.svg";
     std::ofstream(path, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#c33"/></svg>)svg";
     const auto transact = [&](const std::string& operations) {
@@ -1737,7 +1738,7 @@ void keyEqualToDefault() {
 // an id that is listed but unavailable is refused with its reason, never as unknown.
 void exportAcceptsEveryListedPreset() {
     const auto folder =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mcp-preset-walk-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);
@@ -2365,7 +2366,7 @@ class IdleInput final : public std::streambuf {
 // its value and the actual count with its own code, pointing at set-key-columns and fromFile.
 void requestLimits() {
     const auto folder =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mcp-limits-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);
@@ -2649,8 +2650,10 @@ void stdioStopsWhileInputIdle() {
 
 // Name and role references, query filters and projection, id strings, set-keys and frame statistics.
 void mcpFold() {
-    const auto captures = std::filesystem::temp_directory_path() /
-                          ("bloom-mcp-fold-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto captures =
+        bloom::test_support::processTempDirectory() /
+        ("bloom-mcp-fold-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     {
         Headless server({}, {}, captures);
         const auto transact = [&](const std::string& operations) {
@@ -2845,9 +2848,10 @@ void mcpFold() {
 // A second project file edited, saved and exported in its own session while the server's own
 // project stays untouched; two sessions on one file are refused.
 void secondProjectFile() {
-    const auto folder = std::filesystem::temp_directory_path() /
-                        ("bloom-mcp-file-" +
-                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto folder =
+        bloom::test_support::processTempDirectory() /
+        ("bloom-mcp-file-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);
     const auto second = folder / "second.bloom";
     const auto own = folder / "own.bloom";
@@ -2981,9 +2985,10 @@ void secondProjectFile() {
 // became live, and when Bloom cannot be asked), project.open and project.save-as refuse a file a
 // session holds, and a render with no GPU device says it ran on the CPU reference path.
 void fileSessionsBesideALiveProject() {
-    const auto folder = std::filesystem::temp_directory_path() /
-                        ("bloom-mcp-live-file-" +
-                         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto folder =
+        bloom::test_support::processTempDirectory() /
+        ("bloom-mcp-live-file-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);
     const auto second = folder / "second.bloom";
     const auto third = folder / "third.bloom";
@@ -3104,7 +3109,7 @@ void fileSessionsBesideALiveProject() {
 // limits are advertised up front, and the project as it stands keeps taking edits that fit.
 void projectCapacityRefusal() {
     const auto folder =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-mcp-capacity-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(folder);

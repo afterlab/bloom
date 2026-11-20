@@ -4,6 +4,7 @@
 // internal stage or code in the user-facing sentence.
 
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -88,7 +89,7 @@ struct Folder final {
     std::filesystem::path path;
     explicit Folder(const std::string& name) {
         std::mt19937_64 random{std::random_device{}()};
-        path = std::filesystem::temp_directory_path() /
+        path = bloom::test_support::processTempDirectory() /
                ("bloom-render-cleanup-" + name + "-" + std::to_string(random()));
         std::filesystem::create_directories(path);
     }

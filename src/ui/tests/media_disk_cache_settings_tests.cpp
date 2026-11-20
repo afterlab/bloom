@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/render/image.hpp>
@@ -209,7 +210,7 @@ void mirrorOneSource(cache::SourceMirror& mirror, const char tag) {
     identity.modifiedNanoseconds = 1;
     identity.fileIdLow = static_cast<std::uint64_t>(tag);
     const std::span<const std::byte> view(*bytes);
-    mirror.keep(std::filesystem::temp_directory_path() / "bloom-disk-cache-settings" /
+    mirror.keep(bloom::test_support::processTempDirectory() / "bloom-disk-cache-settings" /
                     (std::string(1, tag) + ".exr"),
                 identity, std::move(bytes), view);
     mirror.flush();

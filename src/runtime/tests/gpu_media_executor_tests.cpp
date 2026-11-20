@@ -10,6 +10,7 @@
 // Gate: absolute-or-relative 2e-6 per finite component, matching the solid executor suite.
 
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include "gpu_media_video_scene_preparation_test_support.hpp"
 
@@ -83,7 +84,8 @@ struct MediaFixture final {
 
 [[nodiscard]] MediaFixture makeFixture() {
     MediaFixture fixture;
-    fixture.directory = std::filesystem::temp_directory_path() / "bloom_gpu_media_executor_test";
+    fixture.directory =
+        bloom::test_support::processTempDirectory() / "bloom_gpu_media_executor_test";
     std::filesystem::remove_all(fixture.directory);
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "signed_hdr.exr";
@@ -636,7 +638,8 @@ void testRealVideo(Expectations& expectations, GpuSceneExecutor& executor,
 // the prepared upload with zero re-decode and zero native re-upload.
 void testLargeSourceNative(Expectations& expectations, GpuDevice& device,
                            CpuCompositionEvaluator& evaluator) {
-    const auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_large_executor_test";
+    const auto directory =
+        bloom::test_support::processTempDirectory() / "bloom_gpu_large_executor_test";
     std::filesystem::remove_all(directory);
     std::filesystem::create_directories(directory);
     const auto path = directory / "large_4608x3164.exr";

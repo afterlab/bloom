@@ -14,6 +14,7 @@
 // in the caches, the importer only feeds them, and two hundred real 4K files on disk would make the
 // suite cost gigabytes of I/O to assert nothing extra.
 #include "await_qt.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/media/audio/audio.hpp>
@@ -76,7 +77,7 @@ class Expectations final {
 class ScratchDirectory final {
   public:
     explicit ScratchDirectory(const std::string& name)
-        : path_(std::filesystem::temp_directory_path() /
+        : path_(bloom::test_support::processTempDirectory() /
                 (name + "-" +
                  std::to_string(static_cast<unsigned long long>(
                      std::chrono::steady_clock::now().time_since_epoch().count())))) {
@@ -175,7 +176,7 @@ void keepEncodedSource(cache::SourceMirror& mirror, const int index) {
     identity.modifiedNanoseconds = 1;
     identity.fileIdLow = static_cast<std::uint64_t>(index) + 1;
     const std::span<const std::byte> view(*bytes);
-    mirror.keep(std::filesystem::temp_directory_path() / "bloom-cache-accounting" /
+    mirror.keep(bloom::test_support::processTempDirectory() / "bloom-cache-accounting" /
                     ("frame." + std::to_string(index) + ".exr"),
                 identity, std::move(bytes), view);
 }

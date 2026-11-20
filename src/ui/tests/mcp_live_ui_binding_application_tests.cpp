@@ -6,6 +6,7 @@
 // fixture. None of them may dirty the project or enter its undo history. Offscreen.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "await_qt.hpp"
+#include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 
 #include <bloom/ui/application_preferences.hpp>
@@ -177,7 +178,8 @@ void preferences(const mcp::McpLiveUiPort& port) {
                preference(values, "mediaLocalCopyFolders") ==
                    mcp::McpPreferenceValue(std::string{}),
            "local copies are automatic with no folder rule by default");
-    const auto shots = (std::filesystem::temp_directory_path() / "bloom-shots").generic_string();
+    const auto shots =
+        (bloom::test_support::processTempDirectory() / "bloom-shots").generic_string();
     const auto rules = "keep:" + shots + "\nskip:" + shots + "/local";
     result = port.setPreferences({{.key = "mediaLocalCopies", .value = std::string("never")},
                                   {.key = "mediaLocalCopyFolders", .value = rules}});

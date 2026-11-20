@@ -1,5 +1,6 @@
 #include "generated_jpeg.hpp"
 #include "image_source.hpp"
+#include "unique_temp_dir.hpp"
 #include <ImfChannelList.h>
 #include <ImfFrameBuffer.h>
 #include <ImfHeader.h>
@@ -101,7 +102,7 @@ struct CacheOneBenchmarkSample final {
     // while this one still reads its fixture.
     std::random_device random;
     const auto folder =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-cache1-benchmark-" + std::to_string(random()) + "-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     if (!std::filesystem::create_directories(folder) && !std::filesystem::exists(folder))
@@ -240,7 +241,7 @@ int main(int argc, char* argv[]) {
     namespace doc = bloom::document;
     namespace runtime = bloom::runtime;
     namespace commands = bloom::commands;
-    const auto folder = std::filesystem::temp_directory_path() / "bloom-image-source-test";
+    const auto folder = bloom::test_support::processTempDirectory() / "bloom-image-source-test";
     std::filesystem::create_directories(folder);
     struct Cleanup {
         std::filesystem::path path;

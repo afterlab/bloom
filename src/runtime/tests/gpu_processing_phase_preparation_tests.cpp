@@ -2,6 +2,7 @@
 #include "gpu_coverage_contract_plans.hpp"
 #include "gpu_process_frame_preparation_private.hpp"
 #include "gpu_scene_coverage.hpp"
+#include "unique_temp_dir.hpp"
 #include <ImathBox.h>
 #include <ImfChannelList.h>
 #include <ImfChromaticitiesAttribute.h>
@@ -333,7 +334,7 @@ void concurrentDefaultCeiling() {
 void mixedAndNestedQuotas() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-phase-preparation-" + std::to_string(now.time_since_epoch().count()));
     std::filesystem::create_directories(directory);
     struct Cleanup final {
@@ -589,7 +590,7 @@ void mixedAndNestedQuotas() {
 void channelReadClaims() {
     const auto now = GpuProcessingPhasePolicy::Clock::now();
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-channel-read-claims-" + std::to_string(now.time_since_epoch().count()));
     std::filesystem::create_directories(directory);
     struct Cleanup final {

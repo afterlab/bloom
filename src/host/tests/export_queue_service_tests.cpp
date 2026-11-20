@@ -1,6 +1,7 @@
 // ADR 0033: the export queue's runtime owner, presets, destinations and runner, driven headlessly
 // through a real ProjectSession, scheduler, staged publication and the media worker.
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -80,7 +81,7 @@ void expect(const bool condition, const std::string& message) {
 }
 
 std::filesystem::path scratch(const std::string& name) {
-    auto path = std::filesystem::temp_directory_path() /
+    auto path = bloom::test_support::processTempDirectory() /
                 ("bloom-export-queue-" + name + "-" +
                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::remove_all(path);

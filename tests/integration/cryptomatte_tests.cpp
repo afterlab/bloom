@@ -3,6 +3,7 @@
 // output with and without an input image, and a muted node.
 
 #include "cryptomatte_fixture_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/command_stack.hpp>
@@ -65,7 +66,7 @@ struct Fixture {
     }
     Fixture(const std::string& name, const bool manifest, const std::string& manifestText = {}) {
         std::mt19937_64 random{std::random_device{}()};
-        folder = std::filesystem::temp_directory_path() /
+        folder = bloom::test_support::processTempDirectory() /
                  ("bloom-cryptomatte-" + name + "-" + std::to_string(random()));
         std::filesystem::create_directories(folder);
         fixture::writeCryptomatteExr(folder / "crypto.exr", manifest, "CryptoObject", manifestText);

@@ -2,6 +2,7 @@
 #include "editor_chrome_test_support.hpp"
 #include "layer_mask_support.hpp"
 #include "node_editor_add.hpp"
+#include "unique_temp_dir.hpp"
 #include <QAction>
 #include <QTest>
 #include <array>

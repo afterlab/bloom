@@ -1,3 +1,4 @@
+#include "unique_temp_dir.hpp"
 #include <bloom/core/environment.hpp>
 #include <bloom/platform/font_catalog.hpp>
 
@@ -27,7 +28,7 @@ struct Expectations final {
 
 int main() {
     Expectations expectations;
-    const auto root = std::filesystem::temp_directory_path() / "bloom-font-catalog-test";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-font-catalog-test";
     std::error_code error;
     std::filesystem::create_directories(root, error);
     const auto config = root / "fonts.conf";

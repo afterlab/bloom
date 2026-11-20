@@ -7,6 +7,7 @@
 #include "lut_worker_protocol.hpp"
 #include "ocio_config_protocol.hpp"
 #include "ocio_config_session.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -837,7 +838,7 @@ void testSession(const std::filesystem::path& root) {
 } // namespace
 
 int main() {
-    const auto root = std::filesystem::temp_directory_path() /
+    const auto root = bloom::test_support::processTempDirectory() /
                       ("bloom-ocio-config-" +
                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(root);

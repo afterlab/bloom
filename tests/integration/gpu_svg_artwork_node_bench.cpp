@@ -27,6 +27,7 @@
 // at 64x64 so the build keeps it working.
 
 #include "gpu_coverage_ocio_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
@@ -143,9 +144,10 @@ struct Doc {
     }
     // A generated file of `count` shapes imported in `mode`; the layer it makes.
     document::LayerId svg(const std::size_t count, const commands::SvgImportMode mode) {
-        const auto file = std::filesystem::temp_directory_path() /
-                          ("bloom-svg-bench-" + std::to_string(count) + "-" +
-                           std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".svg");
+        const auto file =
+            bloom::test_support::processTempDirectory() /
+            ("bloom-svg-bench-" + std::to_string(count) + "-" +
+             std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".svg");
         {
             std::ofstream out(file, std::ios::binary);
             out << artwork(count);

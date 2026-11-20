@@ -21,6 +21,7 @@
 #include "gpu_media_cache_test_support.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/render/gpu_device.hpp>
 #include <bloom/render/gpu_image.hpp>
@@ -618,7 +619,7 @@ int main(const int argc, char** argv) {
         if (!options.valid)
             return 2;
         Expectations expectations;
-        auto directory = std::filesystem::temp_directory_path() / "bloom_gpu_cryptomatte_test";
+        auto directory = bloom::test_support::processTempDirectory() / "bloom_gpu_cryptomatte_test";
         std::filesystem::remove_all(directory);
         std::filesystem::create_directories(directory);
         bloom::cryptomatte_fixture::writeCryptomatteExr(directory / "manifest.exr", true);

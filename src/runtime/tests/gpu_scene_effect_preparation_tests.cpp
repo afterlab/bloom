@@ -7,6 +7,7 @@
 #include "compositing_recipe_test_support.hpp"
 #include "gpu_scene_preparation_test_support.hpp"
 #include "grade_curves_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/color/ocio_gpu_program.hpp>
@@ -783,7 +784,7 @@ void testRealRecipes(Expectations& expectations) {
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 void testRealFileTransform(Expectations& expectations, const std::string& working,
                            const std::string& process) {
-    const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_test";
+    const auto base = bloom::test_support::processTempDirectory() / "bloom_gpu_effect_test";
     std::error_code directoryError;
     std::filesystem::create_directories(base, directoryError);
     expectations.expect(!directoryError, "the LUT fixture directory is creatable");

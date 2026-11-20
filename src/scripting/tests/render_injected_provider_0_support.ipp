@@ -27,7 +27,7 @@ class TempDirectory final {
   public:
     TempDirectory() {
         std::error_code error;
-        const auto base = std::filesystem::temp_directory_path(error);
+        const auto base = bloom::test_support::processTempDirectory();
         if (error) {
             return;
         }

@@ -3,6 +3,7 @@
 // reference (legacyRender) and proves the new route writes the same files with the same bytes for
 // the deterministic image formats, a still and a range, and the same result summary.
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
@@ -590,7 +591,7 @@ void testParity() {
     options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
     options.enabled = false;
     const auto provider = host::GpuExportProvider::create(options);
-    const auto root = std::filesystem::temp_directory_path() / "bloom-render-parity";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-render-parity";
     std::filesystem::remove_all(root);
     const auto composition = session->snapshot().project().compositions().front().id();
     struct Case final {
@@ -719,7 +720,7 @@ void testParity() {
 // session, a queued PNG sequence job); the headless route is Render::run, which bloom-cli and the
 // Python package call. Both write one PNG per frame and every frame must match byte for byte.
 void testDesktopQueueMatchesHeadless() {
-    const auto root = std::filesystem::temp_directory_path() / "bloom-desktop-headless-parity";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-desktop-headless-parity";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "project");
     std::filesystem::create_directories(root / "headless");
@@ -932,7 +933,7 @@ namespace bloom::scripting {
 // a -23 LUFS target; each result carries the measured and the delivered level, and a render
 // without a target carries none.
 void testLoudnessOnTheHeadlessRoute() {
-    const auto root = std::filesystem::temp_directory_path() / "bloom-render-loudness";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-render-loudness";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root);
     {

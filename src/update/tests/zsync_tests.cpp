@@ -2,6 +2,7 @@
 // the reader, finding a new file's blocks inside an older file, and the download that takes what
 // it can from the installed file, asks for the rest in ranges, and falls back to the whole file
 // whenever anything about the delta is wrong.
+#include "unique_temp_dir.hpp"
 #include "update_test_support.hpp"
 
 #include <bloom/core/sha256.hpp>
@@ -160,7 +161,7 @@ class FakeTransport final : public UpdateTransport {
 int main() {
     Expectations checks;
     std::error_code error;
-    const auto base = std::filesystem::temp_directory_path(error) /
+    const auto base = bloom::test_support::processTempDirectory() /
                       ("bloom-update-zsync-" + std::to_string(std::random_device{}()));
     const std::string released = newFile();
     const std::string older = oldFile(released);

@@ -5,6 +5,7 @@
 // with the Disk cell's tooltip) to the directory given as the first argument; the second argument
 // is the tag ("before" or "after"). The device pixel ratio follows QT_SCALE_FACTOR.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
@@ -54,7 +55,7 @@ void mirrorSource(cache::SourceMirror& mirror, const char tag, const std::size_t
     identity.modifiedNanoseconds = 1;
     identity.fileIdLow = static_cast<std::uint64_t>(tag);
     const std::span<const std::byte> view(*data);
-    mirror.keep(std::filesystem::temp_directory_path() / "bloom-dcache-capture" /
+    mirror.keep(bloom::test_support::processTempDirectory() / "bloom-dcache-capture" /
                     (std::string(1, tag) + ".exr"),
                 identity, std::move(data), view);
 }

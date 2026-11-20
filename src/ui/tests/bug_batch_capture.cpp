@@ -5,6 +5,7 @@
 // interfaces that exist before the fixes, so the same file builds on both.
 //   bloom_bug_batch_capture [directory]
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "unique_temp_dir.hpp"
 #include "export_test_support.hpp"
 #include "node_interaction_test_support.hpp"
 #include "native_gesture_support.hpp"
@@ -431,7 +432,7 @@ void capturePinch() {
 // ---- #693: which layers of an imported SVG have bounds ----------------------------------------
 
 void probeSvgBounds() {
-    const auto svg = std::filesystem::temp_directory_path() / "bug-batch-logo.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "bug-batch-logo.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/><path d="M120 80 L146 40 L172 80 Z" fill="#ffffff"/></g></svg>)svg";
     runtime::NodeDefinitionRegistry definitions;
@@ -476,7 +477,7 @@ void probeSvgBounds() {
 
 // The toolbar's alignment actions with an SVG layer, or a part of an editable SVG, selected.
 void probeSvgAlignmentUi() {
-    const auto svg = std::filesystem::temp_directory_path() / "bug-batch-logo-ui.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "bug-batch-logo-ui.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/><path d="M120 80 L146 40 L172 80 Z" fill="#ffffff"/></g></svg>)svg";
     QFile out(gDirectory + QStringLiteral("/693-") + gPhase + QStringLiteral("-svg-alignment-ui.txt"));
@@ -612,7 +613,7 @@ void probeFlicker() {
 
 // The toolbar's alignment group and the Node menu with an SVG layer / a driver node selected.
 void captureAlignToolbar() {
-    const auto svg = std::filesystem::temp_directory_path() / "bug-batch-logo-bar.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "bug-batch-logo-bar.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><g id="box"><rect x="110" y="26" width="72" height="68" rx="10" fill="#3377dd"/></g></svg>)svg";
     test::WindowFixture fixture([&](test::WindowFixture& f) {
@@ -659,7 +660,7 @@ void captureDriverMenu() {
 // SVG layer selected in the Viewer; #716 the status bar after the Output node is deleted) and of
 // the Preferences Shortcuts page (#688).
 void captureLaneWindow() {
-    const auto svg = std::filesystem::temp_directory_path() / "lane-capture-logo.svg";
+    const auto svg = bloom::test_support::processTempDirectory() / "lane-capture-logo.svg";
     std::ofstream(svg, std::ios::binary)
         << R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="120"><circle cx="60" cy="60" r="44" fill="#ee3377"/><rect x="110" y="26" width="70" height="60" fill="#3377ee"/></svg>)svg";
     test::WindowFixture fixture([&](test::WindowFixture& f) {

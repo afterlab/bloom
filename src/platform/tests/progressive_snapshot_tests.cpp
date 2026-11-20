@@ -1,6 +1,7 @@
 // #718: a snapshot that is usable before it is whole. Byte ranges are made local on demand, from
 // the chunk store when it holds them and from the source otherwise; what the source gave is
 // kept; the digest is proved once the whole file is local.
+#include "unique_temp_dir.hpp"
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/source_identity.hpp>
 
@@ -109,7 +110,7 @@ std::unique_ptr<ReadOnlyFileSnapshot> take(ProcessResult<std::unique_ptr<ReadOnl
 int main() {
     Expectations expectations;
     const auto directory =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-progressive-snapshot-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::create_directories(directory);

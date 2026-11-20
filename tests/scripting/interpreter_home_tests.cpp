@@ -1,5 +1,6 @@
 // The lookup of the carried interpreter (issue #677): the package layout of this platform, the
 // build tree's fallback, and no interpreter at all.
+#include "unique_temp_dir.hpp"
 #include <interpreter_home.hpp>
 
 #include <cstdlib>
@@ -25,7 +26,7 @@ void touch(const std::filesystem::path& file) {
 int main() {
     using namespace bloom::scripting::python;
     namespace fs = std::filesystem;
-    const auto root = fs::temp_directory_path() / "bloom-interpreter-home-test";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-interpreter-home-test";
     fs::remove_all(root);
 
     // A package: the program where this platform's packages keep it.

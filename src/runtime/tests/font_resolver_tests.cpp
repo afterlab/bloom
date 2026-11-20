@@ -2,6 +2,7 @@
 // Google stylesheet and index, offline and missing-font behavior, the version-changed notice, and a
 // shared project opening on a machine that has the font nowhere.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/google_fonts.hpp>
@@ -102,10 +103,9 @@ struct Fixture final {
     std::mutex noticeMutex;
 
     Fixture() {
-        cache = std::filesystem::temp_directory_path() /
-                ("bloom-font-resolver-" + std::to_string(std::chrono::steady_clock::now()
-                                                              .time_since_epoch()
-                                                              .count()));
+        cache = bloom::test_support::processTempDirectory() /
+                ("bloom-font-resolver-" +
+                 std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     }
     ~Fixture() {
         std::error_code error;
@@ -421,7 +421,7 @@ void headlessTransportFailsOfflineAndCancels() {
     expect(cancelled.status == FontHttpStatus::Cancelled, "a cancelled transfer says so");
 
     // Through the resolver: the wait ends in the fallback with the existing offline diagnostic.
-    const auto root = std::filesystem::temp_directory_path() / "bloom-font-headless-test";
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-font-headless-test";
     std::filesystem::remove_all(root);
     FontResolver::Options options;
     options.cacheDirectory = root;

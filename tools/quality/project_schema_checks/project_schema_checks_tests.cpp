@@ -1,5 +1,6 @@
 #include "schema_check_helpers.hpp"
 #include "schema_checks.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -26,7 +27,7 @@ class TemporaryDirectory final {
         static std::atomic_uint64_t sequence{0};
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
         for (auto attempt = std::uint64_t{0}; attempt < 100U; ++attempt) {
-            root_ = std::filesystem::temp_directory_path() /
+            root_ = bloom::test_support::processTempDirectory() /
                     ("bloom-schema-checks-" + std::to_string(timestamp) + '-' +
                      std::to_string(sequence.fetch_add(1)) + '-' + std::to_string(attempt));
             std::error_code error;

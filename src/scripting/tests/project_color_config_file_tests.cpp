@@ -3,6 +3,7 @@
 // history entry, and a configuration that cannot be read is refused in plain words. One loose
 // copy of the ACES CG config and an archive of it serve as the files.
 
+#include "unique_temp_dir.hpp"
 #include <bloom/core/file_uri.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/host/project_color_choice.hpp>
@@ -58,7 +59,7 @@ bool builtIn(const std::optional<document::ColorSettings>& settings) {
 } // namespace
 
 int main() {
-    const auto root = std::filesystem::temp_directory_path() /
+    const auto root = bloom::test_support::processTempDirectory() /
                       ("bloom-color-file-" +
                        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     const auto project = root / "project";

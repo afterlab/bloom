@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "unique_temp_dir.hpp"
 #include "gpu_preview_display_service_general_support.hpp"
 
 #include <bloom/document/asset.hpp>
@@ -39,7 +40,7 @@ namespace {
     std::random_device device;
     const auto salt = static_cast<std::uint64_t>(device()) ^ ticks ^
                       (counter.fetch_add(1, std::memory_order_relaxed) << 32U);
-    return std::filesystem::temp_directory_path() /
+    return bloom::test_support::processTempDirectory() /
            ("bloom_general_production_media_" + std::to_string(salt));
 }
 

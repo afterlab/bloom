@@ -1,6 +1,7 @@
 #include "fixed_memory_budget.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_process_frame_preparation_private.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <bloom/media/cache/source_mirror.hpp>
 #include <bloom/platform/source_identity.hpp>

@@ -8,6 +8,7 @@
 // Issue #459: an automated level exports as a continuous ramp, not a step every mix block.
 // Issue #569: an audio effect chain exports the samples the playback mixer plays.
 #include "fixed_memory_budget.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -63,7 +64,7 @@ void expect(const bool condition, const std::string& message) {
 }
 
 std::filesystem::path scratch(const std::string& name) {
-    auto path = std::filesystem::temp_directory_path() /
+    auto path = bloom::test_support::processTempDirectory() /
                 ("bloom-export-audio-" + name + "-" +
                  std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
     std::filesystem::remove_all(path);

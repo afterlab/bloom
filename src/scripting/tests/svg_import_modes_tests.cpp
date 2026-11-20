@@ -2,6 +2,7 @@
 // parses the file where the operation is created (the client thread), never where it applies (the
 // application's thread); `bloom.layer.break-apart-svg` turns the one-layer artwork into the
 // editable shapes in place, as one undo step, from the copy the project holds.
+#include "unique_temp_dir.hpp"
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/asset.hpp>
@@ -39,7 +40,8 @@ constexpr const char* kArtwork = R"svg(<svg xmlns="http://www.w3.org/2000/svg" w
 <circle id="Dot" cx="150" cy="50" r="20" fill="url(#g)"/></svg>)svg";
 
 std::filesystem::path writeFile(const std::string& name) {
-    const auto path = std::filesystem::temp_directory_path() / ("bloom-svg-modes-" + name + ".svg");
+    const auto path =
+        bloom::test_support::processTempDirectory() / ("bloom-svg-modes-" + name + ".svg");
     std::ofstream(path, std::ios::binary) << kArtwork;
     return path;
 }
@@ -161,10 +163,13 @@ int main() {
 
         // A file that cannot be read still makes the operation; it rejects, naming the reason,
         // without reading anything when it applies.
-        auto missing = registry.create("bloom.layer.add-svg",
-                                       {{"composition", Value{StableId{composition.value()}}},
-                                        {"path", Value{(std::filesystem::temp_directory_path() / "bloom-svg-modes-none.svg").string()}}},
-                                       session->operationContext());
+        auto missing = registry.create(
+            "bloom.layer.add-svg",
+            {{"composition", Value{StableId{composition.value()}}},
+             {"path",
+              Value{(bloom::test_support::processTempDirectory() / "bloom-svg-modes-none.svg")
+                        .string()}}},
+            session->operationContext());
         expect(static_cast<bool>(missing), "an unreadable file still makes the operation");
         if (missing) {
             bloom::commands::Transaction transaction("Import SVG", session->snapshot().revision());

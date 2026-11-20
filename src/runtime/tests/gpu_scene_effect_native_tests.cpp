@@ -27,6 +27,7 @@
 #include "lens_flare_test_support.hpp"
 #include "motion_blur_test_support.hpp"
 #include "statistics_test_support.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/core/executable_suffix.hpp>
 
 #include <bloom/runtime/gpu_process_frame.hpp>
@@ -702,7 +703,7 @@ void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
 #if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
 void runFileTransform(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
                       const std::string& working, const std::string& process) {
-    const auto base = std::filesystem::temp_directory_path() / "bloom_gpu_effect_native";
+    const auto base = bloom::test_support::processTempDirectory() / "bloom_gpu_effect_native";
     std::error_code directoryError;
     std::filesystem::create_directories(base, directoryError);
     expectations.expect(!directoryError, "effect native: the LUT fixture directory is creatable");

@@ -7,6 +7,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 
+#include "unique_temp_dir.hpp"
 #include <bloom/media/video/session.hpp>
 
 #include <cstdio>
@@ -91,7 +92,7 @@ int main() {
     using namespace bloom::media;
     @autoreleasepool {
         const auto path =
-            (std::filesystem::temp_directory_path() / "bloom-vt-decode-test.mov").string();
+            (bloom::test_support::processTempDirectory() / "bloom-vt-decode-test.mov").string();
         if (!writeFixture(path)) {
             std::printf("fixture write FAILED\n");
             return 1;

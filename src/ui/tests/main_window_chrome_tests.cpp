@@ -2,6 +2,7 @@
 #define BLOOM_GRAMMAR_ARTIFACT_DIR "."
 #endif
 #include "await_qt.hpp"
+#include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 #undef BLOOM_GRAMMAR_ARTIFACT_DIR
 
@@ -861,7 +862,7 @@ void testWindowStatusBarShowsDiskCacheSpaceAndCounters(Expectations& expectation
     identity.modifiedNanoseconds = 1;
     identity.fileIdLow = 9;
     const std::span<const std::byte> view(*bytes);
-    mirror.keep(std::filesystem::temp_directory_path() / "bloom-disk-cell" / "a.exr", identity,
+    mirror.keep(bloom::test_support::processTempDirectory() / "bloom-disk-cell" / "a.exr", identity,
                 bytes, view);
     mirror.flush();
     for (int attempt = 0; attempt < 250; ++attempt) {

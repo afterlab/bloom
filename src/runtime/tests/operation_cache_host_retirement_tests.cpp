@@ -1,5 +1,6 @@
 #include "generated_jpeg.hpp"
 #include "packed_host_retirement_private.hpp"
+#include "unique_temp_dir.hpp"
 #include <bloom/media/image.hpp>
 #include <filesystem>
 #include <fstream>
@@ -119,7 +120,7 @@ template <class Predicate> bool until(Predicate predicate) {
 [[nodiscard]] bloom::media::ImageResult<std::shared_ptr<const bloom::media::ImageSourceRevision>>
 captureRevision() {
     const auto path =
-        std::filesystem::temp_directory_path() /
+        bloom::test_support::processTempDirectory() /
         ("bloom-source-ticket-" +
          std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()) + ".jpg");
     {
