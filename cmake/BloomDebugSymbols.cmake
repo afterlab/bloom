@@ -27,6 +27,9 @@ if(MSVC)
     # compilations); the linker writes one PDB per program. /DEBUG would otherwise switch off the
     # release linker's removal and folding of unreferenced code.
     set(CMAKE_MSVC_DEBUG_INFORMATION_FORMAT Embedded)
+    # Debug information adds sections to every object file, and the largest translation units
+    # then pass the default COFF limit of 2^16 sections (C1128); /bigobj raises it.
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/bigobj>)
     add_link_options(/DEBUG /OPT:REF /OPT:ICF /INCREMENTAL:NO)
 else()
     add_compile_options($<$<COMPILE_LANGUAGE:C,CXX,OBJC,OBJCXX>:-g>)
