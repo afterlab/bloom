@@ -169,6 +169,9 @@ jobs:
       BLOOM_RELEASE_TAG: ${{ needs.gate.outputs.tag }}
       BLOOM_UPDATE_PUBLIC_KEYS: ${{ needs.gate.outputs.public_keys }}
       BLOOM_UPDATE_FEED_URL: ${{ needs.gate.outputs.feed_url }}
+      # A crash report names the commit, and the debug symbols are kept (tools/ci/linux-package).
+      BLOOM_SOURCE_REVISION: ${{ needs.gate.outputs.commit }}
+      BLOOM_DEBUG_SYMBOLS: "ON"
       # An AppImage names where its next version is found: the control file among the files of
       # the fixed channel release.
       BLOOM_UPDATE_APPIMAGE_INFORMATION: gh-releases-zsync|${{ github.repository_owner }}|${{ github.event.repository.name }}|alpha-channel|Bloom-*x86_64.AppImage.zsync
@@ -243,6 +246,15 @@ jobs:
           name: start-release-linux
           if-no-files-found: error
           path: build/linux-package/start-release
+
+      # The split debug files of the packaged programs, matched by build id; never published
+      # with the release (docs/development/releasing.md, "Debug symbols").
+      - name: Upload the Linux debug symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: symbols-linux
+          if-no-files-found: error
+          path: build/linux-package/bloom/symbols
 
   # The clean-system start (tools/ci/linux-package/start.sh) of the tar, the AppImage and the
   # install script, each on bare official images that have the declared system libraries and
@@ -444,6 +456,8 @@ jobs:
             -DBLOOM_WARNINGS_AS_ERRORS=ON \
             -DBUILD_TESTING=ON \
             -DCMAKE_BUILD_TYPE=Release \
+            -DBLOOM_DEBUG_SYMBOLS=ON \
+            "-DBLOOM_SOURCE_REVISION=${{ needs.gate.outputs.commit }}" \
             "-DBLOOM_PACKAGE_VERSION=$BLOOM_PACKAGE_VERSION" \
             "-DBLOOM_UPDATE_FEED_URL=$BLOOM_UPDATE_FEED_URL" \
             "-DBLOOM_UPDATE_PUBLIC_KEYS=$BLOOM_UPDATE_PUBLIC_KEYS"
@@ -476,6 +490,18 @@ jobs:
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.zip
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.dmg
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-macos-arm64.pkg
+
+      # A dSYM bundle of each packaged program, matched by its UUID; never published with the
+      # release (docs/development/releasing.md, "Debug symbols").
+      - name: Write the debug symbols
+        run: cmake --build build/release --target bloom-debug-symbols
+
+      - name: Upload the macOS debug symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: symbols-macos
+          if-no-files-found: error
+          path: build/release/symbols
 
       - name: Update a test build to the zip, and have it put back
         id: update
@@ -661,6 +687,8 @@ jobs:
             -DBLOOM_WARNINGS_AS_ERRORS=ON ^
             -DBUILD_TESTING=ON ^
             -DCMAKE_BUILD_TYPE=Release ^
+            -DBLOOM_DEBUG_SYMBOLS=ON ^
+            "-DBLOOM_SOURCE_REVISION=${{ needs.gate.outputs.commit }}" ^
             "-DBLOOM_PACKAGE_VERSION=%BLOOM_PACKAGE_VERSION%" ^
             "-DBLOOM_UPDATE_FEED_URL=%BLOOM_UPDATE_FEED_URL%" ^
             "-DBLOOM_UPDATE_PUBLIC_KEYS=%BLOOM_UPDATE_PUBLIC_KEYS%"
@@ -694,6 +722,22 @@ jobs:
           path: |
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64.zip
             build/release/package/Bloom-${{ needs.gate.outputs.version }}-windows-x86_64-setup.exe
+
+      # The PDB of each packaged program, matched by its CodeView signature; never published
+      # with the release (docs/development/releasing.md, "Debug symbols").
+      - name: Write the debug symbols
+        shell: cmd
+        run: |
+          for /f "usebackq delims=" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -property installationPath`) do call "%%i\VC\Auxiliary\Build\vcvars64.bat"
+          set "PATH=%RUNNER_TEMP%\tools-venv\Scripts;%PATH%"
+          cmake --build build/release --target bloom-debug-symbols
+
+      - name: Upload the Windows debug symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: symbols-windows
+          if-no-files-found: error
+          path: build/release/symbols
 
   # The installer run the way an artist's double click runs it, for the current user and
   # without a question, then the desktop captures of the installed application

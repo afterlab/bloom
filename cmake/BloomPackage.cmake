@@ -19,6 +19,8 @@
 #                         (cmake/package/make_archives.cmake), on Windows a zip and, when the
 #                         dependency prefix has the Inno Setup compiler, the installer
 #                         (cmake/package/make_windows_installer.cmake, packaging/windows/bloom.iss)
+#   bloom-debug-symbols   (BLOOM_DEBUG_SYMBOLS) the shipped programs' debug symbols, outside the
+#                         package (cmake/BloomDebugSymbols.cmake)
 #   bloom.package.check   the same check as a test, with the cases it must reject
 #                         (cmake/package/check_package_test.cmake)
 #   bloom.package.archive_update_information   (Linux) the AppImage's update information and
@@ -35,6 +37,7 @@
 # (cmake/package/make_macos_installers.cmake, packaging/macos/postinstall).
 include_guard(GLOBAL)
 include(BloomPackageLayout)
+include(BloomDebugSymbols)
 
 function(bloom_add_package_rules)
     set(reason "")
@@ -177,10 +180,17 @@ function(bloom_add_package_rules)
             list(APPEND programs bloom-crash-handler)
         endif()
         set(package "${CMAKE_BINARY_DIR}/package/${BLOOM_PACKAGE_NAME}")
+        # A build with debug symbols (cmake/BloomDebugSymbols.cmake) installs its programs
+        # stripped on Linux: the symbols are bloom-debug-symbols', never the package's.
+        set(strip "")
+        if(BLOOM_DEBUG_SYMBOLS AND BLOOM_PACKAGE_OPERATING_SYSTEM STREQUAL "linux")
+            set(strip --strip)
+        endif()
         add_custom_target(
             bloom-package
             COMMAND ${CMAKE_COMMAND} -E rm -rf "${package}"
             COMMAND ${CMAKE_COMMAND} --install "${CMAKE_BINARY_DIR}" --prefix "${package}"
+                ${strip}
             COMMAND ${CMAKE_COMMAND} "-DPACKAGE=${package}" -DCOMPLETE=ON -DRUN=ON
                 "-DWORK=${CMAKE_BINARY_DIR}/package/check" "-DFLOOR=${BLOOM_PACKAGE_FLOOR}"
                 -P "${scripts}/check_package.cmake"
@@ -240,6 +250,27 @@ function(bloom_add_package_rules)
                 VERBATIM
             )
         endif()
+    endif()
+
+    # The shipped programs' debug symbols, outside the package (cmake/BloomDebugSymbols.cmake).
+    # The release workflow builds it after the package and keeps the folder as an artifact.
+    if(BLOOM_DEBUG_SYMBOLS)
+        set(symbol_targets "")
+        foreach(target IN ITEMS bloom bloom-cli bloom-mcp bloom-color-worker bloom-update-helper
+                                bloom-cli-launcher bloom-media-worker
+                                bloom-media-videotoolbox-worker bloom-crash-handler _bloom)
+            if(TARGET ${target})
+                list(APPEND symbol_targets ${target})
+            endif()
+        endforeach()
+        bloom_debug_symbol_commands(symbol_commands ${symbol_targets})
+        add_custom_target(
+            bloom-debug-symbols
+            ${symbol_commands}
+            COMMENT "Writing the debug symbols of ${symbol_targets} to ${BLOOM_DEBUG_SYMBOLS_DIR}"
+            VERBATIM
+        )
+        add_dependencies(bloom-debug-symbols ${symbol_targets})
     endif()
 
     if(BUILD_TESTING)

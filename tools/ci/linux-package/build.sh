@@ -10,6 +10,9 @@
 # its update settings in the environment, and each that is set is passed to the build:
 # BLOOM_UPDATE_FEED_URL, BLOOM_UPDATE_PUBLIC_KEYS and BLOOM_UPDATE_APPIMAGE_INFORMATION
 # (docs/decisions/0041-self-update.md). Without them the package never looks for updates.
+# BLOOM_DEBUG_SYMBOLS=ON also writes the programs' split debug files to
+# <work directory>/bloom/symbols and installs the package stripped, and BLOOM_SOURCE_REVISION
+# names the commit in crash reports (cmake/BloomDebugSymbols.cmake, src/crash).
 set -eu
 source=$(cd "$(dirname "$0")/../../.." && pwd)
 work=${1:-$source/build/linux-package}
@@ -28,5 +31,10 @@ cmake -S "$source" -B "$work/bloom" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     ${BLOOM_PACKAGE_VERSION:+"-DBLOOM_PACKAGE_VERSION=$BLOOM_PACKAGE_VERSION"} \
     ${BLOOM_UPDATE_FEED_URL:+"-DBLOOM_UPDATE_FEED_URL=$BLOOM_UPDATE_FEED_URL"} \
     ${BLOOM_UPDATE_PUBLIC_KEYS:+"-DBLOOM_UPDATE_PUBLIC_KEYS=$BLOOM_UPDATE_PUBLIC_KEYS"} \
-    ${BLOOM_UPDATE_APPIMAGE_INFORMATION:+"-DBLOOM_UPDATE_APPIMAGE_INFORMATION=$BLOOM_UPDATE_APPIMAGE_INFORMATION"}
+    ${BLOOM_UPDATE_APPIMAGE_INFORMATION:+"-DBLOOM_UPDATE_APPIMAGE_INFORMATION=$BLOOM_UPDATE_APPIMAGE_INFORMATION"} \
+    ${BLOOM_DEBUG_SYMBOLS:+"-DBLOOM_DEBUG_SYMBOLS=$BLOOM_DEBUG_SYMBOLS"} \
+    ${BLOOM_SOURCE_REVISION:+"-DBLOOM_SOURCE_REVISION=$BLOOM_SOURCE_REVISION"}
 cmake --build "$work/bloom" --target bloom-package-archives
+if [ "${BLOOM_DEBUG_SYMBOLS:-OFF}" = ON ]; then
+    cmake --build "$work/bloom" --target bloom-debug-symbols
+fi

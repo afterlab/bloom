@@ -69,6 +69,8 @@ include(BloomVulkanRuntime)
 include(BloomPackageLayout)
 include(BloomVersion)
 include(BloomPathDefinition)
+# Before any target is added: a release build's debug information reaches all of them.
+include(BloomDebugSymbols)
 
 # Before any target is added, so it reaches all of them.
 bloom_disable_floating_point_contraction()
