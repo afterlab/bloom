@@ -131,6 +131,27 @@ Shared test support lives in `tests/support`:
   a failure through `awaitFailureCount()`.
 - `manual_clock.hpp`: a clock that moves only when the test moves it, for code that takes its time
   source as a callable.
+- `unique_temp_dir.hpp`: the test's fixture folders (#749). `processTempDirectory()` is one folder
+  for the whole test process and `UniqueTempDir{"prefix"}` a folder of one's own; both are named
+  `<prefix>-<process id>-<random hex>` under the system temporary directory, created exclusively
+  (a name that exists is never reused, so another process's folder is never written or removed)
+  and removed when the process exits or the object is destroyed. A file Windows still holds open is
+  left and named on stderr; cleanup alone never fails a test. A child process the test starts gets
+  the folder by argument or environment.
+- `isolated_qt_settings.hpp`: `isolateQtSettings()`, called in a Qt test's `main` before any
+  `QSettings` is made, puts the default settings in an INI file in the process's own folder.
+  Without it a test's settings live in one per-user place (the configuration folder, Qt's
+  test-mode folder, the macOS preferences or the Windows registry) that the same test of another
+  build tree shares.
+
+Two test runs on one machine (two build trees, or a developer's run beside a validation run) never
+share a fixture: a test never joins the system temporary directory with a fixed name. Test code
+reaches it only through `unique_temp_dir.hpp` or a `QTemporaryDir`, and the repository hygiene
+check (`bloom.quality.repository_hygiene`) fails on `temp_directory_path`, `QDir::tempPath`,
+`QDir::temp()`, `QStandardPaths::TempLocation` or Python's `tempfile.gettempdir` anywhere else in
+test code: a source under a `tests` folder, or one whose name has `test` or `tests` as a word
+(`*_tests.cpp`, `*_test_support.hpp`, `test_*.py`). `bloom_add_test` adds
+`tests/support` to the include path of every test program it registers.
 
 A test that starts one of Bloom's own programs (`bloom-mcp`, `bloom-cli`, the Python module) cannot
 hand it a sampler. Those programs read one test-only environment variable instead, once, at their

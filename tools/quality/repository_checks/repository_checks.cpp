@@ -37,9 +37,9 @@ constexpr auto kSensitiveFilenames =
 constexpr auto kSensitiveSuffixes =
     std::to_array<std::string_view>({".key", ".p12", ".pfx", ".pem"});
 constexpr auto kTextSuffixes = std::to_array<std::string_view>(
-    {".bat", ".c",   ".cc",   ".cfg", ".cmake", ".conf", ".cpp",  ".css", ".cxx", ".h",
-     ".hh",  ".hpp", ".hxx",  ".ini", ".inl",   ".json", ".md",   ".ps1", ".py",  ".qrc",
-     ".rst", ".sh",  ".toml", ".txt", ".ui",    ".xml",  ".yaml", ".yml"});
+    {".bat", ".c",   ".cc",  ".cfg", ".cmake", ".conf", ".cpp",  ".css", ".cxx",  ".h",
+     ".hh",  ".hpp", ".hxx", ".ini", ".inl",   ".ipp",  ".json", ".md",  ".mm",   ".ps1",
+     ".py",  ".qrc", ".rst", ".sh",  ".toml",  ".txt",  ".ui",   ".xml", ".yaml", ".yml"});
 constexpr auto kTextFilenames =
     std::to_array<std::string_view>({".clang-format", ".editorconfig", ".gitignore", "AGENTS.md",
                                      "CMakeLists.txt", "LICENSE", "NOTICE"});
@@ -56,6 +56,15 @@ constexpr auto kPlaceholderUsers = std::to_array<std::string_view>(
 constexpr auto kPlaceholderSecrets = std::to_array<std::string_view>(
     {"<secret>", "<token>", "changeme", "dummy", "example", "placeholder", "redacted", "test",
      "your-secret", "your-token"});
+// Test code puts its fixtures in a folder of its own process (#749): two test runs on one machine
+// never share one. The system temporary directory is asked for only by the helper that makes those
+// folders; a QTemporaryDir is unique as well and stays allowed.
+constexpr auto kTemporaryDirectoryHelper = std::string_view{"tests/support/unique_temp_dir.hpp"};
+constexpr auto kSystemTemporaryDirectoryCalls =
+    std::to_array<std::string_view>({"temp_directory_path", "QDir::tempPath", "QDir::temp()",
+                                     "QStandardPaths::TempLocation", "tempfile.gettempdir"});
+constexpr auto kTestSourceSuffixes = std::to_array<std::string_view>(
+    {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".ipp", ".mm", ".py"});
 constexpr auto kCppSuffixes = std::to_array<std::string_view>(
     {".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl"});
 constexpr auto kPythonSourceRoots = std::to_array<std::string_view>(
@@ -158,6 +167,25 @@ template <std::size_t Size>
            contains(kTextSuffixes, asciiLower(relative.extension().generic_string()));
 }
 
+// Test code: a source file in a `tests` folder, or one whose name says it is a test or its support
+// (`*_tests.cpp`, `*_test_support.hpp`, `test_*.py`).
+[[nodiscard]] auto isTestCode(const Path& relative) -> bool {
+    if (!contains(kTestSourceSuffixes, asciiLower(relative.extension().generic_string())))
+        return false;
+    if (std::ranges::any_of(relative, [](const auto& part) { return part == "tests"; }))
+        return true;
+    std::string stem = asciiLower(relative.stem().generic_string());
+    std::ranges::replace(stem, '-', '_');
+    for (const auto word : {std::string_view{"test"}, std::string_view{"tests"}}) {
+        for (auto at = stem.find(word); at != std::string::npos; at = stem.find(word, at + 1)) {
+            const auto end = at + word.size();
+            if ((at == 0 || stem[at - 1] == '_') && (end == stem.size() || stem[end] == '_'))
+                return true;
+        }
+    }
+    return false;
+}
+
 [[nodiscard]] auto isAllowedPythonSource(const Path& relative) -> bool {
     const auto normalized = normalizedRelative(relative);
     return contains(kPythonQualificationTools, normalized) ||
@@ -249,6 +277,8 @@ void appendContentFindings(const Path& relative, const std::string& text,
     const auto extension = relative.extension();
     const auto isTestSource = std::ranges::find(parts, "tests") != parts.end() &&
                               (extension == ".cpp" || extension == ".hpp");
+    const auto checksTemporaryDirectory =
+        isTestCode(relative) && normalizedRelative(relative) != kTemporaryDirectoryHelper;
 
     std::istringstream lines{text};
     std::string line;
@@ -261,6 +291,21 @@ void appendContentFindings(const Path& relative, const std::string& text,
                                 "test code concatenates a file URI; build it with "
                                 "bloom::core::fileUriFromAbsolutePath so the path is encoded",
                                 lineNumber});
+        }
+        if (checksTemporaryDirectory) {
+            for (const auto call : kSystemTemporaryDirectoryCalls) {
+                if (line.find(call) != std::string::npos) {
+                    findings.push_back(
+                        {relative, "test temporary folder",
+                         "test code asks for the system temporary directory (" + std::string{call} +
+                             "), where a fixed name is shared with every other test run on the "
+                             "machine; use bloom::test_support::processTempDirectory() or "
+                             "UniqueTempDir (tests/support/unique_temp_dir.hpp), or a "
+                             "QTemporaryDir",
+                         lineNumber});
+                    break;
+                }
+            }
         }
         if (line.find("/home/") != std::string::npos || line.find("/Users/") != std::string::npos ||
             line.find("Users\\") != std::string::npos) {

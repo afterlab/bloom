@@ -1,4 +1,5 @@
 #include "repository_checks.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -10,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -23,7 +25,7 @@ class TemporaryRepository final {
         static std::atomic_uint64_t sequence{0};
         const auto timestamp = std::chrono::steady_clock::now().time_since_epoch().count();
         for (auto attempt = std::uint64_t{0}; attempt < 100; ++attempt) {
-            root_ = std::filesystem::temp_directory_path() /
+            root_ = bloom::test_support::processTempDirectory() /
                     ("bloom-repository-checks-" + std::to_string(timestamp) + '-' +
                      std::to_string(sequence.fetch_add(1)) + '-' + std::to_string(attempt));
             std::error_code error;
@@ -142,6 +144,52 @@ void testHygiene(int& failures) {
            "adjacent literals and the encoding helper are accepted in test code", failures);
     expect(hygieneFixture("src/core/file_uri.cpp", "return \"file://\" + encode(raw);\n").empty(),
            "the encoding helper itself may concatenate", failures);
+
+    // #749: a test's fixtures live in a folder of its own process, never at a fixed name in the
+    // system temporary directory that another test run on the machine shares.
+    const auto fixedTemporaryName = hygieneFixture(
+        "src/runtime/tests/example_tests.cpp",
+        "const auto folder = std::filesystem::temp_directory_path() / \"bloom_x\";\n");
+    expect(containsCategory(fixedTemporaryName, "test temporary folder") &&
+               fixedTemporaryName.size() == 1 && fixedTemporaryName.front().line == 1,
+           "a test that joins the system temporary directory with a fixed name is rejected",
+           failures);
+    const auto wrappedTemporaryName =
+        hygieneFixture("tests/integration/example_tests.ipp",
+                       "const auto folder =\n    fs::temp_directory_path(error) /\n"
+                       "    \"bloom_x\";\n");
+    expect(containsCategory(wrappedTemporaryName, "test temporary folder"),
+           "a wrapped join in an included test fragment is rejected", failures);
+    for (const auto& [file, text] : {
+             std::pair{"src/ui/tests/example_tests.cpp",
+                       "const auto shots = QDir::temp().filePath(\"shots\");\n"},
+             std::pair{"src/ui/tests/example_tests.cpp",
+                       "const auto shots = QDir::tempPath() + \"/shots\";\n"},
+             std::pair{"apps/bloom-media-worker/tests/example_tests.mm",
+                       "auto path = std::filesystem::temp_directory_path() / \"a.mov\";\n"},
+             std::pair{"tools/quality/example/example_checks_test_support.hpp",
+                       "root_ = std::filesystem::temp_directory_path() / \"checks\";\n"},
+             std::pair{"tools/local/test_example.py",
+                       "folder = os.path.join(tempfile.gettempdir(), 'bloom')\n"},
+         }) {
+        expect(containsCategory(hygieneFixture(file, text), "test temporary folder"),
+               std::string{"the system temporary directory is refused in "} + file, failures);
+    }
+    expect(hygieneFixture("src/runtime/tests/example_tests.cpp",
+                          "const auto folder = bloom::test_support::processTempDirectory() / "
+                          "\"bloom_x\";\nbloom::test_support::UniqueTempDir own{\"bloom-x\"};\n"
+                          "QTemporaryDir qt;\n")
+               .empty(),
+           "the per-process folder helpers and QTemporaryDir are accepted in test code", failures);
+    expect(hygieneFixture("tests/support/unique_temp_dir.hpp",
+                          "const auto base = std::filesystem::temp_directory_path(error);\n")
+               .empty(),
+           "the helper that makes the per-process folders may ask for the system directory",
+           failures);
+    expect(hygieneFixture("src/platform/private_temporary_directory.cpp",
+                          "const auto base = std::filesystem::temp_directory_path(error);\n")
+               .empty(),
+           "product code is not held to the test fixture rule", failures);
 
     const auto generated = hygieneFixture("build/output.o");
     expect(containsCategory(generated, "generated artifact"), "generated artifacts are rejected",
