@@ -1,3 +1,5 @@
+#include "await.hpp"
+
 #include <bloom/host/copy_async_io.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>
 
@@ -219,6 +221,24 @@ class BlockingIoGate final {
     bool released_ = false;
 };
 
+// #750: the gate holds the one BlockingIo worker of a scheduler made with this, so work submitted
+// after it stays queued until the gate opens. The default scheduler has several BlockingIo workers
+// (#544); there the copy ran on another worker at once and the test's assumption that it was still
+// queued held only while the machine was idle.
+[[nodiscard]] bloom::runtime::TaskSchedulerConfig oneBlockingIoWorker() {
+    auto config = bloom::runtime::TaskSchedulerConfig::defaults();
+    config.blockingIoWorkerCount = 1;
+    return config;
+}
+
+// Whether the task named `name` waits in the scheduler's queue, not yet started (#750).
+[[nodiscard]] bool stillQueued(const TaskScheduler& scheduler, const std::string_view name) {
+    for (const auto& task : scheduler.snapshots())
+        if (task.name == name)
+            return task.state == bloom::runtime::TaskState::Queued;
+    return false;
+}
+
 void occupyBlockingIoWorker(Expectations& expectations, TaskScheduler& scheduler,
                             BlockingIoGate& gate) {
     auto submission = scheduler.submit<void>(
@@ -233,21 +253,18 @@ void occupyBlockingIoWorker(Expectations& expectations, TaskScheduler& scheduler
                         "the blocking-I/O gate fixture occupies the single worker");
 }
 
-// The two waits below follow the real work with no wall-clock limit: a copy on a worker takes as
+// The two waits below follow the real work through the shared helper: a copy on a worker takes as
 // long as the machine lets it (a compiling machine made a fixed two seconds fail), and what the
-// tests assert is what the work did, not how fast. A real hang is the test runner's timeout.
+// tests assert is what the work did, not how fast. The helper's limit is only the ceiling for a
+// broken run.
 bool awaitQuiescence(const TaskScheduler& scheduler) {
-    while (!scheduler.isQuiescent()) {
-        std::this_thread::sleep_for(1ms);
-    }
-    return true;
+    return bloom::test_support::awaitCondition("the scheduler reaches quiescence",
+                                               [&] { return scheduler.isQuiescent(); });
 }
 
 template <typename Handle> [[nodiscard]] bool pollUntilReady(const Handle& handle) {
-    while (!handle.isReady()) {
-        std::this_thread::sleep_for(1ms);
-    }
-    return true;
+    return bloom::test_support::awaitCondition("the async copy is ready",
+                                               [&] { return handle.isReady(); });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -326,7 +343,7 @@ void testCancellationBeforeWorkerStarts(Expectations& expectations) {
     }
     const auto targetPath = directory.path() / "copy.bloom";
     const auto sourceBytes = buildSourceArchiveBytesOrAbort();
-    TaskScheduler scheduler;
+    TaskScheduler scheduler(oneBlockingIoWorker());
     BlockingIoGate gate;
     occupyBlockingIoWorker(expectations, scheduler, gate);
 
@@ -347,6 +364,8 @@ void testCancellationBeforeWorkerStarts(Expectations& expectations) {
         return;
     }
     auto handle = std::move(begun).takeHandle();
+    expectations.expect(stillQueued(scheduler, "Save a copy (async)"),
+                        "cancellation: the copy is still queued behind the blocker");
     handle.requestCancellation();
     gate.release();
 
@@ -391,7 +410,7 @@ void testAbandonmentMidFlight(Expectations& expectations) {
     }
     const auto targetPath = directory.path() / "copy.bloom";
     const auto sourceBytes = buildSourceArchiveBytesOrAbort();
-    TaskScheduler scheduler;
+    TaskScheduler scheduler(oneBlockingIoWorker());
     BlockingIoGate gate;
     occupyBlockingIoWorker(expectations, scheduler, gate);
 
@@ -409,6 +428,8 @@ void testAbandonmentMidFlight(Expectations& expectations) {
                             "abandonment: beginCopyPublication submits a handle (still queued)");
         if (begun) {
             auto handle = std::move(begun).takeHandle();
+            expectations.expect(stillQueued(scheduler, "Save a copy (async)"),
+                                "abandonment: the copy is still queued behind the blocker");
             // Handle destroyed here, mid-flight, without ever calling tryComplete().
         }
     }

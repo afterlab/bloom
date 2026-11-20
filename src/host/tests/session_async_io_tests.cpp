@@ -1,3 +1,5 @@
+#include "await.hpp"
+
 #include <bloom/host/session_async_io.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>
 
@@ -309,7 +311,8 @@ class BlockingIoGate final {
 
     [[nodiscard]] bool waitUntilEntered() {
         std::unique_lock lock(mutex_);
-        return condition_.wait_for(lock, 2s, [&] { return entered_; });
+        return condition_.wait_for(lock, bloom::test_support::kAwaitLimit,
+                                   [&] { return entered_; });
     }
 
     void release() {
@@ -324,6 +327,24 @@ class BlockingIoGate final {
     bool entered_ = false;
     bool released_ = false;
 };
+
+// #750: the gate holds the one BlockingIo worker of a scheduler made with this, so work submitted
+// after it stays queued until the gate opens. The default scheduler has several BlockingIo workers
+// (#544); there the save ran on another worker at once and the test's assumption that it was still
+// queued held only while the machine was idle.
+[[nodiscard]] bloom::runtime::TaskSchedulerConfig oneBlockingIoWorker() {
+    auto config = bloom::runtime::TaskSchedulerConfig::defaults();
+    config.blockingIoWorkerCount = 1;
+    return config;
+}
+
+// Whether the task named `name` waits in the scheduler's queue, not yet started (#750).
+[[nodiscard]] bool stillQueued(const TaskScheduler& scheduler, const std::string_view name) {
+    for (const auto& task : scheduler.snapshots())
+        if (task.name == name)
+            return task.state == bloom::runtime::TaskState::Queued;
+    return false;
+}
 
 // Submits a task that occupies the scheduler's single BlockingIo worker until `gate.release()` is
 // called. `scheduler.submit<void>` keeps `gate` alive by reference for the fixture's own scope.
@@ -341,26 +362,17 @@ void occupyBlockingIoWorker(Expectations& expectations, TaskScheduler& scheduler
                         "the blocking-I/O gate fixture occupies the single worker");
 }
 
+// #750: the waits follow the real work, through the shared helper. A save on a worker takes as
+// long as a busy machine lets it (a fixed two seconds was a guess at how fast); the helper's
+// limit is only the ceiling for a broken run, and what the tests assert is what the work did.
 bool awaitQuiescence(const TaskScheduler& scheduler) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (scheduler.isQuiescent()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    return false;
+    return bloom::test_support::awaitCondition("the scheduler reaches quiescence",
+                                               [&] { return scheduler.isQuiescent(); });
 }
 
 template <typename Handle> [[nodiscard]] bool pollUntilReady(const Handle& handle) {
-    const auto deadline = std::chrono::steady_clock::now() + 2s;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (handle.isReady()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    return false;
+    return bloom::test_support::awaitCondition("the async save is ready",
+                                               [&] { return handle.isReady(); });
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -543,8 +555,9 @@ void testPathOpenReadsAfterAdmissionAndRetainsOneBudgetedArchive(Expectations& e
     auto heldHandle = std::move(held).takeHandle();
     {
         std::unique_lock lock(mutex);
-        expectations.expect(condition.wait_for(lock, 2s, [&] { return entered; }),
-                            "path open: worker reaches the held read hook");
+        expectations.expect(
+            condition.wait_for(lock, bloom::test_support::kAwaitLimit, [&] { return entered; }),
+            "path open: worker reaches the held read hook");
     }
     heldHandle.requestCancellation();
     {
@@ -877,7 +890,7 @@ void testCancellationBeforeWorkerStarts(Expectations& expectations) {
         return;
     }
     const auto targetPath = directory.path() / "project.bloom";
-    TaskScheduler scheduler;
+    TaskScheduler scheduler(oneBlockingIoWorker());
     BlockingIoGate gate;
     occupyBlockingIoWorker(expectations, scheduler, gate);
 
@@ -906,6 +919,8 @@ void testCancellationBeforeWorkerStarts(Expectations& expectations) {
         return;
     }
     auto handle = std::move(begun).takeHandle();
+    expectations.expect(stillQueued(scheduler, "Save project (async)"),
+                        "cancellation: the save is still queued behind the blocker");
     handle.requestCancellation();
     gate.release();
 
@@ -1116,7 +1131,7 @@ void testAbandonmentMidFlight(Expectations& expectations) {
         return;
     }
     const auto targetPath = directory.path() / "project.bloom";
-    TaskScheduler scheduler;
+    TaskScheduler scheduler(oneBlockingIoWorker());
     BlockingIoGate gate;
     occupyBlockingIoWorker(expectations, scheduler, gate);
 
@@ -1143,6 +1158,8 @@ void testAbandonmentMidFlight(Expectations& expectations) {
                             "abandonment: beginSessionSave submits a handle (still queued)");
         if (begun) {
             auto handle = std::move(begun).takeHandle();
+            expectations.expect(stillQueued(scheduler, "Save project (async)"),
+                                "abandonment: the save is still queued behind the blocker");
             // Handle destroyed here, mid-flight, without ever calling tryComplete().
         }
     }
