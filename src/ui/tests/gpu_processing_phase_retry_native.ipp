@@ -357,7 +357,9 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
         },
         fixture.productionCpuFallback(referenceDisplay), options);
     checks.expect(
-        awaitProof("native image retention service is genuinely ready", [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
+        awaitProof(
+            "native image retention service is genuinely ready",
+            [&] { return service.status().state != GpuPreviewDisplayServiceState::Initializing; },
             90s) &&
             service.status().state == GpuPreviewDisplayServiceState::Ready,
         "native image retention service is genuinely ready");
@@ -389,7 +391,8 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
     const auto settled = [&] {
         return ready() || controller.state().activity == ui::PreviewActivity::Failed;
     };
-    checks.expect(awaitProof("native image retention has real last-good output", ready), "native image retention has real last-good output");
+    checks.expect(awaitProof("native image retention has real last-good output", ready),
+                  "native image retention has real last-good output");
     if (checks.failures())
         return;
     const auto baselineCounters = service.status().counters;
@@ -475,24 +478,26 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
     const auto warm = service.status().counters;
     const auto warmClaims = policy->snapshot().reservations;
     const auto warmPreparations = preparations.load();
-    checks.expect(
-        session.setCurrentTime(core::RationalTime::fromInteger(0)) &&
-            awaitProof("warm return shows the newest intent", ready) &&
-            preparations.load() == warmPreparations &&
-            service.status().counters.residentGraphJobs == warm.residentGraphJobs &&
-            service.status().counters.nativeDispatches == warm.nativeDispatches &&
-            service.status().counters.packedTransfers == warm.packedTransfers &&
-            policy->snapshot().reservations.ownedNativeImageBytes ==
-                warmClaims.ownedNativeImageBytes &&
-            policy->snapshot().reservations.ownedNativeImages == warmClaims.ownedNativeImages,
-        "ordinary warm retained-frame return performs no preparation, graph, dispatch, "
-        "or new native allocation");
+    checks.expect(session.setCurrentTime(core::RationalTime::fromInteger(0)) &&
+                      awaitProof("warm return shows the newest intent", ready) &&
+                      preparations.load() == warmPreparations &&
+                      service.status().counters.residentGraphJobs == warm.residentGraphJobs &&
+                      service.status().counters.nativeDispatches == warm.nativeDispatches &&
+                      service.status().counters.packedTransfers == warm.packedTransfers &&
+                      policy->snapshot().reservations.ownedNativeImageBytes ==
+                          warmClaims.ownedNativeImageBytes &&
+                      policy->snapshot().reservations.ownedNativeImages ==
+                          warmClaims.ownedNativeImages,
+                  "ordinary warm retained-frame return performs no preparation, graph, dispatch, "
+                  "or new native allocation");
     controller.beginShutdown();
     controller.releasePublishedFramesForShutdown();
     service.beginShutdown();
     bridge.stop();
     checks.expect(
-        awaitProof("production native cache/controller service fully retires actual backing", [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }) &&
+        awaitProof(
+            "production native cache/controller service fully retires actual backing",
+            [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }) &&
             policy->snapshot().reservations.ownedNativeImageBytes == 0 &&
             policy->snapshot().reservations.totalDeviceClaimBytes == 0,
         "production native cache/controller service fully retires actual backing");
