@@ -36,15 +36,16 @@ void expect(const bool value, const char* message) {
 
 std::shared_ptr<const runtime::CompiledCompositionPlan>
 planWith(const std::vector<runtime::ImageEffectKernel>& kernels,
-         const core::Color4d color = {-0.125, 0.18, 2.0, 0.5}) {
+         const core::Color4d color = {-0.125, 0.18, 2.0, 0.5}, const double sourceWidth = 4.0,
+         const double sourceHeight = 2.0) {
     using namespace runtime;
     using namespace document;
     const auto op = [](const std::size_t i) { return OperationIndex::fromRaw(i); };
     std::vector<CompiledOperation> operations;
     operations.emplace_back(CompiledSolid{NodeId::fromRaw(1),
                                           {ParameterId::fromRaw(1), color},
-                                          {ParameterId::fromRaw(2), 4.0},
-                                          {ParameterId::fromRaw(3), 2.0}});
+                                          {ParameterId::fromRaw(2), sourceWidth},
+                                          {ParameterId::fromRaw(3), sourceHeight}});
     for (const auto& kernel : kernels) {
         const auto index = operations.size();
         operations.emplace_back(
@@ -541,10 +542,12 @@ void testCanvasEffects() {
                                 window(-2, 3, 2, 2),
            "crop moves a negative-origin data window and removes exact edge pixels");
     if (cropped.image) {
+        // #739: the cut lines are measured from the picture (the data window); the display window
+        // keeps what lies between them.
         expect(cropped.image->descriptor()->displayWindow() ==
-                   window(-4, 1, 8, 7) &&
+                   window(-2, 3, 2, 2) &&
                    cropped.image->descriptor()->pixelAspect() == *aspect,
-               "crop narrows display window and preserves pixel aspect");
+               "crop keeps the display window between its cut lines and preserves pixel aspect");
         const auto sample = cropped.image->read(-2, 3);
         expect(sample && *sample.value() == *pixel.value(),
                "crop preserves signed HDR and partial alpha exactly");
@@ -577,6 +580,48 @@ void testCanvasEffects() {
     const auto empty = run(runtime::CanvasImageEffect::Crop, {4, 0, 0, 0});
     expect(!empty.image && empty.diagnostic,
            "crop that removes its entire data window refuses with a diagnostic");
+    expect(empty.diagnostic && empty.diagnostic->subject.field == "left" &&
+               empty.diagnostic->summary.find("left 4 px and right 0 px remove the whole 4 px "
+                                              "width") != std::string::npos,
+           "a refused crop names the margins and the picture's width");
+
+    // #739: an image source's picture is its file (a 512 x 2048 strip from the origin) while its
+    // display window is the 720 x 1280 composition frame. Crops are measured against the picture:
+    // one that removes more rows than the frame has evaluates.
+    {
+        using runtime::CanvasImageEffect;
+        using runtime::detail::CanvasMargins;
+        const auto strip = window(0, 0, 512, 2048);
+        const auto frame = window(0, 0, 720, 1280);
+        const auto tile = runtime::detail::canvasOutputWindows(
+            strip, frame, CanvasMargins{CanvasImageEffect::Crop, {0, 900, 0, 1020}}, 1.0, 1.0);
+        expect(tile && tile->data == window(0, 900, 512, 128) &&
+                   tile->display == window(0, 900, 512, 128),
+               "a crop past the frame's height keeps its picture's rows 900 to 1028");
+        const auto top = runtime::detail::canvasOutputWindows(
+            strip, frame, CanvasMargins{CanvasImageEffect::Crop, {0, 100, 0, 0}}, 1.0, 1.0);
+        expect(top && top->data == window(0, 100, 512, 1948) &&
+                   top->display == window(0, 100, 512, 1180),
+               "the display window keeps the part of the frame between the crop's lines");
+        const auto below = runtime::detail::canvasOutputWindows(
+            strip, frame, CanvasMargins{CanvasImageEffect::Crop, {0, 1500, 0, 400}}, 1.0, 1.0);
+        expect(below && below->data == window(0, 1500, 512, 148) &&
+                   below->display == window(0, 1500, 512, 148),
+               "a crop wholly outside the frame is its own display window");
+        const auto same = runtime::detail::canvasOutputWindows(
+            strip, strip, CanvasMargins{CanvasImageEffect::Crop, {3, 5, 7, 11}}, 1.0, 1.0);
+        expect(same && same->data == window(3, 5, 502, 2032) && same->display == same->data,
+               "a picture that is its own frame is cropped alike in both windows");
+        const auto whole = runtime::detail::canvasOutputWindows(
+            strip, frame, CanvasMargins{CanvasImageEffect::Crop, {0, 1000, 0, 1048}}, 1.0, 1.0);
+        const auto why = runtime::detail::canvasCropRefusal(
+            strip, CanvasMargins{CanvasImageEffect::Crop, {0, 1000, 0, 1048}}, 1.0, 1.0);
+        expect(!whole && why && why->side == 3 &&
+                   why->reason == "Crop top 1000 px and bottom 1048 px remove the whole 2048 px "
+                                  "height of its picture; together they must be less than its "
+                                  "height",
+               "a crop that removes the whole picture is refused against the larger margin");
+    }
     runtime::detail::PreparedImageEffect limited;
     limited.canvas = runtime::detail::CanvasMargins{runtime::CanvasImageEffect::Pad, {2, 1, 0, 2}};
     const auto refused = runtime::detail::applyImageEffect(
@@ -611,6 +656,44 @@ void testCanvasAnimation() {
             expect(!samePixels(first, next),
                    "animated crop margins change the cached composition pixels");
     }
+}
+
+// #739: through the evaluator, a Crop on a picture taller than the composition frame evaluates
+// when it keeps some of the picture, and a Crop that keeps none of it is refused with a diagnostic
+// that names its node, the layer showing it and the margin parameter.
+void testCropMeasuredAgainstPicture() {
+    using namespace runtime;
+    using namespace document;
+    const auto crop = [](const double top, const double bottom) {
+        return CanvasImageKernel{CanvasImageEffect::Crop,
+                                 {CompiledScalarParameter{ParameterId::fromRaw(91), 0.0},
+                                  CompiledScalarParameter{ParameterId::fromRaw(92), top},
+                                  CompiledScalarParameter{ParameterId::fromRaw(93), 0.0},
+                                  CompiledScalarParameter{ParameterId::fromRaw(94), bottom}}};
+    };
+    CpuCompositionEvaluator evaluator;
+    // A 4 x 8 picture in the 4 x 2 frame: 7 rows cropped, more than the frame has.
+    const auto kept = planWith({crop(1.0, 6.0)}, {-0.125, 0.18, 2.0, 0.5}, 4.0, 8.0);
+    const auto evaluated = evaluator.evaluate(kept, requestFor(*kept), {});
+    expect(evaluated.frame() != nullptr && evaluated.diagnostics().empty(),
+           "a crop measured against a picture taller than the frame evaluates");
+    const auto removed = planWith({crop(4.0, 4.0)}, {-0.125, 0.18, 2.0, 0.5}, 4.0, 8.0);
+    const auto refused = evaluator.evaluate(removed, requestFor(*removed), {});
+    expect(!refused.frame() && !refused.diagnostics().empty(),
+           "a crop that removes the whole picture is refused");
+    if (refused.diagnostics().empty())
+        return;
+    const auto& diagnostic = refused.diagnostics().front();
+    expect(diagnostic.code == EvaluationDiagnosticCode::InvalidParameter &&
+               diagnostic.subject.nodeId == NodeId::fromRaw(11) &&
+               diagnostic.subject.layerId == LayerId::fromRaw(1) &&
+               diagnostic.subject.parameterId == ParameterId::fromRaw(92) &&
+               diagnostic.subject.field == "top",
+           "the refusal names the crop's node, its layer and the margin parameter");
+    expect(diagnostic.summary ==
+               "Crop top 4 px and bottom 4 px remove the whole 8 px height of its picture; "
+               "together they must be less than its height (node 11, layer 1, parameter top)",
+           "the refusal's words name the margins, the picture and where it is");
 }
 
 void testBlurEvaluation() {
@@ -2211,6 +2294,7 @@ int main(const int argc, char** argv) {
         testExposureAndOffset();
         testCanvasEffects();
         testCanvasAnimation();
+        testCropMeasuredAgainstPicture();
         testImageCombineWindows();
         testImageCombineDrivers();
         testAbsentMatteEvaluation();

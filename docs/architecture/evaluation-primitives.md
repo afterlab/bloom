@@ -996,10 +996,20 @@ the existing bounded scene executor. A preparation failure takes the explicit CP
 
 `CanvasImageKernel` adds Crop and Pad with nonnegative, animatable left/top/right/bottom margins
 in full-resolution pixels. Each margin is rounded independently to the nearest output-grid pixel
-for proxy evaluation. Crop removes those rows and columns from both data and display windows;
-Pad expands both windows and fills the new data border with transparent black. Pixel aspect is
-unchanged. A Crop that would empty either window fails with an explicit diagnostic;
-invalid GPU preparation reports Unsupported and selects the CPU reference path.
+for proxy evaluation. Crop is measured against the picture it crops, its data window (#739): an
+image source's picture is its file, whose display window is the composition frame. It cuts the
+picture along four lines that many rows and columns in from the data window's edges, and both
+windows keep what lies between the lines: the data window is the cropped picture, and the display
+window the part of the input's display window between the lines, or the cropped picture itself when
+none of the display window lies between them. When the two windows are the same (a composition's
+own frame, a nested composition), both are cropped alike. Pad expands both windows by the margins
+and fills the new data border with transparent black. Pixel aspect is unchanged. A Crop whose
+opposite margins together remove its whole picture fails with `InvalidParameter`, worded with both
+margins and the picture's size and filed against the Crop's node, the layer that shows it and the
+larger of the two margin parameters (for example "Crop top 1000 px and bottom 1048 px remove the
+whole 2048 px height of its picture; together they must be less than its height (node 12, layer 4,
+parameter bottom)"); an export's failure line names the code by its stable id. Invalid GPU
+preparation reports Unsupported and selects the CPU reference path, which reports that failure.
 No resampling or color conversion occurs: unchanged premultiplied pixels, including negative/HDR
 RGB and partial alpha, are copied exactly. The CPU copies in cancellable rows and 4096-pixel
 chunks; the production GPU scene emits a resident TranslationOpacity pass with integer sampling

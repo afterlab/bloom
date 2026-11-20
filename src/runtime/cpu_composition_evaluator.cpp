@@ -122,6 +122,56 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
     return subject;
 }
 
+// #739: the Layer Output that shows operation `index`'s image (the first downstream layer whose
+// input chain reaches it), or nullopt when none does.
+[[nodiscard]] std::optional<document::LayerId> showingLayer(const CompiledCompositionPlan& plan,
+                                                            const std::size_t index) {
+    const auto& operations = plan.operations();
+    std::vector<bool> reaches(operations.size(), false);
+    if (index >= operations.size())
+        return std::nullopt;
+    reaches[index] = true;
+    for (std::size_t j = index + 1; j < operations.size(); ++j) {
+        bool fed = false;
+        forEachInput(operations[j], [&](const OperationIndex input) {
+            fed = fed || (input.value() < j && reaches[input.value()]);
+        });
+        if (!fed)
+            continue;
+        if (const auto* layer = std::get_if<CompiledLayerOutput>(&operations[j]))
+            return layer->layerId;
+        reaches[j] = true;
+    }
+    return std::nullopt;
+}
+
+// #739: a refused Crop or Pad, filed against its node, the layer that shows it and the margin
+// parameter the effect named (`field`), with the effect's own reason as the summary.
+[[nodiscard]] EvaluationDiagnostic canvasFailure(const CompiledCompositionPlan& plan,
+                                                 const std::size_t index,
+                                                 const CanvasImageKernel& kernel,
+                                                 const EvaluationDiagnostic& refused,
+                                                 EvaluationSubject subject) {
+    constexpr std::array<std::string_view, 4> sides{"left", "top", "right", "bottom"};
+    for (std::size_t side = 0; side < sides.size(); ++side)
+        if (refused.subject.field == sides[side]) {
+            subject.parameterId = kernel.margins[side].id;
+            subject.field = std::string(sides[side]);
+        }
+    if (!subject.layerId)
+        subject.layerId = showingLayer(plan, index);
+    std::string where = "node " + std::to_string(subject.nodeId ? subject.nodeId->value() : 0);
+    if (subject.layerId)
+        where += ", layer " + std::to_string(subject.layerId->value());
+    if (!subject.field.empty())
+        where += ", parameter " + subject.field;
+    return {.code = refused.code,
+            .severity = DiagnosticSeverity::Error,
+            .subject = std::move(subject),
+            .summary = refused.summary + " (" + where + ")",
+            .detail = refused.detail};
+}
+
 // What one banded row returns: nothing, or the structured failure that ends the pass. Named because
 // every row lambda below spells it as its own return type.
 using RowFailure = std::optional<EvaluationDiagnostic>;
@@ -4497,11 +4547,17 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     return;
                                 }
                                 if (result.diagnostic) {
+                                    if (const auto* canvas =
+                                            std::get_if<CanvasImageKernel>(&effect.kernel)) {
+                                        operationFailure =
+                                            detail::canvasFailure(*plan, index, *canvas, *result.diagnostic,
+                                                          operationSubject);
+                                        return;
+                                    }
                                     result.diagnostic->subject = operationSubject;
                                     if (std::holds_alternative<PointwiseImageKernel>(
                                             effect.kernel) ||
-                                        std::holds_alternative<ImageCombineKernel>(effect.kernel) ||
-                                        std::holds_alternative<CanvasImageKernel>(effect.kernel)) {
+                                        std::holds_alternative<ImageCombineKernel>(effect.kernel)) {
                                         operationFailure =
                                             diagnostic(result.diagnostic->code,
                                                        "Image effect cannot be evaluated",

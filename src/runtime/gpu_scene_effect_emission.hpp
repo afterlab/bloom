@@ -760,8 +760,12 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
         if (!descriptor || descriptor->data != sourceWindow)
             return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                         "Canvas input descriptor does not match its data window");
+        // #739: the Crop is measured against the picture (its data window), exactly as the CPU
+        // reference measures it.
+        const auto windows =
+            canvasOutputWindows(sourceWindow, descriptor->display, margins, ctx.hScale, ctx.vScale);
         const auto displayWindow =
-            canvasOutputWindow(descriptor->display, margins, ctx.hScale, ctx.vScale);
+            windows ? std::optional{windows->display} : std::optional<render::ImageWindow>{};
         if (!displayWindow)
             return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                         "Canvas margins leave an invalid display window");

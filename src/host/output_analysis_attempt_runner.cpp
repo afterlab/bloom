@@ -359,6 +359,9 @@ std::string describeOutputAnalysisAttemptV1(const OutputAnalysisAttemptOutcomeV1
                     if constexpr (std::is_same_v<Value, runtime::GpuProcessFrameDiagnosticCode>)
                         if (const auto name = gpuCodeName(value); !name.empty())
                             text += " (" + std::string(name) + ")";
+                    // #739: the evaluation code by its stable name, not only its number.
+                    if constexpr (std::is_same_v<Value, runtime::EvaluationDiagnosticCode>)
+                        text += " (" + std::string(runtime::evaluationDiagnosticCodeId(value)) + ")";
                     append(text);
                 }
             },

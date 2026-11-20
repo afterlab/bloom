@@ -610,21 +610,25 @@ void runMultiplyAlpha(Expectations& expectations, GpuDevice& device, GpuSceneCac
 }
 
 void runCanvas(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
-    for (const auto kind : {bloom::runtime::CanvasImageEffect::Crop,
-                            bloom::runtime::CanvasImageEffect::Pad}) {
+    // #739: `tall` crops a picture taller than the 12 x 10 frame (8 x 30) by more rows than the
+    // frame has, measured against the picture, on both routes.
+    for (const auto& [kind, tall] :
+         {std::pair{bloom::runtime::CanvasImageEffect::Crop, false},
+          std::pair{bloom::runtime::CanvasImageEffect::Crop, true},
+          std::pair{bloom::runtime::CanvasImageEffect::Pad, false}}) {
         for (const bool proxy : {false, true}) {
             const auto base = effectPlan(CstKernel{},
                                          kind == bloom::runtime::CanvasImageEffect::Crop
-                                             ? 7000 : 8000);
+                                             ? (tall ? 7500 : 7000) : 8000);
             auto definition = base->copyDefinition();
             auto& solid = std::get<CompiledSolid>(definition.operations[0]);
             solid.width.source = 8.0;
-            solid.height.source = 6.0;
+            solid.height.source = tall ? 30.0 : 6.0;
             std::array<CompiledScalarParameter, 4> margins{
                 CompiledScalarParameter{ParameterId::fromRaw(9001), 1.0},
-                CompiledScalarParameter{ParameterId::fromRaw(9002), 1.0},
+                CompiledScalarParameter{ParameterId::fromRaw(9002), tall ? 3.0 : 1.0},
                 CompiledScalarParameter{ParameterId::fromRaw(9003), 1.0},
-                CompiledScalarParameter{ParameterId::fromRaw(9004), 0.0}};
+                CompiledScalarParameter{ParameterId::fromRaw(9004), tall ? 20.0 : 0.0}};
             if (kind == bloom::runtime::CanvasImageEffect::Pad)
                 margins = {CompiledScalarParameter{ParameterId::fromRaw(9001), 2.0},
                            CompiledScalarParameter{ParameterId::fromRaw(9002), 1.0},

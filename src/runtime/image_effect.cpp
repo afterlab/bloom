@@ -559,17 +559,28 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
             return result;
         }
         const auto source = input.descriptor()->dataWindow();
-        const auto window = canvasOutputWindow(source, *effect.canvas, horizontalScale,
+        // #739: a Crop is measured against the picture (its data window), never the frame its
+        // display window may be.
+        const auto windows =
+            canvasOutputWindows(source, input.descriptor()->displayWindow(), *effect.canvas,
+                                horizontalScale, verticalScale);
+        if (!windows) {
+            const auto why = canvasCropRefusal(source, *effect.canvas, horizontalScale,
                                                verticalScale);
-        const auto display = canvasOutputWindow(input.descriptor()->displayWindow(),
-                                                *effect.canvas, horizontalScale, verticalScale);
-        if (!window || !display) {
-            result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
-                                        "Canvas margins leave an invalid data window");
+            constexpr std::array<std::string_view, 4> sides{"left", "top", "right", "bottom"};
+            result.diagnostic = EvaluationDiagnostic{
+                EvaluationDiagnosticCode::InvalidParameter,
+                DiagnosticSeverity::Error,
+                {},
+                why ? why->reason : std::string("Canvas margins leave an invalid data window"),
+                why ? why->reason : std::string("Canvas margins leave an invalid data window")};
+            if (why)
+                result.diagnostic->subject.field = std::string(sides[why->side]);
             return result;
         }
+        const auto* window = &windows->data;
         const auto descriptor = render::Rgba32fImageDescriptor::create(
-            *window, *display, input.descriptor()->pixelAspect());
+            windows->data, windows->display, input.descriptor()->pixelAspect());
         if (!descriptor) {
             result.diagnostic = refusal(EvaluationDiagnosticCode::InvalidParameter,
                                         "Canvas output descriptor is invalid");
