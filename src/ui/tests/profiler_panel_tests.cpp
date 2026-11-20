@@ -2,6 +2,7 @@
 // with a refcount across panels, fixed history rings that wrap at 600 without allocating, absent
 // versus zero, stale ages, the unattributed math, and the snapshot's trivial copyability.
 #include "await_qt.hpp"
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/profiler_sampler.hpp>
 #include <bloom/runtime/profiler_snapshot.hpp>
@@ -26,6 +27,7 @@
 #include <QTest>
 
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -544,6 +546,54 @@ void testRuntimeFeedDrivesTheSampler(Expectations& expectations) {
     scheduler.beginShutdown();
 }
 
+// #751: while admission could not sample the host's memory, the feed publishes what it assumed
+// and the panel notes it on the Usable row.
+void testAssumedCapacityReachesThePanel(Expectations& expectations) {
+    constexpr std::uint64_t kGiB = std::uint64_t{1} << 30U;
+    runtime::GpuProcessingPhasePolicy policy;
+    runtime::MemoryBudgetState unsampled;
+    unsampled.machine.availableBytes = 12 * kGiB;
+    unsampled.process.source = runtime::ProcessMemorySource::Unavailable;
+    unsampled.process.status = runtime::ProcessMemoryStatus::Unavailable;
+    unsampled.process.sampledAt = std::chrono::steady_clock::now();
+    unsampled.processSampleFresh = true;
+    unsampled.awaitingProcessSample = true;
+    unsampled.sampleSerial = 1;
+    policy.applyHostSample(unsampled, 16 * kGiB, unsampled.process.sampledAt);
+    runtime::ProfilerSampler sampler;
+    ProfilerUiSources sources;
+    sources.admission = &policy;
+    RuntimeProfilerFeed feed(sampler, sources);
+    feed.publishUiInputs();
+    runtime::ProfilerSnapshot snapshot;
+    expectations.expect(sampler.sampleNow() && sampler.readLatest(snapshot, 0), "a sample");
+    expectations.expect(snapshot.memory.admissionAssumedBytes.present &&
+                            snapshot.memory.admissionAssumedBytes.value == 8 * kGiB &&
+                            snapshot.memory.admissionAssumption.present &&
+                            snapshot.memory.admissionAssumption.value ==
+                                runtime::ProfilerCapacityAssumption::HalfPhysicalMemory &&
+                            !snapshot.gpu.assumedBytes.present,
+                        "the feed publishes the host capacity admission assumed");
+    ProfilerEditor editor(nullptr);
+    auto* memory = child<kit::KReadoutGrid>(editor, "profilerMemoryReadouts");
+    if (memory == nullptr) {
+        expectations.expect(false, "the memory readouts exist");
+        return;
+    }
+    constexpr int kUsableRow = 14;
+    editor.deliver(snapshot);
+    expectations.expect(
+        memory->noteText(kUsableRow).startsWith(QStringLiteral("not sampled; assumed")) &&
+            memory->noteText(kUsableRow).contains(QStringLiteral("half of physical memory")),
+        "the Usable row says the capacity was not sampled and what was assumed");
+    snapshot.serial += 1;
+    snapshot.memory.admissionAssumedBytes = {};
+    snapshot.memory.admissionAssumption = {};
+    editor.deliver(snapshot);
+    expectations.expect(memory->noteText(kUsableRow).isEmpty(),
+                        "a sampled capacity carries no note");
+}
+
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
     application.setOrganizationName(QStringLiteral("BloomProfilerPanelTests"));
@@ -560,6 +610,7 @@ int main(int argc, char** argv) {
     testSnapshotIsTriviallyCopyable(expectations);
     testSampleRingAndFormatting(expectations);
     testRuntimeFeedDrivesTheSampler(expectations);
+    testAssumedCapacityReachesThePanel(expectations);
     if (expectations.failures() + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << expectations.failures() << " Profiler expectation(s) failed\n";
         return 1;

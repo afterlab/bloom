@@ -50,6 +50,12 @@ struct ProfilerHostInputs final {
     // Device admission: claims granted to running work and the capacity admitted against.
     ProfilerBytes deviceAdmissionClaimBytes{};
     ProfilerBytes deviceUsableBytes{};
+    // #751: the capacities admission assumed because it could not sample them; absent while
+    // sampled.
+    ProfilerBytes hostAssumedBytes{};
+    ProfilerMetric<ProfilerCapacityAssumption> hostAssumption{};
+    ProfilerBytes deviceAssumedBytes{};
+    ProfilerMetric<ProfilerCapacityAssumption> deviceAssumption{};
     // The Viewer's displayed frame and the GPU preview route's counters.
     ProfilerViewer viewer{};
     // Playback, a RAM Preview fill or an export is running: the idle baseline waits for none.

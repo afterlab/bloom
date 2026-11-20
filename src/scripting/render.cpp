@@ -352,10 +352,13 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         bool stopping = false;
         // The run's technical detail (stage, typed codes) for the scripting diagnostic.
         std::string details;
-        const auto collectLog = [&runner, &details] {
-            for (const auto& entry : runner.takeLog())
+        const auto collectLog = [&runner, &details, &result] {
+            for (const auto& entry : runner.takeLog()) {
                 if (entry.severity == runtime::DiagnosticSeverity::Error)
                     details += (details.empty() ? "" : "; ") + entry.message;
+                if (entry.code == "export.capacity.assumed")
+                    result.capacityAssumptions.push_back(entry.message);
+            }
         };
         while (true) {
             runner.poll();

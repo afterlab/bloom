@@ -506,6 +506,9 @@ frameRange(std::string_view value) {
     // Which device evaluated the frames (#452): a CPU reference frame is reported, never hidden.
     std::cout << "device gpu-frames=" << result.gpuEvaluatedFrames
               << " cpu-reference-frames=" << result.cpuReferenceFrames << '\n';
+    // #751: a capacity admission could not sample ran on a stated assumption; say which.
+    for (const auto& assumption : result.capacityAssumptions)
+        std::cerr << "warning[bloom-cli.render.capacity-assumed]: " << assumption << '\n';
     if (!result.succeeded) {
         std::cerr << (result.diagnosticCode == scripting::RenderDiagnosticCode::DeviceRequired
                           ? "error[bloom-cli.render.device-required]: "

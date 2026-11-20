@@ -142,6 +142,8 @@ constexpr std::array<std::string_view, kProfilerEvictionCauseCount> kCauseNames{
     "ceiling", "memoryPressure", "admission", "purge"};
 constexpr std::array<std::string_view, kProfilerFrameFreshnessCount> kFreshnessNames{
     "none", "current", "stale"};
+constexpr std::array<std::string_view, kProfilerCapacityAssumptionCount> kAssumptionNames{
+    "halfPhysicalMemory", "fixedHostDefault", "halfDeviceLocalHeap"};
 constexpr std::array<std::string_view, kProfilerDisplayProviderCount> kProviderNames{
     "cpuReference", "cpuOcio", "gpuNeutral", "gpuResident", "gpuPreparedPacked"};
 // GpuPreviewCpuFallbackReason, in its order.
@@ -152,6 +154,16 @@ constexpr std::array<std::string_view, kProfilerCpuFallbackReasonCount> kFallbac
 template <typename Array> std::string_view nameAt(const Array& names, const auto value) {
     const auto index = static_cast<std::size_t>(value);
     return index < names.size() ? names[index] : std::string_view("unknown");
+}
+
+// An enum metric as its lowercase word, or null while absent.
+template <typename Array, typename Value>
+void named(Writer& json, const std::string_view key, const Array& names,
+           const ProfilerMetric<Value>& value) {
+    if (value.present)
+        json.text(key, nameAt(names, value.value));
+    else
+        json.metric(key, ProfilerCount{});
 }
 
 template <std::size_t N>
@@ -209,6 +221,8 @@ void writeMemory(Writer& json, const ProfilerMemory& memory) {
     json.metric("stagingLiveBytes", memory.stagingLiveBytes);
     json.metric("stagingPeakBytes", memory.stagingPeakBytes);
     json.metric("admissionClaimBytes", memory.admissionClaimBytes);
+    json.metric("admissionAssumedBytes", memory.admissionAssumedBytes);
+    named(json, "admissionAssumption", kAssumptionNames, memory.admissionAssumption);
     json.metric("unattributedBytes", memory.unattributedBytes);
     json.metric("idleBaselineBytes", memory.idleBaselineBytes);
     json.end('}');
@@ -229,6 +243,8 @@ void writeGpu(Writer& json, const ProfilerGpu& gpu) {
     json.metric("utilization", gpu.utilization);
     json.metric("admissionClaimBytes", gpu.admissionClaimBytes);
     json.metric("usableBytes", gpu.usableBytes);
+    json.metric("assumedBytes", gpu.assumedBytes);
+    named(json, "assumption", kAssumptionNames, gpu.assumption);
     json.end('}');
 }
 

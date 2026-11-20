@@ -240,6 +240,10 @@ void ProfilerSampler::sample() noexcept {
     workload.ramPreviewSpanFrames = inputs_.ramPreviewSpanFrames;
     snapshot.gpu.admissionClaimBytes = inputs_.deviceAdmissionClaimBytes;
     snapshot.gpu.usableBytes = inputs_.deviceUsableBytes;
+    snapshot.gpu.assumedBytes = inputs_.deviceAssumedBytes;
+    snapshot.gpu.assumption = inputs_.deviceAssumption;
+    snapshot.memory.admissionAssumedBytes = inputs_.hostAssumedBytes;
+    snapshot.memory.admissionAssumption = inputs_.hostAssumption;
     snapshot.viewer = inputs_.viewer;
 
     // ---- Pressure: admission answers and evicted bytes by cause (always counted).

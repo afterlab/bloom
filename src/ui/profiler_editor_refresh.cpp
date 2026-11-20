@@ -52,6 +52,29 @@ void setSwapUsed(kit::KReadoutGrid& grid, const int row, const runtime::Profiler
                          static_cast<double>(memory.swapTotalBytes.value), MetricUnit::Bytes)));
 }
 
+// #751: a capacity admission could not sample shows what it assumed instead.
+void setAssumed(kit::KReadoutGrid& grid, const int row, const runtime::ProfilerBytes& assumed,
+                const runtime::ProfilerMetric<runtime::ProfilerCapacityAssumption>& basis) {
+    if (!assumed.present)
+        return;
+    QString why;
+    switch (basis.present ? basis.value : runtime::ProfilerCapacityAssumption::HalfPhysicalMemory) {
+    case runtime::ProfilerCapacityAssumption::HalfPhysicalMemory:
+        why = ProfilerEditor::tr("half of physical memory");
+        break;
+    case runtime::ProfilerCapacityAssumption::FixedHostDefault:
+        why = ProfilerEditor::tr("fixed default");
+        break;
+    case runtime::ProfilerCapacityAssumption::HalfDeviceLocalHeap:
+        why = ProfilerEditor::tr("half of the device heap");
+        break;
+    }
+    grid.setNote(
+        row,
+        ProfilerEditor::tr("not sampled; assumed %1 (%2)")
+            .arg(kit::formatMetric(static_cast<double>(assumed.value), MetricUnit::Bytes), why));
+}
+
 void setFlag(kit::KReadoutGrid& grid, const int row, const runtime::ProfilerMetric<bool>& flag) {
     if (!flag.present)
         grid.setAbsent(row);
@@ -184,6 +207,10 @@ void ProfilerEditor::refreshMemory() {
     setBytes(grid, LedgerRetainedRow, memory.ledgerRetainedBytes);
     setBytes(grid, HeadroomRow, memory.headroomBytes);
     setBytes(grid, UsableRow, memory.usableBytes);
+    if (memory.admissionAssumedBytes.present)
+        setAssumed(grid, UsableRow, memory.admissionAssumedBytes, memory.admissionAssumption);
+    else
+        grid.setNote(UsableRow, {});
     setBytes(grid, PhysicalRow, memory.physicalBytes);
     setAged(grid, AvailableRow, memory.availableBytes, ledgerAge);
     setSwapUsed(grid, SwapRow, memory);
@@ -206,6 +233,7 @@ void ProfilerEditor::refreshGpu() {
     setBytes(grid, GpuRetiringRow, gpu.retiringBytes);
     setAged(grid, GpuHeapUsageRow, gpu.heapUsageBytes, snapshot.gpuBudgetQueryAgeNs);
     setAged(grid, GpuHeapBudgetRow, gpu.heapBudgetBytes, snapshot.gpuBudgetQueryAgeNs);
+    setAssumed(grid, GpuHeapBudgetRow, gpu.assumedBytes, gpu.assumption);
     // Claims against use: how much of what the driver reports in use is Bloom's own.
     if (gpu.liveBytes.present && gpu.heapUsageBytes.present && gpu.heapUsageBytes.value > 0)
         grid.setValue(GpuShareRow,

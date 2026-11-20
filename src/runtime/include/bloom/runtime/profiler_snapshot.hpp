@@ -35,7 +35,8 @@ namespace bloom::runtime {
 // 4: this process's memory in swap (ProfilerMemory::processSwappedBytes).
 // 5: the Viewer's displayed frame and the GPU preview route's CPU fallbacks (ProfilerViewer),
 //    the RAM Preview range and its longest contiguous cached run, and device admission claims.
-inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 5;
+// 6: what admission assumed for a host or device capacity it could not sample (#751).
+inline constexpr std::uint32_t kProfilerSnapshotSchemaVersion = 6;
 
 inline constexpr std::size_t kProfilerNameCapacity = 48;
 inline constexpr std::size_t kProfilerMaximumPools = 32;
@@ -104,6 +105,15 @@ struct ProfilerPool final {
     ProfilerCount refusals{};
 };
 
+// #751: what admission assumed for a capacity it could not sample
+// (runtime::CapacityAssumption, in its order without None).
+enum class ProfilerCapacityAssumption : std::uint8_t {
+    HalfPhysicalMemory,
+    FixedHostDefault,
+    HalfDeviceLocalHeap,
+};
+inline constexpr std::size_t kProfilerCapacityAssumptionCount = 3;
+
 struct ProfilerMemory final {
     // Resident set size, read at the sampler rate (statm or the platform equivalent).
     ProfilerBytes rssBytes{};
@@ -138,6 +148,11 @@ struct ProfilerMemory final {
     ProfilerBytes stagingPeakBytes{};
     // Bytes admission has granted to running work that are not yet in any pool.
     ProfilerBytes admissionClaimBytes{};
+    // #751: present only while admission could not sample the host's memory (its process limits or
+    // its available memory): the host capacity it assumed instead, before the RAM headroom, and
+    // what that assumption is. Absent while the capacity is sampled.
+    ProfilerBytes admissionAssumedBytes{};
+    ProfilerMetric<ProfilerCapacityAssumption> admissionAssumption{};
     // Anonymous bytes not explained by pools, pending retirement, staging and claims. The sampler
     // fills it with profilerUnattributedBytes(); signed, because attribution can overcount.
     ProfilerMetric<std::int64_t> unattributedBytes{};
@@ -168,6 +183,10 @@ struct ProfilerGpu final {
     // against (the driver's live budget minus the VRAM headroom).
     ProfilerBytes admissionClaimBytes{};
     ProfilerBytes usableBytes{};
+    // #751: present only while the driver's live budget could not be sampled: the device capacity
+    // admission assumed instead, before the VRAM headroom, and what that assumption is.
+    ProfilerBytes assumedBytes{};
+    ProfilerMetric<ProfilerCapacityAssumption> assumption{};
 };
 
 // ---- CPU ------------------------------------------------------------------------------------

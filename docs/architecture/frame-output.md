@@ -1227,7 +1227,11 @@ boundary like a frame refused at evaluation (ADR 0033 section 9): the export log
 `export.capacity.waiting` with `stage=publishing` and the bytes asked for, the frame keeps its
 analysed attempt and is published again on the capacity backoff, and a wait in which no other
 processing phase was admitted for 30 seconds stops as `export.capacity.stalled`, which is
-retryable. Such a frame is never failed as a publication failure (#740). Optional EXR deliverable colour
+retryable. Such a frame is never failed as a publication failure (#740). While admission runs on
+an assumed capacity because the host's memory or the device's budget could not be sampled (#751,
+[gpu-backend.md](gpu-backend.md)), the export log says so once per output and domain as the warning
+`export.capacity.assumed` ("host capacity not sampled (process memory limit); assumed N bytes (half
+of physical memory)"), and every capacity wait and stall line repeats it. Optional EXR deliverable colour
 preparation still runs one frame at a time before the frame's publication. The
 window depth comes from `detail::sequenceExportFramesInFlightV1`, the seam for the measured-capacity
 model (frames that fit in measured free memory minus the headroom preference); until that model is

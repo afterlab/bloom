@@ -16,6 +16,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::host {
 class GpuExportProvider;
@@ -82,6 +83,9 @@ struct RenderResult final {
     std::optional<host::ExportWorkerMemory> workerMemory = std::nullopt;
     // #570: the measured and delivered loudness of a normalizing render.
     std::optional<host::ExportLoudnessReport> loudness = std::nullopt;
+    // #751: the export log's `export.capacity.assumed` lines: a capacity admission could not
+    // sample and what it assumed instead. Empty while every capacity was sampled.
+    std::vector<std::string> capacityAssumptions = {};
 };
 
 // Own the effective working-space/config identity before dispatching an asynchronous export.

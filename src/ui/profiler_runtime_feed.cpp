@@ -129,6 +129,26 @@ void RuntimeProfilerFeed::publishUiInputs() {
             runtime::ProfilerBytes::of(capacity.hostClaimBytes > capacity.hostRetentionBytes
                                            ? capacity.hostClaimBytes - capacity.hostRetentionBytes
                                            : 0);
+        // #751: a capacity admission could not sample, and what it assumed instead.
+        const auto policy = admission->snapshot();
+        const auto assumed =
+            [](const runtime::CapacityFallback& fallback, runtime::ProfilerBytes& bytes,
+               runtime::ProfilerMetric<runtime::ProfilerCapacityAssumption>& basis) {
+                if (!fallback.active()) {
+                    bytes = {};
+                    basis = {};
+                    return;
+                }
+                bytes = runtime::ProfilerBytes::of(fallback.assumedBytes);
+                auto value = runtime::ProfilerCapacityAssumption::HalfPhysicalMemory;
+                if (fallback.assumption == runtime::CapacityAssumption::FixedHostDefault)
+                    value = runtime::ProfilerCapacityAssumption::FixedHostDefault;
+                else if (fallback.assumption == runtime::CapacityAssumption::HalfDeviceLocalHeap)
+                    value = runtime::ProfilerCapacityAssumption::HalfDeviceLocalHeap;
+                basis = runtime::ProfilerMetric<runtime::ProfilerCapacityAssumption>::of(value);
+            };
+        assumed(policy.hostFallback, inputs_.hostAssumedBytes, inputs_.hostAssumption);
+        assumed(policy.deviceFallback, inputs_.deviceAssumedBytes, inputs_.deviceAssumption);
     }
 
     bool busy = false;

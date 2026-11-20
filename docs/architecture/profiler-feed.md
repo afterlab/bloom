@@ -40,7 +40,12 @@ capacity waits), the RAM Preview's state, range and longest contiguous cached ru
 (`ramPreviewCaching`, `ramPreviewTotalFrames`, `ramPreviewSpanFirstFrame`,
 `ramPreviewSpanFrames`), and the device admission claims and usable capacity
 (`ProfilerGpu::admissionClaimBytes`, `usableBytes`), so an agent reading `profiler.snapshot` can
-check a shot for CPU fallbacks, fill order and claims without the benchmark harness.
+check a shot for CPU fallbacks, fill order and claims without the benchmark harness. Schema 6
+(#751) added what admission assumed for a capacity it could not sample:
+`ProfilerMemory::admissionAssumedBytes` and `admissionAssumption` for the host,
+`ProfilerGpu::assumedBytes` and `assumption` for the device (`halfPhysicalMemory`,
+`fixedHostDefault`, `halfDeviceLocalHeap`). They are present only while the capacity is not
+sampled, so a present value says both that it was not sampled and what was assumed.
 
 ## Sampler
 
@@ -85,6 +90,7 @@ Sources, each read at the sampler rate unless noted:
 | Viewer frame (freshness, provider, frame index) and playhead frame | the UI-side hook: `CompositionPreviewController::state()` (the displayed frame's provenance provider and its request time) and the session's current time, as nearest frame indices on the composition grid |
 | GPU preview route counters (CPU fallbacks by reason, admission refusals, completions, capacity waits) | the UI-side hook: `GpuPreviewDisplayService::status().counters`; absent without the service |
 | Device admission claims and usable capacity | the UI-side hook: `GpuProcessingPhasePolicy::usableCapacity()` (`deviceClaimBytes`, `deviceUsableBytes` once the device is ready) |
+| Assumed host and device capacity (#751) | the UI-side hook: `GpuProcessingPhasePolicy::snapshot()` (`hostFallback`, `deviceFallback`); the panel notes "not sampled; assumed N" on the Usable and GPU budget rows |
 | Admission waits and refusals | the telemetry counters: `GpuProcessingPhasePolicy::reserve()` counts each `AwaitingCapacity` answer (a waiting request retries, so each retry that waits again counts) and each `BudgetRefused` answer |
 | Evicted bytes by cause | the telemetry counters (below, "Eviction causes") |
 

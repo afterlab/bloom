@@ -669,6 +669,44 @@ void viewerAndFillInputsReachTheSnapshot() {
            "the device claims serialize");
 }
 
+// Schema 6 (#751): what admission assumed for a capacity it could not sample reaches the snapshot
+// and its JSON as the hook published it, and is null while the capacity is sampled.
+void assumedCapacityReachesTheSnapshot() {
+    ProfilerSampler sampler;
+    ProfilerSnapshot snapshot;
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 0), "a bare sample");
+    expect(!snapshot.memory.admissionAssumedBytes.present &&
+               !snapshot.memory.admissionAssumption.present && !snapshot.gpu.assumedBytes.present &&
+               !snapshot.gpu.assumption.present,
+           "a sampled capacity has no assumption");
+    const auto bare = profilerSnapshotJson(snapshot);
+    expect(bare.find("\"admissionAssumedBytes\":null,\"admissionAssumption\":null") !=
+                   std::string::npos &&
+               bare.find("\"assumedBytes\":null,\"assumption\":null}") != std::string::npos,
+           "absent assumptions are null");
+    ProfilerHostInputs inputs;
+    inputs.hostAssumedBytes = ProfilerBytes::of(8 * kGiB);
+    inputs.hostAssumption = ProfilerMetric<ProfilerCapacityAssumption>::of(
+        ProfilerCapacityAssumption::HalfPhysicalMemory);
+    inputs.deviceAssumedBytes = ProfilerBytes::of(4 * kGiB);
+    inputs.deviceAssumption = ProfilerMetric<ProfilerCapacityAssumption>::of(
+        ProfilerCapacityAssumption::HalfDeviceLocalHeap);
+    sampler.publishHostInputs(inputs);
+    expect(sampler.sampleNow() && sampler.readLatest(snapshot, 1), "a sample with the hook");
+    expect(snapshot.memory.admissionAssumedBytes.value == 8 * kGiB &&
+               snapshot.memory.admissionAssumption.value ==
+                   ProfilerCapacityAssumption::HalfPhysicalMemory &&
+               snapshot.gpu.assumedBytes.value == 4 * kGiB &&
+               snapshot.gpu.assumption.value == ProfilerCapacityAssumption::HalfDeviceLocalHeap,
+           "the assumed capacities arrive");
+    const auto json = profilerSnapshotJson(snapshot);
+    expect(json.find("\"admissionAssumedBytes\":" + std::to_string(8 * kGiB) +
+                     ",\"admissionAssumption\":\"halfPhysicalMemory\"") != std::string::npos &&
+               json.find("\"assumedBytes\":" + std::to_string(4 * kGiB) +
+                         ",\"assumption\":\"halfDeviceLocalHeap\"}") != std::string::npos,
+           "the assumed capacities serialize with their names");
+}
+
 void absentFieldsStayAbsent() {
     ProfilerSampler sampler;
     ProfilerSnapshot snapshot;
@@ -923,6 +961,7 @@ int main() try {
     ledgerAdapterReadsAccessors();
     absentFieldsStayAbsent();
     viewerAndFillInputsReachTheSnapshot();
+    assumedCapacityReachesTheSnapshot();
     sampleCost();
     failures += bloom::test_support::awaitFailureCount();
     if (failures == 0)

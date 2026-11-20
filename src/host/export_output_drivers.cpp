@@ -219,6 +219,25 @@ class DriverBase : public ExportOutputDriver {
         return dependencies_.gpu ? dependencies_.gpu->processingPhasePolicy().get() : nullptr;
     }
 
+    // #751: while admission runs on an assumed capacity (the host's memory or the device's budget
+    // could not be sampled), the export's log says so once per domain, with what was assumed.
+    void noteCapacityAssumption() {
+        const auto* policy = waitPolicy();
+        if (policy == nullptr || (hostAssumptionNoted_ && deviceAssumptionNoted_))
+            return;
+        const auto snapshot = policy->snapshot();
+        const auto note = [this](bool& noted, const char* domain,
+                                 const runtime::CapacityFallback& fallback) {
+            if (noted || !fallback.active())
+                return;
+            noted = true;
+            log(runtime::DiagnosticSeverity::Warning, "export.capacity.assumed",
+                runtime::describeCapacityFallback(domain, fallback));
+        };
+        note(hostAssumptionNoted_, "host", snapshot.hostFallback);
+        note(deviceAssumptionNoted_, "device", snapshot.deviceFallback);
+    }
+
     void log(const runtime::DiagnosticSeverity severity, std::string code, std::string message,
              std::optional<std::uint64_t> frame = std::nullopt) {
         log_.push_back(
@@ -279,6 +298,7 @@ class DriverBase : public ExportOutputDriver {
     }
 
     void finishPublished(std::vector<ExportCheckResult> checks) {
+        noteCapacityAssumption();
         if (!analysed_)
             checks_.push_back(check(ExportCheck::AnalysisPolicy, ExportCheckOutcome::NotRun,
                                     "export.check.analysis-policy.not-run"));
@@ -343,6 +363,8 @@ class DriverBase : public ExportOutputDriver {
     std::vector<ExportLogEntry> log_;
     bool analysed_ = false;
     bool done_ = false;
+    bool hostAssumptionNoted_ = false;
+    bool deviceAssumptionNoted_ = false;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -435,6 +457,7 @@ class ImageDriver final : public DriverBase {
     void poll() override {
         if (done_)
             return;
+        noteCapacityAssumption();
         if (auto* compiling = std::get_if<CompileHandle>(&inFlight_)) {
             auto result = compiling->tryTakeResult();
             if (!result)
@@ -1781,6 +1804,7 @@ class MediaDriver final : public DriverBase {
         if (done_ || !runner_)
             return;
         runner_->poll();
+        noteCapacityAssumption();
         if (runner_->stage() == SequenceExportStageV1::AwaitingApproval && !approvalAsked_) {
             approvalAsked_ = true;
             const auto* analysis = runner_->analysis();
