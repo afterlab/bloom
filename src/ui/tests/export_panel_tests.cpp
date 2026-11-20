@@ -1407,6 +1407,24 @@ void currentRenderStrip(TestContext& context) {
     rig.editor->setCurrentRenderExpanded(false);
 }
 
+// #749: a preset save that did not reach the store is shown with its cause until a save lands.
+void presetSaveFailure(TestContext& context) {
+    Rig rig;
+    rig.threeJobs();
+    context.expect(!rig.shown("exportPresetSaveFailure"), "no preset notice while saves land");
+    rig.port.setPresetSaveFailure("The saved presets file could not be replaced: Access is denied. (5)");
+    rig.publish([](host::ExportQueueSnapshot& snapshot) { ++snapshot.catalogueRevision; });
+    auto* notice = rig.find<kit::KLabel>("exportPresetSaveFailure");
+    context.expect(rig.shown("exportPresetSaveFailure") &&
+                       notice->text().contains(QStringLiteral("could not be saved")) &&
+                       notice->text().contains(QStringLiteral("Access is denied. (5)")) &&
+                       notice->text().contains(QStringLiteral("saves them all again")),
+                   "a failed preset save is shown with its cause and what happens next");
+    rig.port.setPresetSaveFailure(std::nullopt);
+    rig.publish([](host::ExportQueueSnapshot& snapshot) { ++snapshot.catalogueRevision; });
+    context.expect(!rig.shown("exportPresetSaveFailure"), "the notice goes once a save lands");
+}
+
 void waitingForViewer(TestContext& context) {
     Rig rig;
     rig.publish([&](host::ExportQueueSnapshot& snapshot) {
@@ -1772,6 +1790,7 @@ int main(int argc, char** argv) {
     dragFromAssets(context);
     dropManyFromAssets(context);
     currentRenderStrip(context);
+    presetSaveFailure(context);
     waitingForViewer(context);
     statusWording(context);
     startedAndRenderTime(context);

@@ -270,6 +270,14 @@ void ExportEditor::buildStrip() {
     barLayout->addWidget(stripBar_, 1);
     barLayout->addStretch(0);
     rows->addWidget(barRow);
+    presetNotice_ = new kit::KLabel(strip_);
+    presetNotice_->setObjectName(QStringLiteral("exportPresetSaveFailure"));
+    presetNotice_->setTone(kit::Color::Error);
+    presetNotice_->setWordWrap(true);
+    presetNotice_->setContentsMargins(kit::px(kit::Size::Control) + kit::px(kit::Spacing::XS), 0, 0,
+                                      kit::px(kit::Spacing::S));
+    presetNotice_->hide();
+    rows->addWidget(presetNotice_);
     connect(stripToggle_, &QAbstractButton::clicked, this,
             [this] { setCurrentRenderExpanded(!stripExpanded_); });
     setCurrentRenderExpanded(QSettings().value(QString::fromLatin1(kStripKey), false).toBool());
@@ -657,6 +665,16 @@ void ExportEditor::updateStrip() {
         stripBar_->setBusy();
     else
         stripBar_->setProgress(0, 1);
+    // A preset save that did not reach the store stays reported until a later save lands.
+    const auto catalogue = adapter_->catalogue();
+    if (catalogue != nullptr && catalogue->userPresetSaveFailure.has_value()) {
+        presetNotice_->setText(tr("Your export presets could not be saved: %1. They are kept while Bloom "
+                                  "runs, and the next change to them saves them all again.")
+                                   .arg(qs(*catalogue->userPresetSaveFailure)));
+        presetNotice_->show();
+    } else {
+        presetNotice_->hide();
+    }
 }
 
 // ---- Drag and drop: jobs moved inside the list, compositions dropped from Assets.

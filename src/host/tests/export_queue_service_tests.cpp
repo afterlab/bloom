@@ -484,6 +484,114 @@ void testUserPresets() {
 
 // Issue #561: the vertical short-form preset is H.264 MP4 with a target bit rate; the bit rate
 // survives the user-preset store and the JSON the scripting and MCP surfaces read and write.
+// A store write that cannot put the file in place is reported with the system's cause, keeps every
+// change, never makes the store refuse a later save, and the next save writes all of them (#749:
+// on Windows another program holding the store made the rename fail, the save was lost and the
+// store refused every later one).
+void testUserPresetSaveFailure() {
+    const auto folder = scratch("presets-failure");
+    runtime::TaskScheduler scheduler;
+    {
+        auto catalogue = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+        const auto initial = catalogue->snapshot()->revision;
+        catalogue->loadUserPresets(scheduler);
+        expect(bloom::test_support::awaitCondition(
+                   "the empty preset store loads",
+                   [&] { return catalogue->snapshot()->revision != initial; }),
+               "the empty preset store loads");
+        // A folder where the store file belongs: no platform replaces it with a file.
+        const auto store = folder / "export-presets.json";
+        std::filesystem::create_directories(store / "occupied");
+        expect(catalogue->saveUserPreset("Kept", {}) == host::ExportUserPresetStatus::Accepted,
+               "a save is accepted while the store cannot be replaced");
+        expect(bloom::test_support::awaitCondition(
+                   "the failed preset save is reported",
+                   [&] { return catalogue->snapshot()->userPresetSaveFailure.has_value(); }),
+               "the failed preset save is reported");
+        const auto failed = catalogue->snapshot();
+        const auto message = failed->userPresetSaveFailure.value_or("");
+        expect(message.find("export-presets.json could not be replaced: ") != std::string::npos &&
+                   message.back() == ')',
+               "the report names the store and the system's cause: " + message);
+        expect(std::ranges::any_of(failed->presets,
+                                   [](const auto& preset) { return preset.displayName == "Kept"; }),
+               "the unsaved preset stays listed");
+        std::filesystem::remove_all(store);
+        expect(catalogue->saveUserPreset("Next", {}) == host::ExportUserPresetStatus::Accepted,
+               "the store does not refuse the next save");
+        const auto holds = [&](const std::string_view name) {
+            std::ifstream file(store, std::ios::binary);
+            const std::string text{std::istreambuf_iterator<char>(file), {}};
+            return text.find(name) != std::string::npos;
+        };
+        expect(bloom::test_support::awaitCondition(
+                   "the next save writes both presets",
+                   [&] { return holds("\"Kept\"") && holds("\"Next\""); }),
+               "the next save writes the unsaved preset with it");
+        expect(bloom::test_support::awaitCondition(
+                   "the landed write clears the report",
+                   [&] { return !catalogue->snapshot()->userPresetSaveFailure.has_value(); }),
+               "a write that lands clears the report");
+    }
+    scheduler.beginShutdown();
+    expect(bloom::test_support::awaitCondition("the preset scheduler is quiescent",
+                                               [&] { return scheduler.isQuiescent(); }),
+           "the preset scheduler is quiescent");
+}
+
+#if defined(_WIN32)
+// Windows: another program holding the store open (no delete sharing, as a scanner opens it) makes
+// the replace fail with a sharing violation. The write tries again, and lands once the hold ends.
+void testUserPresetStoreHeld() {
+    const auto folder = scratch("presets-held");
+    const auto store = folder / "export-presets.json";
+    runtime::TaskScheduler scheduler;
+    std::atomic<int> refusals{0};
+    std::atomic<HANDLE> hold{INVALID_HANDLE_VALUE};
+    {
+        auto catalogue = host::ExportPresetCatalogue::create(
+            {.userDataDirectory = folder, .initialEncoders = linuxEncoders()});
+        catalogue->setStoreReplaceRefusedForTest([&](int) {
+            // The hold ends after the first refusal; the next attempt must land.
+            if (++refusals == 1)
+                CloseHandle(hold.exchange(INVALID_HANDLE_VALUE));
+        });
+        const auto initial = catalogue->snapshot()->revision;
+        catalogue->loadUserPresets(scheduler);
+        expect(bloom::test_support::awaitCondition(
+                   "the held store loads", [&] { return catalogue->snapshot()->revision != initial; }),
+               "the held store loads");
+        const auto holds = [&](const std::string_view name) {
+            std::ifstream file(store, std::ios::binary);
+            const std::string text{std::istreambuf_iterator<char>(file), {}};
+            return text.find(name) != std::string::npos;
+        };
+        expect(catalogue->saveUserPreset("First", {}) == host::ExportUserPresetStatus::Accepted &&
+                   bloom::test_support::awaitCondition("the first preset is written",
+                                                       [&] { return holds("\"First\""); }),
+               "the first preset is written");
+        hold = CreateFileW(store.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+        expect(hold.load() != INVALID_HANDLE_VALUE, "another program holds the store open");
+        expect(catalogue->saveUserPreset("Second", {}) == host::ExportUserPresetStatus::Accepted,
+               "a save is accepted while the store is held");
+        expect(bloom::test_support::awaitCondition("the held save lands after the hold ends",
+                                                   [&] { return holds("\"Second\""); }),
+               "the save lands once the hold ends");
+        expect(refusals.load() >= 1, "the held store refused the replace before it landed");
+        expect(!catalogue->snapshot()->userPresetSaveFailure.has_value(),
+               "a save that landed after a hold reports no failure");
+    }
+    if (const auto left = hold.exchange(INVALID_HANDLE_VALUE); left != INVALID_HANDLE_VALUE)
+        CloseHandle(left);
+    scheduler.beginShutdown();
+    expect(bloom::test_support::awaitCondition("the held-store scheduler is quiescent",
+                                               [&] { return scheduler.isQuiescent(); }),
+           "the held-store scheduler is quiescent");
+}
+#endif
+
 void testVerticalVideoPreset() {
     const auto preset = host::builtInExportPreset("builtin:vertical-video-h264");
     expect(preset && preset->settings.format == document::ExportFormat::H264Mp4 &&
@@ -1795,6 +1903,10 @@ int main() {
         testFormatTokens();
         testDestinationForPath();
         testUserPresets();
+        testUserPresetSaveFailure();
+#if defined(_WIN32)
+        testUserPresetStoreHeld();
+#endif
         testVerticalVideoPreset();
         testLifecycle();
         testSequencePublishesInFrameOrder();

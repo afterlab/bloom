@@ -365,8 +365,8 @@ std::optional<QString> OutputModuleDialog::saveAsPreset(const QString& name) {
     case host::ExportUserPresetStatus::NameInvalid:
         return refuse(tr("Enter a preset name without tabs or line breaks."));
     case host::ExportUserPresetStatus::StoreUnavailable:
-        return refuse(tr("Presets cannot be saved right now: Bloom could not read or write your "
-                         "saved presets."));
+        return refuse(tr("Presets cannot be saved right now: Bloom could not read your saved "
+                         "presets."));
     default:
         return refuse(tr("The preset could not be saved."));
     }

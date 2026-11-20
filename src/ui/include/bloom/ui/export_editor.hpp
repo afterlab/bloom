@@ -170,6 +170,8 @@ class ExportEditor final : public QWidget, public EditorChromeProvider {
     kit::KIconButton* stripToggle_ = nullptr;
     kit::KLabel* stripText_ = nullptr;
     kit::KProgressBar* stripBar_ = nullptr;
+    // Why the export presets could not be saved, while that is so (#749).
+    kit::KLabel* presetNotice_ = nullptr;
     QStackedWidget* pages_ = nullptr;
     exportpanel::RenderList* list_ = nullptr;
     kit::KSurface* emptyPage_ = nullptr;

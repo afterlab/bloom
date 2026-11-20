@@ -360,6 +360,14 @@ class FakeExportPort final : public ExportQueuePort {
         return host::ExportUserPresetStatus::Accepted;
     }
 
+    // The fake catalogue's report of a preset save that did not reach the store.
+    void setPresetSaveFailure(std::optional<std::string> failure) {
+        auto next = std::make_shared<host::ExportPresetCatalogueSnapshot>(*catalogue_);
+        next->userPresetSaveFailure = std::move(failure);
+        ++next->revision;
+        catalogue_ = std::move(next);
+    }
+
   private:
     host::ExportCommandResult session(const std::string& what) {
         calls.push_back(what);

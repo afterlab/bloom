@@ -3,14 +3,25 @@
 #include <bloom/core/float_chars.hpp>
 #include <bloom/output/media_output.hpp>
 
+#include <algorithm>
 #include <array>
+#include <chrono>
 #include <charconv>
 #include <cstdio>
 #include <fstream>
 #include <map>
 #include <memory>
+#include <optional>
 #include <sstream>
+#include <string>
 #include <system_error>
+#include <thread>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #include <variant>
 
 namespace bloom::host {
@@ -467,8 +478,58 @@ readExportUserPresets(const std::filesystem::path& path) {
     return records;
 }
 
-bool writeExportUserPresets(const std::filesystem::path& path,
-                            const std::vector<ExportUserPresetRecord>& records) {
+namespace {
+std::string systemCause(const std::error_code& error) {
+    return error.message() + " (" + std::to_string(error.value()) + ")";
+}
+// Puts `temporary` in place of `path`, replacing it. Empty on success, else the system's error.
+std::optional<std::error_code> replaceStore(const std::filesystem::path& temporary,
+                                            const std::filesystem::path& path) {
+#if defined(_WIN32)
+    // ReplaceFileW keeps the store's own attributes and security; it needs an existing store.
+    if (ReplaceFileW(path.c_str(), temporary.c_str(), nullptr, REPLACEFILE_IGNORE_MERGE_ERRORS,
+                     nullptr, nullptr))
+        return std::nullopt;
+    auto error = GetLastError();
+    if (error == ERROR_FILE_NOT_FOUND) {
+        if (MoveFileExW(temporary.c_str(), path.c_str(),
+                        MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+            return std::nullopt;
+        error = GetLastError();
+    }
+    return std::error_code(static_cast<int>(error), std::system_category());
+#else
+    std::error_code error;
+    std::filesystem::rename(temporary, path, error);
+    if (!error)
+        return std::nullopt;
+    return error;
+#endif
+}
+// Another program holding the store for a moment: worth another attempt.
+bool momentary(const std::error_code& error) {
+#if defined(_WIN32)
+    switch (static_cast<DWORD>(error.value())) {
+    case ERROR_SHARING_VIOLATION:
+    case ERROR_ACCESS_DENIED:
+    case ERROR_LOCK_VIOLATION:
+    case ERROR_UNABLE_TO_REMOVE_REPLACED:
+    case ERROR_UNABLE_TO_MOVE_REPLACEMENT:
+        return true;
+    default:
+        return false;
+    }
+#else
+    // POSIX rename has no sharing modes: a refusal does not pass by itself.
+    static_cast<void>(error);
+    return false;
+#endif
+}
+} // namespace
+
+std::optional<std::string> writeExportUserPresets(const std::filesystem::path& path,
+                                                  const std::vector<ExportUserPresetRecord>& records,
+                                                  const std::function<void(int)>& refused) {
     std::string text = "{\"format\":";
     quote(text, kExportPresetStoreFormat);
     text += ",\"version\":" + std::to_string(kExportPresetStoreVersion) + ",\"presets\":[";
@@ -486,15 +547,36 @@ bool writeExportUserPresets(const std::filesystem::path& path,
     std::filesystem::create_directories(path.parent_path(), error);
     auto temporary = path;
     temporary += ".tmp";
+    const auto removeTemporary = [&] {
+        std::error_code ignored;
+        std::filesystem::remove(temporary, ignored);
+    };
     {
         std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
         stream << text;
         stream.flush();
-        if (!stream)
-            return false;
+        if (!stream) {
+            removeTemporary();
+            return "The presets could not be written to " + temporary.string();
+        }
     }
-    std::filesystem::rename(temporary, path, error);
-    return !error;
+    const auto until = std::chrono::steady_clock::now() + kExportPresetStoreReplaceWindow;
+    auto pause = std::chrono::milliseconds(10);
+    for (int attempt = 1;; ++attempt) {
+        const auto failed = replaceStore(temporary, path);
+        if (!failed)
+            return std::nullopt;
+        if (!momentary(*failed) || std::chrono::steady_clock::now() >= until) {
+            removeTemporary();
+            return "The saved presets file " + path.string() + " could not be replaced: " +
+                   systemCause(*failed);
+        }
+        if (refused)
+            refused(attempt);
+        // Bounded by the window above; this runs on a blocking-I/O worker, never the UI thread.
+        std::this_thread::sleep_for(pause);
+        pause = std::min(pause * 2, std::chrono::milliseconds(200));
+    }
 }
 
 ExportEncoderStatus probeExportEncoders(const ExportEncoderStatus& initial) {

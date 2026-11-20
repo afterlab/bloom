@@ -215,6 +215,10 @@ struct ExportPresetCatalogueSnapshot final {
     ExportEncoderStatus encoders;
     // exportFormatDescriptions(): the codec-profile and compression tokens per format.
     std::vector<ExportFormatDescription> formats;
+    // Why the last write of the user presets did not reach the store, with the system's cause; the
+    // presets above still hold every change, and the next change writes them all again. Empty
+    // once a write has landed.
+    std::optional<std::string> userPresetSaveFailure;
 };
 
 inline constexpr std::string_view kExportDefaultVideoPresetId = "builtin:h264-mp4";
@@ -400,6 +404,9 @@ class ExportPresetCatalogue final {
     [[nodiscard]] ExportUserPresetStatus renameUserPreset(std::string_view id,
                                                           std::string_view displayName);
     [[nodiscard]] ExportUserPresetStatus deleteUserPreset(std::string_view id);
+    // Test seam: called on the writing worker each time putting the written store in place was
+    // refused and will be tried again, with the attempt's number (from 1). Set before saving.
+    void setStoreReplaceRefusedForTest(std::function<void(int)> refused);
 
   private:
     explicit ExportPresetCatalogue(ExportPresetCatalogueOptions options);

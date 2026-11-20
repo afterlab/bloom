@@ -605,7 +605,11 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
     mutable std::mutex mutex;
     std::vector<ExportUserPresetRecord> user;
     bool storeLoaded = false;
+    // The store could not be read: it is left untouched and no change is written over it.
     bool storeFailed = false;
+    // The last write did not land (ExportPresetCatalogueSnapshot::userPresetSaveFailure).
+    std::optional<std::string> saveFailure;
+    std::function<void(int)> storeReplaceRefused;
     ExportEncoderStatus encoders;
     // A refreshEncoders() probe is running; waiters wake when it answers (#683).
     bool probing = false;
@@ -629,6 +633,7 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
         snapshot->revision = revision;
         snapshot->encoders = encoders;
         snapshot->formats = exportFormatDescriptions();
+        snapshot->userPresetSaveFailure = saveFailure;
         const auto make = [&](std::string id, std::string name, std::string description,
                               ExportPresetCategory category, ExportPresetOrigin origin,
                               const ExportOutputSettings& settings, bool dependent) {
@@ -674,23 +679,30 @@ struct ExportPresetCatalogue::State : std::enable_shared_from_this<State> {
         storeWrites->newest.store(generation, std::memory_order_release);
         auto records = user;
         auto path = *options.userDataDirectory / kExportPresetStoreFileName;
+        auto refused = storeReplaceRefused;
         [[maybe_unused]] auto submitted = scheduler->submit<void>(
             runtime::TaskRequest("Save export presets",
                                  {runtime::TaskOwnerKind::Export, runtime::TaskOwnerId::fromRaw(1)},
                                  runtime::TaskPriority::Background,
                                  runtime::TaskExecutor::BlockingIo),
             [weak = weak_from_this(), writes = storeWrites, generation,
-             records = std::move(records), path = std::move(path)](runtime::TaskContext&) {
+             records = std::move(records), path = std::move(path),
+             refused = std::move(refused)](runtime::TaskContext&) {
                 // A newer write supersedes this one; a catalogue already gone still persists
                 // its last change. Two workers never write the file at once, and an older
-                // write never lands after a newer one.
+                // write never lands after a newer one. Every write carries all the presets, so
+                // one that fails is made good by the next change's write; the presets in memory
+                // keep the change, and the store never refuses a later one.
                 std::scoped_lock order(writes->mutex);
                 if (generation != writes->newest.load(std::memory_order_acquire))
                     return runtime::TaskResult<void>::succeeded();
+                auto failure = writeExportUserPresets(path, records, refused);
                 const auto self = weak.lock();
-                if (!writeExportUserPresets(path, records) && self) {
-                    std::scoped_lock lock(self->mutex);
-                    self->storeFailed = true;
+                if (!self)
+                    return runtime::TaskResult<void>::succeeded();
+                std::scoped_lock lock(self->mutex);
+                if (self->saveFailure != failure) {
+                    self->saveFailure = std::move(failure);
                     self->changed();
                 }
                 return runtime::TaskResult<void>::succeeded();
@@ -912,6 +924,11 @@ ExportUserPresetStatus ExportPresetCatalogue::renameUserPreset(const std::string
     state_->changed();
     state_->scheduleWrite();
     return ExportUserPresetStatus::Accepted;
+}
+
+void ExportPresetCatalogue::setStoreReplaceRefusedForTest(std::function<void(int)> refused) {
+    std::scoped_lock lock(state_->mutex);
+    state_->storeReplaceRefused = std::move(refused);
 }
 
 ExportUserPresetStatus ExportPresetCatalogue::deleteUserPreset(const std::string_view id) {

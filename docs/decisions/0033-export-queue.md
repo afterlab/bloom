@@ -83,7 +83,14 @@ every job **Ready**.
 
 **Preferences** (per user, outside projects, not undoable): user presets, stored as a versioned
 JSON file (`bloom.export-presets`, version 1) in the platform user-data directory and read and
-written on the blocking-I/O executor.
+written on the blocking-I/O executor. A write goes to a sibling temporary file that then replaces
+the store (on Windows with `ReplaceFileW`, or `MoveFileExW` for a store that does not exist yet).
+Another program holding the store for a moment (a scanner, an indexer) refuses that replace with a
+sharing violation or access denied, so it is tried again for at most two seconds. A write that still
+does not land is reported with the system's cause (`ExportPresetCatalogueSnapshot::
+userPresetSaveFailure`, shown under the Export editor's Current Render line). The presets in memory
+keep every change, and the next change writes them all. A store that could not be read refuses
+changes so it is never written over; a failed write never does (#749).
 
 The service reads project truth only from the session's published immutable snapshots. Queue edits
 are ordinary commands, so they share validation, dirty state, undo and the event path with every
