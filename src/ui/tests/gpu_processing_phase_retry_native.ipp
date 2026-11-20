@@ -39,15 +39,31 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
         options.previewByteAllowance = 32ULL * 1024 * 1024;
         std::atomic_size_t prepared{0};
         std::atomic_size_t cpu{0};
+        // What the GPU stage answered, said when the check below fails.
+        auto stageNote = std::make_shared<std::pair<std::mutex, std::string>>();
         GpuPreviewDisplayService service(
             scheduler,
-            [actualGpu, &prepared](const document::Snapshot& snapshot,
-                                   const PreviewRequestIdentity& identity, const std::size_t limit,
-                                   const std::vector<runtime::SnapshotParameterOverride>& overrides,
-                                   TaskContext& context) {
+            [actualGpu, &prepared,
+             stageNote](const document::Snapshot& snapshot, const PreviewRequestIdentity& identity,
+                        const std::size_t limit,
+                        const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                        TaskContext& context) {
                 auto result = actualGpu(snapshot, identity, limit, overrides, context);
                 if (result.value() && *result.value() && (*result.value())->stage)
                     prepared.fetch_add(1);
+                std::string note = "state=" + std::to_string(static_cast<int>(result.state()));
+                if (result.value() && *result.value()) {
+                    note +=
+                        " status=" + std::to_string(static_cast<int>((*result.value())->status));
+                    for (const auto& diagnostic : (*result.value())->diagnostics)
+                        note += " [" + diagnostic.code + ": " + diagnostic.summary + " " +
+                                diagnostic.detail + "]";
+                }
+                for (const auto& diagnostic : result.diagnostics())
+                    note += " [" + diagnostic.code + ": " + diagnostic.summary + " " +
+                            diagnostic.detail + "]";
+                const std::lock_guard lock(stageNote->first);
+                stageNote->second += note + ";";
                 return result;
             },
             [actualCpu, &cpu](const document::Snapshot& snapshot,
@@ -75,12 +91,38 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
             snapshot, identity, kBudget, {});
         auto result = submission.accepted() ? awaitResult(submission.handle) : std::nullopt;
         const auto frame = result ? residentFrameOf(*result) : nullptr;
-        checks.expect(frame && hasCpuPixels(frame) && !isResident(frame) && prepared.load() == 1 &&
-                          cpu.load() == 1 && service.status().counters.residentGraphJobs == 0 &&
-                          service.status().residentDetail.find("ineligible") != std::string::npos &&
-                          policy->snapshot().reservations.admittedPhases == 0,
-                      "actual ineligible prepared scene releases all own aliases before count-one "
-                      "CPU fallback");
+        const auto fallbackStatus = service.status();
+        const auto admittedPhases = policy->snapshot().reservations.admittedPhases;
+        const bool fellBack =
+            frame && hasCpuPixels(frame) && !isResident(frame) && prepared.load() == 1 &&
+            cpu.load() == 1 && fallbackStatus.counters.residentGraphJobs == 0 &&
+            fallbackStatus.residentDetail.find("ineligible") != std::string::npos &&
+            admittedPhases == 0;
+        if (!fellBack)
+            std::cerr << "count-one fallback: frame=" << (frame != nullptr)
+                      << " cpuPixels=" << (frame && hasCpuPixels(frame))
+                      << " resident=" << (frame && isResident(frame))
+                      << " prepared=" << prepared.load() << " cpu=" << cpu.load()
+                      << " residentGraphJobs=" << fallbackStatus.counters.residentGraphJobs
+                      << " admittedPhases=" << admittedPhases << " detail=\""
+                      << fallbackStatus.residentDetail << "\" presentation="
+                      << static_cast<int>(fallbackStatus.presentationAvailability) << " \""
+                      << fallbackStatus.presentationDetail
+                      << "\" admissionRefusals=" << fallbackStatus.counters.gpuAdmissionRefusals
+                      << " fallbackReasons=" <<
+                [&] {
+                    std::string reasons;
+                    for (const auto count : fallbackStatus.counters.cpuFallbacksByReason)
+                        reasons += std::to_string(count) + ",";
+                    return reasons;
+                }() << " gpuStage=\""
+                      <<
+                [&] {
+                    const std::lock_guard lock(stageNote->first);
+                    return stageNote->second;
+                }() << "\"\n";
+        checks.expect(fellBack, "actual ineligible prepared scene releases all own aliases before "
+                                "count-one CPU fallback");
         service.beginShutdown();
         checks.expect(
             awaitProof("count-one fallback service stops safely", [&] { return service.status().state == GpuPreviewDisplayServiceState::Stopped; }),

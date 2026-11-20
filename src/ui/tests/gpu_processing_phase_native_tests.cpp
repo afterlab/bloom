@@ -14,7 +14,10 @@
 
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
+#include <string>
+#include <utility>
 
 using namespace bloom;
 using namespace bloom::ui::verticalproof;
