@@ -160,6 +160,8 @@ void releaseProcessingPhase(const std::shared_ptr<PreviewDisplayServiceCore>& co
     }
     // Dispose the prepared scene before terminal publication or admitting a fallback. A sticky
     // generation slot independently keeps the conservative lease charged through native teardown.
+    // The packed host storage prepared for its transfer is charged to the same phase (#750).
+    stage->preparedPackedHost.reset();
     stage->gpuStage.reset();
     // #730: the frame's scope measure goes with the phase (the stepper before the work it reads).
     stage->scopeStepper.reset();
@@ -748,6 +750,8 @@ void handleGpuStageChildResult(const std::shared_ptr<PreviewDisplayServiceCore>&
         // The child result still aliases this prepared scene until the caller finishes consuming
         // it. Defer fallback admission until that result and every service-owned scene alias are
         // disposed; otherwise a count-one root would contend with its own abandoned preparation.
+        // The packed host storage prepared for the transfer is one of those aliases (#750).
+        stage->preparedPackedHost.reset();
         stage->gpuStage.reset();
         stage->residentProcessor.reset();
         stage->phase = StagePhase::AwaitingCpuFallbackDispatch;
@@ -889,6 +893,7 @@ void processResidentNativeDisplay(const std::shared_ptr<PreviewDisplayServiceCor
             if (phase)
                 diagnostic.admissionRetry =
                     TaskAdmissionRetry{phase->revisionAfterOwnRelease(), true};
+            stage->preparedPackedHost.reset();
             stage->gpuStage.reset();
             completeFailed(stage, {std::move(diagnostic)});
             return;

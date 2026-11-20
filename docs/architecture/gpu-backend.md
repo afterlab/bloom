@@ -2059,6 +2059,15 @@ readiness and external-capacity-release retries retain one active/newest intent,
 own disposal, cancel safely on shutdown, and preserve warm exact-cache reuse when no new phase is
 needed. They do not create a polling loop or silently move GPU work to CPU.
 
+A preview frame that leaves the GPU route gives back every alias of its phase before its CPU
+fallback is admitted or its refusal is reported: the prepared scene, and on the `GpuPreparedPacked`
+product the packed host pixels prepared for its transfer, which are charged to the same phase. A
+count-one root otherwise refuses the fallback against the frame's own abandoned preparation (#750).
+`bloom.ui.gpu_processing_phase_native` proves these phase checks on the NativeResident route, whose
+presentation is Wayland's, on Linux; `bloom.ui.gpu_processing_phase_packed` runs the same checks on
+the `GpuPreparedPacked` product with presentation disabled, which the application runs, on Linux,
+macOS and Windows.
+
 The sampled host policy may release a previously observed constraint only using fresh complete
 paired data in the same verified visible view and explicit removal for every remembered finite
 domain. It does not prove hidden limits absent; the exact proof and reusable-retention recovery
