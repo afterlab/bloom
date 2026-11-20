@@ -1,4 +1,5 @@
 // Real production scene -> native display -> registry refusal/recovery, without a desktop window.
+#include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/commands/command_stack.hpp>
@@ -13,10 +14,22 @@
 
 #include <iostream>
 #include <memory>
+#include <optional>
 
 using namespace bloom;
 using namespace bloom::ui::verticalproof;
 using namespace std::chrono_literals;
+
+namespace {
+// Every service here plans for a stated card: the driver's live budget moves with every other
+// program on the device, and admission would move with it. The host reading is injected below.
+[[nodiscard]] runtime::GpuPreviewDisplayServiceOptions
+phaseServiceOptions(const std::filesystem::path& loader) {
+    auto options = serviceOptions(loader);
+    options.deviceMemoryLimitBytes = test_support::kFixedDeviceMemoryBytes;
+    return options;
+}
+} // namespace
 
 #include "gpu_processing_phase_retry_native.ipp"
 
@@ -68,7 +81,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const runtime::CpuReferenceDisplayPreparer referenceDisplay;
     // Early disabled/unavailable CPU roots must reserve before their heavy callback, independently
     // of native startup. The same root/count is shared with the native producer below.
-    auto disabledOptions = serviceOptions(parsed.loader_path);
+    auto disabledOptions = phaseServiceOptions(parsed.loader_path);
     disabledOptions.enabled = false;
     disabledOptions.processingPhasePolicy = policy;
     std::atomic_size_t cpuPreparations{0};
@@ -110,7 +123,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     acceptedCpuResult.reset();
     disabledService.beginShutdown();
     { // Release this completed owner slot before constructing the resident service below.
-        auto legacyOptions = serviceOptions(parsed.loader_path);
+        auto legacyOptions = phaseServiceOptions(parsed.loader_path);
         legacyOptions.presentation = GpuPreviewDisplayServicePresentationMode::Disabled;
         legacyOptions.processingPhasePolicy = policy;
         std::atomic_size_t legacyPreparations{0};
@@ -214,9 +227,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     nativeImageCacheRetryChecks(checks, fixture, scheduler, parsed.loader_path, referenceDisplay);
     if (checks.failures() != 0)
         return 1;
-    auto options = serviceOptions(parsed.loader_path);
+    auto options = phaseServiceOptions(parsed.loader_path);
     options.processingPhasePolicy = policy;
-    // Exactly one Full packed-size native image fits. A second live publication must refuse.
+    // The configured lease ceiling holds exactly one Full packed-size native image. It bounds the
+    // resident frame cache only: the lease registry takes the whole device pool (#425,
+    // gpu-backend.md "One device ceiling"), so a second live frame beside the first is still
+    // published while the device has room, and never becomes a CPU frame (#539).
     options.residentLeaseBudgets.maxBytes = 12ULL * 1024 * 1024;
     GpuPreviewDisplayService service(scheduler, fixture.productionGpuStage(),
                                      fixture.productionCpuStage(),
@@ -252,22 +268,34 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto firstFrame = firstResult ? residentFrameOf(*firstResult) : nullptr;
     checks.expect(isResident(firstFrame), "first solid/text frame is genuinely GPU resident");
     firstResult.reset();
-    const auto beforeRefusal = service.status().counters;
-    auto refusedResult = submit(2);
-    const auto fallback = refusedResult ? residentFrameOf(*refusedResult) : nullptr;
-    checks.expect(fallback && hasCpuPixels(fallback) && !isResident(fallback),
-                  "post-fence registry pressure produces an explicit CPU fallback");
+    const auto beforeSecond = service.status().counters;
+    auto secondResult = submit(2);
+    const auto second = secondResult ? residentFrameOf(*secondResult) : nullptr;
+    const auto leaseBytes = [](const std::shared_ptr<const runtime::PreparedPreviewFrame>& frame) {
+        return isResident(frame) && frame->residentFrame()
+                   ? frame->residentFrame()->lease().allocationBytes()
+                   : std::uint64_t{0};
+    };
+    checks.expect(isResident(firstFrame) && isResident(second) && !hasCpuPixels(second) &&
+                      second != firstFrame &&
+                      &second->residentFrame()->lease() != &firstFrame->residentFrame()->lease() &&
+                      leaseBytes(firstFrame) + leaseBytes(second) >
+                          options.residentLeaseBudgets.maxBytes,
+                  "a second live frame beside the first, together over the lease ceiling, is "
+                  "published resident");
     checks.expect(service.status().counters.residentGraphJobs ==
-                      beforeRefusal.residentGraphJobs + 1,
-                  "registry refusal follows an actual native scene and display");
+                          beforeSecond.residentGraphJobs + 1 &&
+                      service.status().counters.cpuFallbacks == beforeSecond.cpuFallbacks,
+                  "the second frame is an actual native scene and display, never a CPU frame");
     checks.expect(policy->snapshot().reservations.unprovenPhases == 0 &&
                       policy->snapshot().reservations.admittedPhases == 0,
-                  "positive native retirement releases the phase despite publication refusal");
+                  "positive native retirement releases the phase of each published frame");
     firstFrame.reset();
+    secondResult.reset();
     auto recoveredResult = submit(3);
     const auto recovered = recoveredResult ? residentFrameOf(*recoveredResult) : nullptr;
-    checks.expect(isResident(recovered),
-                  "released registry capacity admits the next genuine GPU frame");
+    checks.expect(isResident(recovered) && recovered != second,
+                  "the next frame after the first is released is a genuine GPU frame");
     checks.expect(policy->snapshot().reservations.admittedPhases == 0,
                   "successful publication releases both phase quotas before terminal delivery");
     service.beginShutdown();
@@ -279,6 +307,6 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the native phase service retires without an unproven phase");
     if (checks.failures() != 0)
         return 1;
-    std::cout << "PASS: 1080p solid/text native phase registry refusal and recovery\n";
+    std::cout << "PASS: 1080p solid/text native phase publication beside a live frame\n";
     return 0;
 }
