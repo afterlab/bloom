@@ -56,14 +56,14 @@ int main() {
                                        "-4,2,1",
                                        "99999999999999999999999,1,1"})
         expect(!parseTestFixedMemoryReading(bad).has_value(), bad);
-    // This test is registered with FIXED_MEMORY, so the process itself has the reading the
-    // registration hands out, and it is the one the build declares.
+    // bloom_add_test gives every registered test the reading, so the process itself has the
+    // reading the registration hands out, and it is the one the build declares.
     const auto& own = bloom::core::testFixedMemoryReading();
     const auto declared = parseTestFixedMemoryReading(BLOOM_TEST_FIXED_MEMORY_READING_VALUE);
     expect(own.has_value() && declared.has_value() &&
                own->physicalBytes == declared->physicalBytes &&
                own->availableBytes == declared->availableBytes &&
                own->deviceBytes == declared->deviceBytes,
-           "a FIXED_MEMORY test's process reads the declared reading from its environment");
+           "a registered test's process reads the declared reading from its environment");
     return failures == 0 ? 0 : 1;
 }
