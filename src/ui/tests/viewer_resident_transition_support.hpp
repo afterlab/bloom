@@ -14,6 +14,10 @@ struct NativeTransitionGate final {
     std::atomic<bool> displayArmed{false};
     std::atomic<bool> displayRetiring{false};
     std::atomic<bool> completionRetained{false};
+    // Holds the display pass the same way, for work whose scene the executor serves from its cache
+    // (a layer moved by a drag is the same scene content, shown at a new place).
+    std::atomic<bool> displayHold{false};
+    std::atomic<bool> displaySubmitted{false};
 };
 
 [[nodiscard]] std::shared_ptr<NativeTransitionGate> installTransitionGate(
@@ -22,15 +26,22 @@ struct NativeTransitionGate final {
     const std::weak_ptr<bloom::runtime::detail::PreviewDisplayServiceCore> weakCore(core);
     core->residentExecutorPollOverride = [gate,
                                           weakCore](bloom::runtime::GpuSceneExecutor& executor) {
-        if (gate->submitted.load(std::memory_order_acquire) &&
-            gate->armed.load(std::memory_order_acquire)) {
-            const auto owner = weakCore.lock();
-            if (owner && owner->residentNativeActive &&
-                owner->residentNativeActive->cancellationRequested &&
-                gate->failNextPoll.exchange(false, std::memory_order_acq_rel)) {
-                return bloom::runtime::GpuSceneExecutorPollResult::WrongThread;
+        if (gate->armed.load(std::memory_order_acquire)) {
+            // A submission is observed before a poll can retire it (the device may already have
+            // finished it) and right after a poll makes one, so whether it is seen never depends
+            // on how fast the device runs the frame.
+            if (!gate->submitted.load(std::memory_order_acquire) &&
+                executor.hasUnretiredSubmission())
+                gate->submitted.store(true, std::memory_order_release);
+            if (gate->submitted.load(std::memory_order_acquire)) {
+                const auto owner = weakCore.lock();
+                if (owner && owner->residentNativeActive &&
+                    owner->residentNativeActive->cancellationRequested &&
+                    gate->failNextPoll.exchange(false, std::memory_order_acq_rel)) {
+                    return bloom::runtime::GpuSceneExecutorPollResult::WrongThread;
+                }
+                return bloom::runtime::GpuSceneExecutorPollResult::Pending;
             }
-            return bloom::runtime::GpuSceneExecutorPollResult::Pending;
         }
         if (gate->failNextPoll.exchange(false, std::memory_order_acq_rel)) {
             // Explicit typed poll-failure seam; this does not claim actual driver device loss.
@@ -58,6 +69,11 @@ struct NativeTransitionGate final {
     core->residentDisplayPollOverride =
         [gate, observeRetirement](bloom::render::GpuResidentDisplay& display) {
             observeRetirement();
+            if (gate->displayHold.load(std::memory_order_acquire) &&
+                display.hasUnretiredSubmission()) {
+                gate->displaySubmitted.store(true, std::memory_order_release);
+                return bloom::render::GpuResidentDisplayPollResult::Pending;
+            }
             if (gate->displayArmed.load(std::memory_order_acquire) &&
                 display.hasUnretiredSubmission()) {
                 // Neutral arm observation seam: a Failure cannot prove its real fence retired.
@@ -66,8 +82,12 @@ struct NativeTransitionGate final {
             return display.poll();
         };
     core->residentGeneralDisplayPollOverride =
-        [observeRetirement](bloom::runtime::GpuOcioDisplayArm& arm) {
+        [gate, observeRetirement](bloom::runtime::GpuOcioDisplayArm& arm) {
             observeRetirement();
+            if (gate->displayHold.load(std::memory_order_acquire) && arm.hasUnretiredSubmission()) {
+                gate->displaySubmitted.store(true, std::memory_order_release);
+                return bloom::runtime::GpuOcioExecutorPollResult::Pending;
+            }
             return arm.poll(); // General arm uses the native unknown-fence seam after real submit.
         };
     return gate;
@@ -260,32 +280,45 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     checks.expect(mappingReady, "the selected outline mapping is applied before the drag");
     if (!mappingReady)
         return false;
-    sendNativeMouse(window, container, QEvent::MouseButtonPress, centre, Qt::LeftButton,
+    // The press lands on the layer's body, away from its anchor handle at the centre: an anchor
+    // drag keeps the content in place, so its frame is the cached one and no native work would be
+    // submitted. A move reveals new content, which the device must render.
+    const QPointF body = centre + QPointF(60.0, 40.0);
+    sendNativeMouse(window, container, QEvent::MouseButtonPress, body, Qt::LeftButton,
                     Qt::LeftButton);
+    // The moved layer's scene may come from the executor's cache, so the drag's native work is the
+    // scene or, when the scene is cached, the display pass that shows it at its new place.
     gate->submitted.store(false, std::memory_order_release);
+    gate->displaySubmitted.store(false, std::memory_order_release);
     gate->armed.store(true, std::memory_order_release);
-    sendNativeMouse(window, container, QEvent::MouseMove, centre + QPointF(20.0, 10.0),
-                    Qt::NoButton, Qt::LeftButton);
+    gate->displayHold.store(true, std::memory_order_release);
+    sendNativeMouse(window, container, QEvent::MouseMove, body + QPointF(20.0, 10.0), Qt::NoButton,
+                    Qt::LeftButton);
     checks.expect(session.transformInteractionActive(),
                   "resolution change begins during real native direct manipulation");
     controller.requestRefresh();
-    const bool submitted = ui::verticalproof::awaitProof("the native submission starts", [&] {
-        return gate->submitted.load(std::memory_order_acquire);
-    });
+    const bool submitted =
+        ui::verticalproof::awaitProof("the drag's native submission starts", [&] {
+            return gate->submitted.load(std::memory_order_acquire) ||
+                   gate->displaySubmitted.load(std::memory_order_acquire);
+        });
+    std::cout << "DRAG_NATIVE scene=" << gate->submitted.load(std::memory_order_acquire)
+              << " display=" << gate->displaySubmitted.load(std::memory_order_acquire) << '\n';
     auto* dropdown = area.findChild<ui::kit::KDropdown*>("viewerResolutionDropdown");
     if (submitted && dropdown != nullptr)
         dropdown->setCurrentIndex(3);
     gate->armed.store(false, std::memory_order_release);
+    gate->displayHold.store(false, std::memory_order_release);
     const bool recovered =
         submitted && dropdown != nullptr && waitForTransitionIdentity(controller, trace);
     checks.expect(recovered, "active drag resolution change recovers exact native identity");
     // A real post-switch pointer event continues through the native input route. Escape then
     // explicitly chooses the documented no-command cancellation rather than guessing continuity.
-    sendNativeMouse(window, container, QEvent::MouseMove, centre + QPointF(30.0, 15.0),
-                    Qt::NoButton, Qt::LeftButton);
+    sendNativeMouse(window, container, QEvent::MouseMove, body + QPointF(30.0, 15.0), Qt::NoButton,
+                    Qt::LeftButton);
     QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
     QCoreApplication::sendEvent(&viewer, &escape);
-    sendNativeMouse(window, container, QEvent::MouseButtonRelease, centre, Qt::LeftButton,
+    sendNativeMouse(window, container, QEvent::MouseButtonRelease, body, Qt::LeftButton,
                     Qt::NoButton);
     checks.expect(!session.transformInteractionActive() &&
                       session.snapshot().revision() == revision,
