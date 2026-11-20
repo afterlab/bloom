@@ -30,6 +30,9 @@ void testColdBuilderToExecutor(Expectations& expectations, bloom::render::GpuDev
     std::filesystem::rename(fixture.path, held);
     const auto warm = builder.build(plan, warmRequest);
     std::filesystem::rename(held, fixture.path);
+    // A rename changes the file's change time (NTFS), so the later cases, which count
+    // identity-only reuse of this source, get it settled again (settled_file.hpp).
+    static_cast<void>(bloom::test_support::settleFileIdentity(fixture.path));
     expectations.expect(warm.hasValue(), "warm: rebuild prepares");
     if (warm) {
         expectations.expect(warm.scene->mediaStatistics().imageConversions == 1 &&
