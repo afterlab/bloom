@@ -3167,6 +3167,8 @@ if(TARGET Vulkan::Headers)
     target_link_libraries(bloom_ui_gpu_processing_phase_native_test
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
+    # Linux only: the NativeResident route's presentation is Wayland's (see above); the packed
+    # registration below proves the same checks on Linux, macOS and Windows.
     if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
             COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
