@@ -1716,6 +1716,33 @@ the driver does not answer (a device-local heap reporting a budget of zero) is a
 sample, never zero room, and a device without a usable sample is waited for. Before, a parallel
 test run that filled the GPU stopped an export as too large.
 
+**Unsampled capacity runs on a stated assumption (#751).** A capacity admission cannot sample
+used to keep every request waiting for a sample that never came: on a Linux host without `/sys`
+(a minimal container or sandbox) every process memory sample is incomplete, the host capacity
+stayed unsampled, and a headless render stopped as `export.capacity.stalled` after 30 seconds. Now
+a fresh host sample that cannot read the process memory limits or the machine's available memory
+admits against half of the physical memory (a fixed 2 GiB, `kUnsampledHostCapacityBytes`, when
+the physical memory is unknown too), never more than the memory measured available or a process
+limit still known, minus the RAM headroom as usual. A device whose live budget query is not
+answered (#709) admits against half of its device-local heap, minus the VRAM headroom; nothing is
+credited back against a budget nobody measured. A device report that does not even carry a heap
+size is still waited for (Vulkan requires every device to have a device-local heap). The assumption
+is also the ceiling (`hostCeilingBytes`, `deviceCeilingBytes`): no sample will ever show more room,
+so a need above it is refused at once instead of waiting for the stall. The work runs, and
+allocation failure stays a typed refusal. A sample that is merely late (none delivered within
+10 seconds) is still pending, not unsampled, and closes admission until it arrives. The policy
+snapshot carries the assumption (`hostFallback`, `deviceFallback`: what could not be sampled, what
+was assumed and why); `describeCapacityFallback` words it ("host capacity not sampled (process
+memory limit); assumed 8589934592 bytes (half of physical memory)") for the export log
+(`export.capacity.assumed`, once per output and domain, and in every capacity wait or stall line),
+`bloom-cli render` (`warning[bloom-cli.render.capacity-assumed]`) and the Profiler
+([profiler-feed.md](profiler-feed.md)). The test reading's unsampled form
+(`BLOOM_TEST_FIXED_MEMORY_READING=...,unsampled`, [local-validation.md](../development/local-validation.md))
+makes both samples fail on purpose: `bloom.cli.render-unsampled-capacity` renders a frame that way
+and checks what it said it assumed. Admission on an assumed capacity otherwise follows the same
+rules as on a measured one: the assumption bounds what every admitted phase claims, and no separate
+count of phases in flight is imposed.
+
 **Idle means small (#539).** When the preview owner has had no preview work for
 `idleTrimDelay` (one second), it gives back retained device memory: the reusable scene cache and
 all parked native storage. What is on screen and the finished frames the UI holds stay; the next

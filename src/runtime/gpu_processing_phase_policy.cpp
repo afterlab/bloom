@@ -262,7 +262,30 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
     } else if (finiteProcessCeiling_ && *finiteProcessCeiling_ == 0) {
         allowance.emplace(0);
     }
-    if (allowance && *allowance != 0 && fresh && (!complete || sample.awaitingProcessSample)) {
+    // #751: a fresh sample that could not read the process memory limits (no cgroup filesystem,
+    // as in a container without /sys) or the machine's available memory runs admission on a stated
+    // assumption instead of waiting for a complete sample that never comes: half of the physical
+    // memory (a fixed 2 GiB when that is unknown too), never more than what was measured available
+    // or a process limit still known.
+    if (fresh) {
+        hostFallback_ = {};
+        if (!complete || !sample.machine.availableBytes) {
+            hostFallback_.processLimitUnsampled = !complete;
+            hostFallback_.availableUnsampled = !sample.machine.availableBytes;
+            hostFallback_.assumption = physicalBytes != 0 ? CapacityAssumption::HalfPhysicalMemory
+                                                          : CapacityAssumption::FixedHostDefault;
+            hostFallback_.assumedBytes =
+                physicalBytes != 0 ? physicalBytes / 2 : kUnsampledHostCapacityBytes;
+            if (allowance)
+                allowance.emplace(std::min(*allowance, hostFallback_.assumedBytes));
+            else
+                allowance.emplace(finiteProcessCeiling_
+                                      ? std::min(*finiteProcessCeiling_, hostFallback_.assumedBytes)
+                                      : hostFallback_.assumedBytes);
+        }
+    }
+    if (allowance && *allowance != 0 && fresh && !hostFallback_.active() &&
+        (!complete || sample.awaitingProcessSample)) {
         const auto current = budget_.snapshot().hostCapacityBytes;
         allowance =
             current
@@ -279,13 +302,19 @@ void GpuProcessingPhasePolicy::applyHostSample(const MemoryBudgetState& sample,
             if (domain.kind == ProcessMemoryLimitKind::Finite)
                 ceiling = ceiling ? std::min<std::uint64_t>(*ceiling, domain.limitBytes)
                                   : domain.limitBytes;
+        // #751: on an assumption nothing measured can come back beyond it, so a need above the
+        // assumption is refused at once instead of waiting for room no sample will ever show.
+        if (hostFallback_.active())
+            ceiling = ceiling ? std::min(*ceiling, hostFallback_.assumedBytes)
+                              : hostFallback_.assumedBytes;
         hostCeiling_ = ceiling;
         budget_.setHostCeiling(minusHeadroom(hostCeiling_, headroom_.ramBytes));
     }
     // The RAM headroom preference is the only margin kept free of Bloom's work and caches.
     allowance = minusHeadroom(allowance, headroom_.ramBytes);
     const bool ready =
-        allowance && fresh && (*allowance == 0 || (complete && !sample.awaitingProcessSample));
+        allowance && fresh &&
+        (*allowance == 0 || (complete && !sample.awaitingProcessSample) || hostFallback_.active());
     if (fresh) {
         hostSampleAt_ = sample.process.sampledAt;
     }
@@ -407,9 +436,12 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
                                ? std::numeric_limits<std::uint64_t>::max()
                                : localImages + localBuffers;
     }
+    CapacityFallback deviceFallback;
     for (std::size_t slot = 0; slot < deviceCount_; ++slot) {
         const auto& current = devices_[slot].budget;
-        if (current.source == render::GpuAllocationBudgetSource::Unavailable) {
+        const bool unsampled = current.source == render::GpuAllocationBudgetSource::Unavailable;
+        if (unsampled && current.device_local_bytes == 0) {
+            // Nothing is known of this device, not even its heap: nothing can be assumed.
             ready = false;
             continue;
         }
@@ -419,7 +451,17 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         // The VRAM headroom default is a share of the largest measured device.
         recordDeviceLocalMemoryBytes(current.device_local_bytes);
         auto available = current.available_bytes;
-        if (ownedLocalNative != 0) {
+        if (unsampled) {
+            // #751: a live budget query the driver did not answer (#709: never zero room) runs
+            // admission on half of the device-local heap instead of waiting for an answer that may
+            // never come. No backing is credited back: nothing was measured to credit it against.
+            available = current.device_local_bytes / 2;
+            deviceFallback.assumption = CapacityAssumption::HalfDeviceLocalHeap;
+            deviceFallback.deviceBudgetUnsampled = true;
+            deviceFallback.assumedBytes = deviceFallback.assumedBytes != 0
+                                              ? std::min(deviceFallback.assumedBytes, available)
+                                              : available;
+        } else if (ownedLocalNative != 0) {
             const auto physicalRoom =
                 current.device_local_bytes > available ? current.device_local_bytes - available : 0;
             available += std::min(ownedLocalNative, physicalRoom);
@@ -452,6 +494,9 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         // On unified memory that is never more than the pool's own ceiling.
         if (unifiedCeiling)
             whole = std::min(whole, *unifiedCeiling);
+        // #751: on an assumed budget nothing measured can come back beyond the assumption.
+        if (unsampled)
+            whole = std::min(whole, available);
         ceiling = ceiling ? std::min(*ceiling, whole) : whole;
     }
     budget_.setDeviceCeiling(ceiling);
@@ -460,6 +505,7 @@ void GpuProcessingPhasePolicy::applyDeviceReportsLocked() noexcept {
         allocationSizes = devices_[slot].budget.allocation_sizes;
     budget_.setAllocationSizes(std::move(allocationSizes));
     budget_.setDeviceCapacity(minimum, ready || (minimum && *minimum == 0));
+    deviceFallback_ = deviceFallback;
 }
 render::GpuProcessingPhaseGrant
 GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
@@ -563,7 +609,9 @@ GpuProcessingPhasePolicySnapshot GpuProcessingPhasePolicy::snapshot() const noex
             .processStatus = processStatus_,
             .sampleSerial = sampleSerial_,
             .deviceReports = deviceCount_,
-            .usesNominalDeviceEstimate = nominal};
+            .usesNominalDeviceEstimate = nominal,
+            .hostFallback = hostFallback_,
+            .deviceFallback = deviceFallback_};
 }
 
 void GpuProcessingPhasePolicy::setHeadroom(const MemoryHeadroom headroom) noexcept {
@@ -673,6 +721,42 @@ std::string describeAdmission(const render::GpuProcessingPhaseGrant& grant,
          << " hostReady=" << capacity.hostReady << " deviceReady=" << capacity.deviceReady
          << " revision=" << capacity.admissionRevision;
     return text.str();
+}
+const char* capacityAssumptionName(const CapacityAssumption assumption) noexcept {
+    switch (assumption) {
+    case CapacityAssumption::None:
+        return "sampled";
+    case CapacityAssumption::HalfPhysicalMemory:
+        return "half of physical memory";
+    case CapacityAssumption::FixedHostDefault:
+        return "fixed default, physical memory unknown";
+    case CapacityAssumption::HalfDeviceLocalHeap:
+        return "half of the device-local heap";
+    }
+    return "unknown";
+}
+std::string describeCapacityFallback(const std::string_view domain,
+                                     const CapacityFallback& fallback) {
+    if (!fallback.active())
+        return {};
+    std::string unsampled;
+    const auto add = [&unsampled](const bool missing, const char* what) {
+        if (!missing)
+            return;
+        if (!unsampled.empty())
+            unsampled += ", ";
+        unsampled += what;
+    };
+    add(fallback.processLimitUnsampled, "process memory limit");
+    add(fallback.availableUnsampled, "available memory");
+    add(fallback.deviceBudgetUnsampled, "live device budget");
+    std::string text(domain);
+    text += " capacity not sampled";
+    if (!unsampled.empty())
+        text += " (" + unsampled + ")";
+    text += "; assumed " + std::to_string(fallback.assumedBytes) + " bytes (" +
+            capacityAssumptionName(fallback.assumption) + ")";
+    return text;
 }
 std::optional<GpuProcessingPhasePolicy::AwaitingNeed>
 GpuProcessingPhasePolicy::lastAwaitingNeed() const noexcept {

@@ -1,5 +1,7 @@
 #include <bloom/runtime/process_memory_sample.hpp>
 
+#include <chrono>
+#include <filesystem>
 #include <iostream>
 #include <limits>
 #include <map>
@@ -243,6 +245,45 @@ void failuresAndBounds() {
 }
 #endif
 
+// #751: a Linux host without /sys (a minimal container or sandbox). The parser reads its topology
+// from injected text and an injected file reader, so it runs on every platform. Without a cgroup2
+// mount nothing can be read: the sample is unavailable, never a stale value or a measured zero, and
+// it offers no limit. A mount whose files cannot be read is incomplete in the same way.
+void noSysFilesystemIsUnavailable() {
+    std::size_t reads = 0;
+    const ProcessMemoryFileReader unreadable = [&reads](const std::filesystem::path&) {
+        ++reads;
+        return ProcessMemoryFileRead{ProcessMemoryReadStatus::Unavailable, {}};
+    };
+    constexpr auto noCgroupMount = "22 1 259:2 / / rw,relatime - ext4 /dev/root rw\n"
+                                   "23 22 0:5 / /proc rw,nosuid - proc proc rw\n";
+    const auto sampledAt = std::chrono::steady_clock::now();
+    const auto absent =
+        parseLinuxProcessMemorySample("0::/app.scope\n", noCgroupMount, unreadable, sampledAt);
+    expect(absent.source == ProcessMemorySource::Unavailable &&
+               absent.status == ProcessMemoryStatus::Unavailable && absent.domains.empty() &&
+               absent.sampledAt == sampledAt,
+           "without a cgroup2 mount the process sample is unavailable at its own time");
+    expect(reads == 0, "with no cgroup filesystem no limit file is read");
+    expect(!isCompleteProcessMemorySample(absent) &&
+               !minimumProcessCacheAllowance(absent, 0).has_value(),
+           "an unavailable sample is incomplete and states no limit, not a zero one");
+    const auto unread = parseLinuxProcessMemorySample("0::/app.scope\n",
+                                                      "36 25 0:32 / /sys/fs/cgroup rw - cgroup2 "
+                                                      "cgroup rw\n",
+                                                      unreadable, sampledAt);
+    expect(unread.source == ProcessMemorySource::LinuxCgroupV2 &&
+               unread.status == ProcessMemoryStatus::Partial && reads != 0,
+           "a mounted cgroup filesystem whose files cannot be read is incomplete");
+    bool anyFinite = false;
+    for (const auto& domain : unread.domains)
+        anyFinite = anyFinite || domain.kind == ProcessMemoryLimitKind::Finite ||
+                    domain.currentBytes.has_value();
+    expect(!anyFinite && !isCompleteProcessMemorySample(unread) &&
+               !minimumProcessCacheAllowance(unread, 0).has_value(),
+           "unread limit files invent no limit and no usage");
+}
+
 ProcessMemorySample proofSample() {
     ProcessMemorySample sample;
     sample.source = ProcessMemorySource::LinuxCgroupV2;
@@ -382,6 +423,7 @@ int main() try {
     rootAndAlternateMounts();
     failuresAndBounds();
 #endif
+    noSysFilesystemIsUnavailable();
     constraintRemovalProof();
     arithmeticAndPlatformFallback();
     return failures == 0 ? 0 : 1;

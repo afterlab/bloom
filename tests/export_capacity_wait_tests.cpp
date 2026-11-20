@@ -118,17 +118,29 @@ int main() {
               "device memory held by other programs makes BudgetRefused a wait");
     }
     {
-        // #709: a query the driver did not answer is no sample, never zero capacity.
+        // #709: a query the driver did not answer is no sample, never zero capacity. #751: nor a
+        // wait for a sample that may never come: admission assumes half of the device-local heap,
+        // which is also all it can ever give, so a frame that still does not fit on an otherwise
+        // empty root never fits instead of waiting for the stall.
         auto policy = makePolicy();
         check(policy->reportDevice(7, {.source = render::GpuAllocationBudgetSource::Unavailable,
                                        .device_local_bytes = 24 * kGib,
                                        .available_bytes = 0}),
               "a device reports an unanswered query");
-        const auto reservations = policy->snapshot().reservations;
-        check(!reservations.deviceReady && !reservations.deviceCapacityBytes,
-              "an unanswered query leaves the device unsampled, not at zero");
-        check(classify(Code::AwaitingCapacity, *policy) == OutputAnalysisCapacityRefusalV1::Wait,
-              "an unsampled device makes AwaitingCapacity a wait");
+        const auto snapshot = policy->snapshot();
+        const auto& reservations = snapshot.reservations;
+        check(reservations.deviceReady && reservations.deviceCapacityBytes == 12 * kGib &&
+                  reservations.deviceCeilingBytes == 12 * kGib &&
+                  snapshot.deviceFallback.deviceBudgetUnsampled,
+              "an unanswered query admits against half of the heap, not zero and not unsampled");
+        check(classify(Code::AwaitingCapacity, *policy) ==
+                  OutputAnalysisCapacityRefusalV1::NeverFits,
+              "on an empty root nothing can return beyond the assumption: no wait for the stall");
+        const auto text = host::describeProcessingReservationsV1(policy.get());
+        check(text.find("; device capacity not sampled (live device budget); assumed " +
+                        std::to_string(12 * kGib) + " bytes (half of the device-local heap)") !=
+                  std::string::npos,
+              "the reservation line says what was assumed");
     }
     {
         // A device nothing else holds still reports NeverFits for a frame that waits on itself.

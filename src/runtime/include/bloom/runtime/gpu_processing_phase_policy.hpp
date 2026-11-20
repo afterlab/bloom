@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bloom::runtime {
@@ -78,6 +79,37 @@ struct UsableCapacity final {
 [[nodiscard]] std::string describeAdmission(const render::GpuProcessingPhaseGrant&,
                                             const UsableCapacity&);
 
+// #751: what admission assumes for a capacity it could not sample, so the work runs instead of
+// waiting for a sample that never comes (a container without /sys, a driver that does not answer
+// its budget query). Host: half of the physical memory (a fixed 2 GiB when that is unknown too),
+// never more than the memory measured available or a process limit still known; the RAM headroom
+// is taken from it as from a measurement. Device: half of the device-local heap, minus the VRAM
+// headroom. Allocation failure stays a typed refusal either way.
+enum class CapacityAssumption : std::uint8_t {
+    None,
+    HalfPhysicalMemory,
+    FixedHostDefault,
+    HalfDeviceLocalHeap,
+};
+inline constexpr std::uint64_t kUnsampledHostCapacityBytes = std::uint64_t{2} << 30U;
+struct CapacityFallback final {
+    CapacityAssumption assumption = CapacityAssumption::None;
+    // The assumed capacity before the headroom preference.
+    std::uint64_t assumedBytes = 0;
+    // What could not be sampled. Host: the process memory limits (cgroup), the machine's available
+    // memory, or both. Device: the driver's live budget.
+    bool processLimitUnsampled = false;
+    bool availableUnsampled = false;
+    bool deviceBudgetUnsampled = false;
+    [[nodiscard]] bool active() const noexcept { return assumption != CapacityAssumption::None; }
+    friend bool operator==(const CapacityFallback&, const CapacityFallback&) = default;
+};
+[[nodiscard]] const char* capacityAssumptionName(CapacityAssumption) noexcept;
+// "host capacity not sampled (process memory limit); assumed 8589934592 bytes (half of physical
+// memory)"; empty while the capacity is sampled.
+[[nodiscard]] std::string describeCapacityFallback(std::string_view domain,
+                                                   const CapacityFallback&);
+
 struct GpuProcessingPhasePolicySnapshot final {
     render::GpuProcessingPhaseSnapshot reservations;
     ProcessMemorySource processSource = ProcessMemorySource::Unavailable;
@@ -85,6 +117,9 @@ struct GpuProcessingPhasePolicySnapshot final {
     std::uint64_t sampleSerial = 0;
     std::size_t deviceReports = 0;
     bool usesNominalDeviceEstimate = false;
+    // #751: set while admission runs on an assumed capacity.
+    CapacityFallback hostFallback = {};
+    CapacityFallback deviceFallback = {};
 };
 
 // One explicitly injected composition-root owner, shared by preview and final providers. Sampling
@@ -211,6 +246,8 @@ class GpuProcessingPhasePolicy final {
     std::optional<std::uint64_t> finiteProcessCeiling_;
     // The tightest finite process limit or physical memory, before headroom.
     std::optional<std::uint64_t> hostCeiling_;
+    CapacityFallback hostFallback_;
+    CapacityFallback deviceFallback_;
     ProcessMemoryConstraintHistory processConstraintHistory_;
     std::optional<Clock::time_point> hostSampleAt_;
     struct HostSampleBackingCredit final {

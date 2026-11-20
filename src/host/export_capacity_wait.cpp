@@ -9,7 +9,17 @@ namespace bloom::host {
 std::string describeProcessingReservationsV1(const runtime::GpuProcessingPhasePolicy* policy) {
     if (!policy)
         return "reservations=unknown (no shared processing root)";
-    const auto held = policy->snapshot().reservations;
+    const auto snapshot = policy->snapshot();
+    const auto& held = snapshot.reservations;
+    // #751: a capacity admission could not sample is said with what it assumed.
+    const auto assumptions = [](const runtime::GpuProcessingPhasePolicySnapshot& state) {
+        std::string text;
+        for (const auto& line : {runtime::describeCapacityFallback("host", state.hostFallback),
+                                 runtime::describeCapacityFallback("device", state.deviceFallback)})
+            if (!line.empty())
+                text += "; " + line;
+        return text;
+    };
     const auto domain = [](const char* name, const bool ready,
                            const std::optional<std::uint64_t>& capacity,
                            const std::uint64_t reserved, const std::uint64_t claimed) {
@@ -30,7 +40,7 @@ std::string describeProcessingReservationsV1(const runtime::GpuProcessingPhasePo
                   held.totalDeviceClaimBytes) +
            "; retainedPhases=" + std::to_string(held.retainedPhases) +
            ", retainedNativeImageBytes=" + std::to_string(held.retainedNativeImageBytes) +
-           "; budgetRefusals=" + std::to_string(held.budgetRefusals);
+           "; budgetRefusals=" + std::to_string(held.budgetRefusals) + assumptions(snapshot);
 }
 
 bool otherProcessingPhasesAdmittedV1(const runtime::GpuProcessingPhasePolicy* policy,

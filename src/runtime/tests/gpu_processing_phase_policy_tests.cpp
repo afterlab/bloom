@@ -3,6 +3,7 @@
 #include <bloom/render/packed_rgba8_storage.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 
 #include <algorithm>
 #include <array>
@@ -11,6 +12,7 @@
 #include <exception>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -257,11 +259,19 @@ void lowMemoryHostFinalAdmission() {
                     final(policy).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
                 "finite process headroom bounds admission; a final within the limit waits");
     }
+    // #751: unknown machine availability runs on the stated assumption, half of the physical
+    // memory, instead of waiting for a sample that never comes.
     GpuProcessingPhasePolicy unavailable;
     deliver(unavailable, smallPhysical, std::nullopt);
-    require(!unavailable.snapshot().reservations.hostReady &&
-                final(unavailable).status == GpuProcessingPhaseAdmission::AwaitingCapacity,
-            "unknown machine availability never acquires the small-host floor");
+    const auto unknown = unavailable.snapshot();
+    require(unknown.reservations.hostReady &&
+                unknown.reservations.hostCapacityBytes == smallPhysical / 2 &&
+                unknown.hostFallback.availableUnsampled &&
+                !unknown.hostFallback.processLimitUnsampled &&
+                unknown.hostFallback.assumption == CapacityAssumption::HalfPhysicalMemory &&
+                unknown.hostFallback.assumedBytes == smallPhysical / 2 &&
+                final(unavailable).status == GpuProcessingPhaseAdmission::Accepted,
+            "unknown machine availability admits against half of the physical memory");
     GpuProcessingPhasePolicy stale;
     auto delivered = deliver(stale, smallPhysical, smallPhysical);
     ++delivered.sampleSerial;
@@ -1374,6 +1384,148 @@ void cachedAudioDoesNotHoldRequestSlots() {
             "the root returns to empty once the cache lets go");
 }
 
+// #751: a capacity that cannot be sampled runs admission on a stated assumption, never a wait that
+// can only end in the export's 30 s stall.
+void unsampledCapacityRunsOnTheStatedAssumption() {
+    const auto now = GpuProcessingPhasePolicy::Clock::now();
+    // A Linux host without /sys: the process sample is unavailable at its own time, while the
+    // machine's available memory is still measured (/proc/meminfo). The sampling ledger keeps
+    // waiting for a complete process sample, as it does on such a host.
+    const auto deliver = [&](GpuProcessingPhasePolicy& policy, MemoryBudgetLedger& ledger,
+                             const std::size_t physical, const std::optional<std::size_t> available,
+                             const GpuProcessingPhasePolicy::Clock::time_point at) {
+        MemoryBudgetSample reading;
+        reading.physicalBytes = physical;
+        reading.machine.availableBytes = available;
+        reading.process.source = ProcessMemorySource::Unavailable;
+        reading.process.status = ProcessMemoryStatus::Unavailable;
+        reading.process.sampledAt = at;
+        ledger.beginProcessSampling();
+        const auto delivered = ledger.applySample(std::move(reading), at);
+        require(delivered.awaitingProcessSample,
+                "the ledger never receives a complete process sample without /sys");
+        policy.applyHostSample(delivered, physical, at);
+    };
+    const auto final = [](GpuProcessingPhasePolicy& policy, const auto at) {
+        return policy.reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                               .pixels = 1920ULL * 1080,
+                               .metadataBytes = 16ULL << 20U,
+                               .sourceFree = true,
+                               .native = false},
+                              at);
+    };
+    {
+        GpuProcessingPhasePolicy policy;
+        MemoryBudgetLedger ledger(16 * gib, 12 * gib);
+        policy.setHeadroom({.ramBytes = 2 * gib, .vramBytes = 0});
+        deliver(policy, ledger, 16 * gib, 12 * gib, now);
+        const auto state = policy.snapshot();
+        require(state.reservations.hostReady && state.reservations.hostCapacityBytes == 6 * gib,
+                "half of the physical memory, minus the RAM headroom, is admitted against");
+        require(state.hostFallback.active() && state.hostFallback.processLimitUnsampled &&
+                    !state.hostFallback.availableUnsampled &&
+                    state.hostFallback.assumption == CapacityAssumption::HalfPhysicalMemory &&
+                    state.hostFallback.assumedBytes == 8 * gib,
+                "the snapshot says what could not be sampled and what was assumed");
+        require(describeCapacityFallback("host", state.hostFallback) ==
+                    "host capacity not sampled (process memory limit); assumed 8589934592 bytes "
+                    "(half of physical memory)",
+                "the assumption is worded for the export log");
+        auto grant = final(policy, now);
+        require(grant.status == GpuProcessingPhaseAdmission::Accepted && grant.lease,
+                "work runs on the assumed capacity instead of waiting for a sample");
+        grant.lease.reset();
+        // Nothing measured can come back beyond the assumption: a need above it is refused at
+        // once, never left waiting for the export's stall.
+        require(state.reservations.hostCeilingBytes == 6 * gib &&
+                    policy
+                            .reserve({.output = GpuProcessingPhaseOutput::FloatFinal,
+                                      .pixels = 1,
+                                      .metadataBytes = 7 * gib,
+                                      .sourceFree = true,
+                                      .native = false},
+                                     now)
+                            .status == GpuProcessingPhaseAdmission::BudgetRefused,
+                "a host need above the assumption is refused, not left waiting");
+        // Measured available memory below the assumption bounds it, and the next sample follows
+        // the machine up again: an assumption never ratchets down.
+        deliver(policy, ledger, 16 * gib, 5 * gib, now + std::chrono::seconds(1));
+        require(policy.snapshot().reservations.hostCapacityBytes == 3 * gib,
+                "the measured available memory bounds the assumption");
+        deliver(policy, ledger, 16 * gib, 12 * gib, now + std::chrono::seconds(2));
+        require(policy.snapshot().reservations.hostCapacityBytes == 6 * gib,
+                "a later sample on the same assumption follows the machine back up");
+        // A complete sample ends the assumption.
+        auto complete = sample(now + std::chrono::seconds(3));
+        complete.sampleSerial = policy.snapshot().sampleSerial + 1;
+        policy.applyHostSample(complete, 64 * gib, complete.process.sampledAt);
+        require(!policy.snapshot().hostFallback.active(),
+                "a complete sample measures the capacity again");
+    }
+    {
+        // Nothing measurable: neither the physical nor the available memory.
+        GpuProcessingPhasePolicy policy;
+        MemoryBudgetLedger ledger;
+        deliver(policy, ledger, 0, std::nullopt, now);
+        const auto state = policy.snapshot();
+        require(state.reservations.hostReady &&
+                    state.reservations.hostCapacityBytes == kUnsampledHostCapacityBytes &&
+                    state.hostFallback.assumption == CapacityAssumption::FixedHostDefault &&
+                    state.hostFallback.availableUnsampled &&
+                    state.hostFallback.processLimitUnsampled,
+                "with nothing measurable the fixed default is assumed");
+        require(final(policy, now).status == GpuProcessingPhaseAdmission::Accepted,
+                "and work still runs");
+    }
+    {
+        // A sample that is merely late is pending, not unsampled: admission waits for it.
+        GpuProcessingPhasePolicy policy;
+        MemoryBudgetLedger ledger(16 * gib, 12 * gib);
+        deliver(policy, ledger, 16 * gib, 12 * gib, now);
+        require(final(policy, now + std::chrono::seconds(11)).status ==
+                    GpuProcessingPhaseAdmission::AwaitingCapacity,
+                "a late sample still closes admission until it arrives");
+    }
+    {
+        // A device whose live budget query is not answered (#709: never zero room) admits against
+        // half of its device-local heap, minus the VRAM headroom.
+        GpuProcessingPhasePolicy policy;
+        policy.setHeadroom({.ramBytes = 0, .vramBytes = gib});
+        policy.applyHostSample(sample(now), 64 * gib, now);
+        require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::Unavailable,
+                                        .device_local_bytes = 8 * gib,
+                                        .available_bytes = 0}),
+                "the unanswered report is accepted");
+        const auto state = policy.snapshot();
+        require(state.reservations.deviceReady &&
+                    state.reservations.deviceCapacityBytes == 3 * gib &&
+                    state.deviceFallback.deviceBudgetUnsampled &&
+                    state.deviceFallback.assumption == CapacityAssumption::HalfDeviceLocalHeap &&
+                    state.deviceFallback.assumedBytes == 4 * gib,
+                "half of the device-local heap, minus the VRAM headroom, is admitted against");
+        require(describeCapacityFallback("device", state.deviceFallback) ==
+                    "device capacity not sampled (live device budget); assumed 4294967296 bytes "
+                    "(half of the device-local heap)",
+                "the device assumption is worded for the export log");
+        auto native = policy.reserve(preview(), now);
+        require(native.status == GpuProcessingPhaseAdmission::Accepted && native.lease,
+                "native work runs on the assumed device capacity");
+        native.lease.reset();
+        auto large = preview();
+        large.requestedExecutorBytes = 8 * gib;
+        large.minimumExecutorBytes = 4 * gib;
+        require(state.reservations.deviceCeilingBytes == 3 * gib &&
+                    policy.reserve(large, now).status == GpuProcessingPhaseAdmission::BudgetRefused,
+                "a device need above the assumption is refused, not left waiting");
+        require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                        .device_local_bytes = 8 * gib,
+                                        .available_bytes = 6 * gib}),
+                "the driver answers again");
+        require(!policy.snapshot().deviceFallback.active() &&
+                    policy.snapshot().reservations.deviceCapacityBytes == 5 * gib,
+                "an answered budget measures the device again");
+    }
+}
 int main(int argc, char** argv) {
     try {
         if (argc == 2 && std::string_view(argv[1]) == "--live-unlimited-probe")
@@ -1383,6 +1535,7 @@ int main(int argc, char** argv) {
         cgroupPageCacheAdmitsAndAnonWaits();
         exportFramesClaimTheirPreflightPeak();
         lowMemoryHostFinalAdmission();
+        unsampledCapacityRunsOnTheStatedAssumption();
         liveHeadroomDuringCachePressure();
         unifiedMemoryDeviceIsBoundedByTheSystemPool();
         rootedBackingReconcilesSampledHostHeadroom();
