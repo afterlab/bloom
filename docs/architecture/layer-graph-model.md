@@ -852,9 +852,9 @@ exposed ports: every port is typed by its kind, and the catalogue, not a per-gro
 set a group can expose.
 
 Evidence: `bloom.runtime.node-group-reopen` (save and reopen through the archive writer and reader,
-wrong-kind links refused by `ConnectPorts`), `bloom.runtime.snapshot_compiler` (`testNodeGroup*`: a
-Mask and a ChannelSet entering and leaving a group, wrong-kind links, nested groups, the depth and
-node caps, a muted instance, an unconnected image slot) and `bloom.runtime.gpu_node_group_native`
+wrong-kind links refused by `ConnectPorts`), `bloom.runtime.snapshot_compiler.groups`
+(`testNodeGroup*`: a Mask and a ChannelSet entering and leaving a group, wrong-kind links, nested
+groups, the depth and node caps, a muted instance, an unconnected image slot) and `bloom.runtime.gpu_node_group_native`
 (the group, with an image, Mask, ChannelSet and value slots, against the flat graph and the CPU
 reference on the device).
 

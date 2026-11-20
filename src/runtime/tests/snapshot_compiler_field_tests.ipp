@@ -252,15 +252,17 @@ void testFieldNoiseVectorOutput(Expectations& expectations) {
     const auto rasterize = NodeId::fromRaw(62);
     const auto build = [&](const std::string_view port) {
         auto options = singleLayerOptions();
-        options.format = requireValue(document::CompositionFormat::create(512, 384), "field extent");
+        // #750: a quarter of the earlier 512 x 384 extent, the noise scaled with it: the same
+        // features per frame at a sixteenth of the CPU reference's work.
+        options.format = requireValue(document::CompositionFormat::create(128, 96), "field extent");
         auto project = makeProject(options);
         require(project.findComposition(kCompositionId)
                     ->parameters()
                     .setSource(kFirstPosition,
-                               document::ConstantValueSource{document::Vec2d{256.0, 192.0}}),
+                               document::ConstantValueSource{document::Vec2d{64.0, 48.0}}),
                 "center the layer");
         addFieldNode(project, noise, kFieldNoiseNodeType,
-                     {{"size", Vec2d{96.0, 96.0}},
+                     {{"size", Vec2d{24.0, 24.0}},
                       {"loop", true},
                       {"evolution", 1.0},
                       {"loopLength", 4.0},

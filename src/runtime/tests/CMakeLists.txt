@@ -189,12 +189,15 @@ bloom_add_test(
     TIMEOUT 30
 )
 
-bloom_add_test(
-    NAME bloom.runtime.snapshot_compiler
-    COMMAND bloom_runtime_snapshot_compiler_test
-    LABELS runtime unit
-    TIMEOUT 30
-)
+# #750: five parts by area, each its own test with a limit that fits its own work.
+foreach(snapshot_compiler_part IN ITEMS effects groups motion warp plan)
+    bloom_add_test(
+        NAME bloom.runtime.snapshot_compiler.${snapshot_compiler_part}
+        COMMAND bloom_runtime_snapshot_compiler_test --part ${snapshot_compiler_part}
+        LABELS runtime unit
+        TIMEOUT 30
+    )
+endforeach()
 # Auto Exposure's logarithm and power, held to the same bits on every platform.
 add_executable(bloom_runtime_auto_exposure_math_test auto_exposure_math_tests.cpp)
 target_include_directories(bloom_runtime_auto_exposure_math_test
@@ -208,10 +211,14 @@ bloom_add_test(
     LABELS runtime unit
 )
 
-# These two render on the CPU reference path, which the Windows compiler's strict floating point
-# makes several times slower; alone they pass inside the limits above, in a full suite they do not.
+# The snapshot compiler's parts render on the CPU reference path, which the Windows compiler's
+# strict floating point makes several times slower; alone they pass inside the limit above, in a
+# full suite they do not.
 if(WIN32)
-    set_tests_properties(bloom.runtime.snapshot_compiler PROPERTIES TIMEOUT 120)
+    foreach(snapshot_compiler_part IN ITEMS effects groups motion warp plan)
+        set_tests_properties(bloom.runtime.snapshot_compiler.${snapshot_compiler_part}
+            PROPERTIES TIMEOUT 120)
+    endforeach()
 endif()
 
 bloom_add_test(

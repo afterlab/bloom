@@ -405,11 +405,13 @@ void testBlurExtensionLowering(Expectations& expectations) {
                 expectations.expect(!curveRead && result.plan->scalarCurves().empty(),
                                     "an animated vertical radius with per-channel radii and no "
                                     "separate axes is neither lowered nor compiled");
-                // The frames render: the curve nothing reads does not refuse the plan.
+                // The frames render: the curve nothing reads does not refuse the plan. A small
+                // proxy of the fixture's 1080p frame runs every operation of the plan (#750).
+                const auto proxy = render::ImageExtent::create(240, 135);
                 for (const std::int64_t frame : {0, 1}) {
                     runtime::EvaluationRequest request{core::RationalTime::fromInteger(frame),
                                                        result.plan->output(),
-                                                       runtime::CompositionFormatResolution{}};
+                                                       runtime::ProxyResolution{*proxy.value()}};
                     request.quality = runtime::EvaluationQuality::Reference;
                     request.colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
                     request.pixelStorageByteLimit = std::size_t{1} << 29U;
@@ -554,10 +556,12 @@ void testUnreadAnimatedValuesRender(Expectations& expectations) {
         expectations.expect(result.plan->scalarCurves().empty() &&
                                 result.plan->color4Curves().empty(),
                             label + " compiles no curve");
+        // A small proxy of the fixture's 1080p frame runs every operation of the plan (#750).
+        const auto proxy = render::ImageExtent::create(240, 135);
         for (const std::int64_t frame : {0, 1}) {
             runtime::EvaluationRequest request{core::RationalTime::fromInteger(frame),
                                                result.plan->output(),
-                                               runtime::CompositionFormatResolution{}};
+                                               runtime::ProxyResolution{*proxy.value()}};
             request.quality = runtime::EvaluationQuality::Reference;
             request.colorIntent = runtime::EvaluationColorIntent::LinearRec709Scene;
             request.pixelStorageByteLimit = std::size_t{1} << 29U;
