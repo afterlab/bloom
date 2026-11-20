@@ -34,9 +34,6 @@
 #include <utility>
 #include <vector>
 namespace {
-// The ceiling for a broken run; a passing wait returns as soon as its condition holds.
-constexpr std::chrono::milliseconds kWait{10000};
-
 using namespace std::chrono_literals;
 using namespace bloom;
 using runtime::PreviewCpuStage;
@@ -89,17 +86,17 @@ class Expectations final {
     return {.kind = runtime::TaskOwnerKind::Composition,
             .id = runtime::TaskOwnerId::fromRaw(value)};
 }
+// #750: every wait here goes through the shared helper, whose limit is only the ceiling for a
+// broken run (a passing wait returns as soon as its condition holds). The fixture's own limits of
+// five and ten seconds were guesses at how fast the work runs.
 template <typename Value>
-[[nodiscard]] std::optional<TaskResult<Value>>
-awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 10s) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(500us);
-    }
-    return std::nullopt;
+[[nodiscard]] std::optional<TaskResult<Value>> awaitResult(const TaskHandle<Value>& handle) {
+    std::optional<TaskResult<Value>> result;
+    (void)bloom::test_support::awaitCondition("the task's result", [&] {
+        result = handle.tryTakeResult();
+        return result.has_value();
+    });
+    return result;
 }
 [[nodiscard]] runtime::GpuPreviewDisplayServiceOptions gpuOptions(const std::string& loader) {
     runtime::GpuPreviewDisplayServiceOptions options;
@@ -112,12 +109,10 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
 [[nodiscard]] bool ensureReady(Expectations& expectations,
                                runtime::GpuPreviewDisplayService& service,
                                const bool requireDevice) {
-    const bool terminal = bloom::test_support::awaitCondition(
-        "the service leaves Initializing",
-        [&] {
+    const bool terminal =
+        bloom::test_support::awaitCondition("the service leaves Initializing", [&] {
             return service.status().state != runtime::GpuPreviewDisplayServiceState::Initializing;
-        },
-        30s);
+        });
     const bool ready =
         terminal && service.status().state == runtime::GpuPreviewDisplayServiceState::Ready;
     if (!ready) {
@@ -134,8 +129,12 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
     return true;
 }
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
-selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report) {
-    for (const auto& candidate : kSizes) {
+selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report,
+               const bool smallest = false) {
+    auto sizes = kSizes;
+    if (smallest)
+        std::ranges::reverse(sizes);
+    for (const auto& candidate : sizes) {
         if (runtime::detail::gpuPreviewDisplaySelectsNative(
                 report, static_cast<std::uint64_t>(candidate.first) * candidate.second,
                 runtime::detail::gpuPreviewDisplayHandoffOverheadMicros())) {
@@ -280,10 +279,10 @@ void testCpuPaths(Expectations& expectations) {
             service.status().counters.cpuFallbacks == 1 &&
                 reasonCount(service, runtime::GpuPreviewCpuFallbackReason::GpuUnavailable) == 1,
             "the disabled path is one counted GpuUnavailable CPU fallback");
-        expectations.expect(bloom::test_support::awaitCondition(
-                                "the disabled path leaves the scheduler quiescent",
-                                [&] { return scheduler.isQuiescent(); }, kWait),
-                            "the disabled path leaves the scheduler quiescent");
+        expectations.expect(
+            bloom::test_support::awaitCondition("the disabled path leaves the scheduler quiescent",
+                                                [&] { return scheduler.isQuiescent(); }),
+            "the disabled path leaves the scheduler quiescent");
     }
     fixture.evaluations->store(0);
     fixture.fallbacks->store(0);
@@ -296,8 +295,7 @@ void testCpuPaths(Expectations& expectations) {
                                 [&] {
                                     return service.status().state !=
                                            runtime::GpuPreviewDisplayServiceState::Initializing;
-                                },
-                                kWait) &&
+                                }) &&
                                 service.status().state ==
                                     runtime::GpuPreviewDisplayServiceState::Unavailable,
                             "a missing loader reports Unavailable");
@@ -313,30 +311,40 @@ void testCpuPaths(Expectations& expectations) {
             "the unavailable path is one counted GpuUnavailable CPU fallback");
         expectations.expect(bloom::test_support::awaitCondition(
                                 "the unavailable path leaves the scheduler quiescent",
-                                [&] { return scheduler.isQuiescent(); }, kWait),
+                                [&] { return scheduler.isQuiescent(); }),
                             "the unavailable path leaves the scheduler quiescent");
     }
 }
 // Device: full submit -> native -> product provenance and CPU pixel parity.
-void testGpuProvenanceAndParity(Expectations& expectations, const std::string& loader,
-                                const bool requireDevice) {
-    runtime::detail::PreviewDisplayServiceTestFixture probe(1920, 1080);
+// The largest (or the smallest) of kSizes the device route takes on this device, from a probe
+// service's qualification; nothing when there is no device or no size qualifies (both said).
+[[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
+deviceEligibleSize(Expectations& expectations, TaskScheduler& scheduler, const std::string& loader,
+                   const bool requireDevice, const bool smallest = false) {
+    runtime::detail::PreviewDisplayServiceTestFixture probe(16, 9);
     if (probe.processor == nullptr) {
         expectations.expect(!requireDevice, "the neutral processor builds");
-        return;
+        return std::nullopt;
     }
-    TaskScheduler scheduler(config());
     std::shared_ptr<const runtime::GpuNeutralDisplayQualificationReport> report;
     {
         runtime::GpuPreviewDisplayService probeService(scheduler, {}, {}, gpuOptions(loader));
         if (!ensureReady(expectations, probeService, requireDevice)) {
-            return;
+            return std::nullopt;
         }
         report = probeService.status().qualification;
     }
-    const auto size = selectableSize(*report);
-    if (!size.has_value()) {
+    const auto size = report != nullptr ? selectableSize(*report, smallest) : std::nullopt;
+    if (!size.has_value())
         std::cout << "SKIP: no device-eligible size beats the two service handoffs\n";
+    return size;
+}
+
+void testGpuProvenanceAndParity(Expectations& expectations, const std::string& loader,
+                                const bool requireDevice) {
+    TaskScheduler scheduler(config());
+    const auto size = deviceEligibleSize(expectations, scheduler, loader, requireDevice);
+    if (!size.has_value()) {
         return;
     }
     runtime::detail::PreviewDisplayServiceTestFixture fixture(size->first, size->second);
@@ -384,10 +392,10 @@ void testGpuProvenanceAndParity(Expectations& expectations, const std::string& l
                             displayOnly->displayCounters() ==
                                 std::optional(oracle.frame()->buffer().counters()),
                         "GPU packed pixels match the CPU qualified render");
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "the qualified path leaves the scheduler quiescent",
-                            [&] { return scheduler.isQuiescent(); }, kWait),
-                        "the qualified path leaves the scheduler quiescent");
+    expectations.expect(
+        bloom::test_support::awaitCondition("the qualified path leaves the scheduler quiescent",
+                                            [&] { return scheduler.isQuiescent(); }),
+        "the qualified path leaves the scheduler quiescent");
 }
 // Device: a late eligibility failure (tiny frame) reuses the single evaluated stage.
 void testLateFallbackSameFrame(Expectations& expectations, const std::string& loader,
@@ -418,58 +426,74 @@ void testLateFallbackSameFrame(Expectations& expectations, const std::string& lo
                                                 runtime::GpuPreviewCpuFallbackReason::Ineligible) ==
                                 1,
                         "the late fallback is counted with a NotWorthwhile or Ineligible reason");
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "the late-fallback path leaves the scheduler quiescent",
-                            [&] { return scheduler.isQuiescent(); }, kWait),
-                        "the late-fallback path leaves the scheduler quiescent");
+    expectations.expect(
+        bloom::test_support::awaitCondition("the late-fallback path leaves the scheduler quiescent",
+                                            [&] { return scheduler.isQuiescent(); }),
+        "the late-fallback path leaves the scheduler quiescent");
 }
-// Device: one CPU worker is free while the final GPU parent is pending.
+// Device: one CPU worker is free while the final GPU parent is pending. The native job is held
+// in flight by the service's poll seam until the test has seen the CPU worker run other work, so
+// the window is there by construction rather than by how long the device takes (#750); the
+// dispatch deadline's clock is held still with it.
 void testWorkerFreedWhilePending(Expectations& expectations, const std::string& loader,
                                  const bool requireDevice) {
-    runtime::detail::PreviewDisplayServiceTestFixture fixture(3840, 2160);
+    TaskScheduler scheduler(config(1));
+    const auto size = deviceEligibleSize(expectations, scheduler, loader, requireDevice, true);
+    if (!size.has_value()) {
+        return;
+    }
+    runtime::detail::PreviewDisplayServiceTestFixture fixture(size->first, size->second);
     if (fixture.processor == nullptr) {
         return;
     }
     const auto snapshot = runtime::detail::previewTestSnapshot(*fixture.plan);
-    TaskScheduler scheduler(config(1));
     runtime::GpuPreviewDisplayService service(scheduler, fixture.stageFn(), fixture.fallback(),
                                               gpuOptions(loader));
     if (!ensureReady(expectations, service, requireDevice)) {
         return;
     }
+    const auto core = runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+    if (core == nullptr) {
+        expectations.expect(false, "the service core is reachable");
+        return;
+    }
+    // Set before the submission hands the job to the owner thread, which reads them only while a
+    // native job is in flight.
+    auto released = std::make_shared<std::atomic_bool>(false);
+    core->nativePollOverride = [released](render::GpuNeutralDisplay& display) {
+        return released->load() ? display.poll() : render::GpuNeutralDisplayPollResult::Pending;
+    };
+    core->nativeClockOverride = [] { return std::chrono::steady_clock::time_point{}; };
     auto submission = service.submit(runtime::TaskRequest("preview", owner(6)), snapshot,
                                      runtime::detail::testIdentity(*fixture.plan), kBudget, {});
-    const auto core = runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
-    // Either the native job is seen in flight or it has already finished (the SKIP below); a job
-    // that finished first must not count as a timed-out wait.
     const bool settled = bloom::test_support::awaitCondition(
-        "the native job is in flight or finished",
-        [&] {
-            if (core != nullptr &&
-                runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core))
+        "the native job is in flight, or the parent has ended", [&] {
+            if (runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core))
                 return true;
-            const auto snapshot = scheduler.snapshot(submission.handle.id());
-            return snapshot.has_value() && runtime::isTerminal(snapshot->state);
-        },
-        5s);
-    const bool pending =
-        settled && core != nullptr &&
-        runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core);
-    if (pending) {
-        auto unrelated = scheduler.submit<int>(
-            runtime::TaskRequest("Unrelated CPU work", owner(7), runtime::TaskPriority::Background),
-            [](TaskContext&) { return TaskResult<int>::succeeded(7); });
-        expectations.expect(awaitResult(unrelated.handle).has_value(),
-                            "a CPU worker is free while the GPU parent is pending");
-    } else {
-        std::cout << "SKIP: the native job retired before the CPU-free window was observed\n";
-    }
-    expectations.expect(awaitResult(submission.handle).has_value(), "the GPU parent resolves");
+            const auto state = scheduler.snapshot(submission.handle.id());
+            return state.has_value() && runtime::isTerminal(state->state);
+        });
+    expectations.expect(
+        settled && runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core),
+        "a device-eligible frame dispatches its native job");
+    auto unrelated = scheduler.submit<int>(
+        runtime::TaskRequest("Unrelated CPU work", owner(7), runtime::TaskPriority::Background),
+        [](TaskContext&) { return TaskResult<int>::succeeded(7); });
+    expectations.expect(awaitResult(unrelated.handle).has_value(),
+                        "a CPU worker is free while the GPU parent is pending");
+    const auto pending = scheduler.snapshot(submission.handle.id());
+    expectations.expect(pending.has_value() && !runtime::isTerminal(pending->state),
+                        "the GPU parent is still pending while the CPU worker ran other work");
+    released->store(true);
+    const auto result = awaitResult(submission.handle);
+    expectations.expect(result.has_value() && result->state() == TaskState::Succeeded,
+                        "the GPU parent resolves once its native job completes");
 }
 // Device: a live GPU parent retains completion until its cancelled child is actually terminal.
 void testHeldStageCancellation(Expectations& expectations, const std::string& loader,
                                const bool requireDevice) {
-    runtime::detail::PreviewDisplayServiceTestFixture fixture(3840, 2160);
+    // The stage holds until released, so its frame's size proves nothing: a small one.
+    runtime::detail::PreviewDisplayServiceTestFixture fixture(256, 144);
     if (fixture.processor == nullptr) {
         return;
     }
@@ -506,9 +530,9 @@ void testHeldStageCancellation(Expectations& expectations, const std::string& lo
     }
     auto submission = service.submit(runtime::TaskRequest("preview", owner(8)), snapshot,
                                      runtime::detail::testIdentity(*fixture.plan), kBudget, {});
-    expectations.expect(submission.accepted() && bloom::test_support::awaitCondition(
-                                                     "the blocking stage child is live",
-                                                     [&] { return started->load(); }, kWait),
+    expectations.expect(submission.accepted() &&
+                            bloom::test_support::awaitCondition("the blocking stage child is live",
+                                                                [&] { return started->load(); }),
                         "the blocking stage child is live");
     service.beginShutdown();
     // There is no deadline left to wait out: with the child live and shutdown begun, ownership is
@@ -521,10 +545,10 @@ void testHeldStageCancellation(Expectations& expectations, const std::string& lo
     expectations.expect(result.has_value() && result->state() == TaskState::Cancelled,
                         "the parent completes as Cancelled only after the child is terminal");
     scheduler.beginShutdown();
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "held cancellation/shutdown reaches quiescence",
-                            [&] { return scheduler.isQuiescent(); }, kWait),
-                        "held cancellation/shutdown reaches quiescence");
+    expectations.expect(
+        bloom::test_support::awaitCondition("held cancellation/shutdown reaches quiescence",
+                                            [&] { return scheduler.isQuiescent(); }),
+        "held cancellation/shutdown reaches quiescence");
 }
 // Non-device: a submission racing shutdown is rejected without evaluation.
 void testSubmitAfterShutdownRejects(Expectations& expectations) {
@@ -554,9 +578,9 @@ void testSubmitAfterShutdownRejects(Expectations& expectations) {
     expectations.expect(fixture.evaluations->load() == before,
                         "rejected submit performs no evaluation");
     scheduler.beginShutdown();
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "quiesces", [&] { return scheduler.isQuiescent(); }, kWait),
-                        "quiesces");
+    expectations.expect(
+        bloom::test_support::awaitCondition("quiesces", [&] { return scheduler.isQuiescent(); }),
+        "quiesces");
 }
 // Non-device: beginShutdown immediately after construction must not hang or abandon startup.
 void testShutdownBeforeStartupDispatch(Expectations& expectations) {
@@ -569,14 +593,12 @@ void testShutdownBeforeStartupDispatch(Expectations& expectations) {
                             [&] {
                                 return service.status().state ==
                                        runtime::GpuPreviewDisplayServiceState::Stopped;
-                            },
-                            kWait),
+                            }),
                         "shutdown reaches Stopped");
     scheduler.beginShutdown();
-    expectations.expect(
-        bloom::test_support::awaitCondition(
-            "startup root not abandoned", [&] { return scheduler.isQuiescent(); }, kWait),
-        "startup root not abandoned");
+    expectations.expect(bloom::test_support::awaitCondition(
+                            "startup root not abandoned", [&] { return scheduler.isQuiescent(); }),
+                        "startup root not abandoned");
 }
 
 // Non-device: more than 64 accepted ordinary CPU roots all retain terminal ownership.
@@ -607,16 +629,16 @@ void testManyOrdinaryRootsRetainOwnership(Expectations& expectations) {
     service.beginShutdown();
     int resolved = 0;
     for (const auto& handle : handles) {
-        if (awaitResult(handle, 5s).has_value()) {
+        if (awaitResult(handle).has_value()) {
             ++resolved;
         }
     }
     expectations.expect(resolved == static_cast<int>(handles.size()),
                         "all roots above 64 reach terminal (no silent drop)");
     scheduler.beginShutdown();
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "quiesces", [&] { return scheduler.isQuiescent(); }, kWait),
-                        "quiesces");
+    expectations.expect(
+        bloom::test_support::awaitCondition("quiesces", [&] { return scheduler.isQuiescent(); }),
+        "quiesces");
 }
 
 // Non-device: unrelated scheduler tasks are preserved across service shutdown.
@@ -633,9 +655,9 @@ void testUnrelatedTasksPreserved(Expectations& expectations) {
     expectations.expect(awaitResult(unrelated.handle).has_value(),
                         "unrelated scheduler task preserved");
     scheduler.beginShutdown();
-    expectations.expect(bloom::test_support::awaitCondition(
-                            "quiesces", [&] { return scheduler.isQuiescent(); }, kWait),
-                        "quiesces");
+    expectations.expect(
+        bloom::test_support::awaitCondition("quiesces", [&] { return scheduler.isQuiescent(); }),
+        "quiesces");
 }
 
 // Device: a stalled native dispatch is retired by the bounded deadline and falls back same-stage.

@@ -3,6 +3,7 @@
 // device/pipeline/qualification path for the bounded native-dispatch-deadline scenario and the
 // paired benchmark. It fabricates no eligibility report.
 
+#include "await.hpp"
 #include "gpu_preview_display_service_phase_support.hpp"
 #include "gpu_preview_display_service_private.hpp"
 
@@ -243,29 +244,21 @@ benchmarkStage(std::shared_ptr<const color::PreparedCpuDisplayProcessorHandle> p
     return options;
 }
 
+// #750: the waits follow the work through the shared helper; its limit is only the ceiling for a
+// broken run.
 template <typename Value>
-[[nodiscard]] std::optional<TaskResult<Value>>
-awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds timeout = 15s) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (auto result = handle.tryTakeResult()) {
-            return result;
-        }
-        std::this_thread::sleep_for(500us);
-    }
-    return std::nullopt;
+[[nodiscard]] std::optional<TaskResult<Value>> awaitResult(const TaskHandle<Value>& handle) {
+    std::optional<TaskResult<Value>> result;
+    (void)bloom::test_support::awaitCondition("the task's result", [&] {
+        result = handle.tryTakeResult();
+        return result.has_value();
+    });
+    return result;
 }
 
-[[nodiscard]] bool waitQuiescent(TaskScheduler& scheduler,
-                                 const std::chrono::milliseconds timeout = 10s) {
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
-    while (std::chrono::steady_clock::now() < deadline) {
-        if (scheduler.isQuiescent()) {
-            return true;
-        }
-        std::this_thread::sleep_for(1ms);
-    }
-    return scheduler.isQuiescent();
+[[nodiscard]] bool waitQuiescent(TaskScheduler& scheduler) {
+    return bloom::test_support::awaitCondition("the harness scheduler reaches quiescence",
+                                               [&] { return scheduler.isQuiescent(); });
 }
 
 [[nodiscard]] double median(std::vector<double> values) {
@@ -401,11 +394,13 @@ NativeDeadlineScenarioResult runNativeDeadlineScenario(const std::filesystem::pa
     result.dispatched = core->nativeInFlight;
 
     if (failNative) {
-        const auto deadline = std::chrono::steady_clock::now() + 10s;
-        while (core->nativeInFlight && std::chrono::steady_clock::now() < deadline) {
-            processNativeDisplay(core);
-            std::this_thread::sleep_for(1ms);
-        }
+        // The real job runs to its end, which the pump below polls for.
+        static_cast<void>(bloom::test_support::awaitConditionWith(
+            "the failed native job completes", [&] { return !core->nativeInFlight; },
+            [&] {
+                processNativeDisplay(core);
+                std::this_thread::sleep_for(1ms);
+            }));
     } else {
         *fakeNow += core->options.nativeDispatchDeadline + std::chrono::milliseconds(1);
         processNativeDisplay(core);
@@ -442,16 +437,9 @@ runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader) {
     TaskScheduler scheduler(harnessConfig(4));
     auto sharedOptions = gpuOptions(loader);
     GpuPreviewDisplayService gpuService(scheduler, stage, fallback, sharedOptions);
-    const bool terminal = [&] {
-        const auto deadline = std::chrono::steady_clock::now() + 30s;
-        while (std::chrono::steady_clock::now() < deadline) {
-            if (gpuService.status().state != GpuPreviewDisplayServiceState::Initializing) {
-                return true;
-            }
-            std::this_thread::sleep_for(1ms);
-        }
-        return false;
-    }();
+    const bool terminal = bloom::test_support::awaitCondition("the benchmark service starts", [&] {
+        return gpuService.status().state != GpuPreviewDisplayServiceState::Initializing;
+    });
     if (!terminal || gpuService.status().state != GpuPreviewDisplayServiceState::Ready) {
         return samples;
     }
