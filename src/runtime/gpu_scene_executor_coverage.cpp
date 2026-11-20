@@ -208,8 +208,11 @@ GpuSceneExecutorPollResult GpuSceneExecutor::Impl::pollPathCoverage() {
             return GpuSceneExecutorPollResult::Failure;
         }
         ++counters.nativeJobFailures;
+        // The producer's own diagnostic says why (#749: on Windows a driver timeout recovery hung
+        // the GPU past the coverage fence deadline; the report named neither).
         fail(GpuSceneExecutorDiagnosticCode::NativeUnproven,
-             "a vector coverage failure did not prove fence retirement; owner drain is required",
+             "a vector coverage failure did not prove fence retirement; owner drain is required (" +
+                 coverageDiagnostic.message + ")",
              true);
         return GpuSceneExecutorPollResult::Failure;
     }

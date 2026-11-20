@@ -444,6 +444,14 @@ void testNativeRetirementContracts(Expectations& expectations, GpuDevice& device
                     exec.executor->diagnostic().code ==
                         GpuSceneExecutorDiagnosticCode::NativeUnproven,
                 "vector drain: real coverage allocations and admission remain retained");
+            // The report carries the coverage producer's own cause, not only the retention.
+            expectations.expect(
+                exec.executor->diagnostic().message ==
+                    "a vector coverage failure did not prove fence retirement; owner drain is "
+                    "required (the coverage did not retire within the deadline; the submission is "
+                    "retained)",
+                "vector drain: the report names the coverage deadline: " +
+                    exec.executor->diagnostic().message);
             expectations.expect(exec.executor->takeImage() == nullptr &&
                                     exec.executor->begin(vectorScene.scene, kSceneBudget).code ==
                                         GpuSceneExecutorDiagnosticCode::OwnerDrainRequired,

@@ -156,7 +156,10 @@ retire a later job. Native access also checks the exact owner thread lifetime. D
 quarantined producer orphans its existing resident slot so descriptors and pipeline outlive the
 submission; non-blocking owner drain releases that slot only after real fence completion or actual
 driver device loss. Injected loss diagnostics require real fence completion before cleanup. The
-quarantine fuse records historical unproved retirement, independently of current slot occupancy.
+scene executor's report of such an unproved failure (`NativeUnproven`, owner drain required) ends
+with the producer's own diagnostic in parentheses, for example its fence deadline expiring while a
+Windows driver timeout recovery holds the GPU, so the cause is never lost behind the retention.
+The quarantine fuse records historical unproved retirement, independently of current slot occupancy.
 Every producer native resource set (pipeline
 plus resident mask) holds one of a fixed number of process-wide resident slots, acquired before its
 first native allocation and held until owner-thread retirement; creation is lazy, so idle producers
