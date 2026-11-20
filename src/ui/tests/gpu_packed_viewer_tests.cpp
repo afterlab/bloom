@@ -1,5 +1,8 @@
 // Production offscreen GPU preparation -> one packed transfer -> ordinary EditorArea/Viewer.
-// All observation windows run only under the caller's private compositor.
+// The packed product paints the Viewer with ordinary widget composition and presents through no
+// native surface, so every case runs on any Qt platform, offscreen included (#726). Each
+// observation window prints the widget geometry and holds briefly so an external capture can be
+// taken; it asserts nothing.
 #include "await.hpp"
 #include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
@@ -211,9 +214,9 @@ std::uint32_t gCacheHeight = 1080;
 bool gFixedBudget = false;
 } // namespace
 // Cache qualification reuses the explicit retirement teardown guard above.
+#include "gpu_packed_bench_project.ipp"
 #include "gpu_packed_cache100_proof.ipp"
 #include "gpu_packed_playing_proof.ipp"
-#include "gpu_packed_bench_project.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     bool cache100 = false, half = false, partial = false, playing = false, animatedDrag = false;
@@ -340,12 +343,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     QCoreApplication::setOrganizationName("BloomProof");
     QCoreApplication::setApplicationName("PackedViewer");
     QSettings().setValue("viewer/resolution", "Full");
-    // The cache100 RAM-fill harness uses no presentation surface and also runs offscreen.
-    const bool offscreenCache =
-        (cache100 || !gBenchProject.empty()) && QApplication::platformName() == "offscreen";
-    if (options.loader_path.empty() ||
-        (!offscreenCache && !QApplication::platformName().startsWith("wayland"))) {
-        std::cout << "Unsupported: private Wayland and genuine Vulkan device are required\n";
+    if (options.loader_path.empty()) {
+        std::cout << "Unsupported: a genuine Vulkan device is required\n";
         return options.require_device ? 1 : 77;
     }
     if (!gBenchProject.empty())

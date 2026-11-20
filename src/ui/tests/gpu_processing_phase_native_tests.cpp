@@ -37,11 +37,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     const auto parsed = parseOptions(argc, argv);
     if (!parsed.valid)
         return 2;
+    // No window and no presentation: it runs on any Qt platform, offscreen included (#726).
     QGuiApplication application(argc, argv);
-    if (!QGuiApplication::platformName().startsWith("wayland")) {
-        std::cout << "SKIP: native phase recovery requires private Wayland\n";
-        return parsed.require_device ? 1 : 77;
-    }
     QTemporaryDir temporary;
     Expectations checks;
     Fixture fixture(temporary.path().toStdString());

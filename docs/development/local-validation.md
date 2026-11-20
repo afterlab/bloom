@@ -61,6 +61,11 @@ tests' `compositor-tests.log` and `compositor-tests.xml` beside the other logs; 
 Weston exits or opens no socket), the compositor tests are `NotRun` with the reason, and the run is
 `NotRun` and exits nonzero even if everything else passed. The runner has no private session on
 macOS or Windows, so a tree configured with the option there reports its compositor tests `NotRun`.
+The compositor tests are Linux only by nature: each presents to a native Vulkan surface, and Wayland
+is the only presentation platform Bloom implements, so macOS and Windows have no session to give
+them (the reason is written beside the registrations in `src/ui/tests/CMakeLists.txt`). A test that
+presents to no native surface, such as the packed Viewer cases, is an ordinary default-suite test on
+all three platforms.
 
 ```sh
 python3 tools/local/sprint_validation.py milestone \

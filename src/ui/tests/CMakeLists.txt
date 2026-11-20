@@ -11,6 +11,13 @@ endif()
 # Tests below marked COMPOSITOR need a real Wayland session: under the offscreen platform they
 # print a skip and exit successfully, so they are registered only with
 # BLOOM_ENABLE_COMPOSITOR_TESTS, to be run inside a private compositor.
+# They are Linux only, and that is the reason they run on fewer than three platforms: each one
+# presents to a native Vulkan surface, and the only presentation platform Bloom implements is
+# Wayland (render::GpuPresentationPlatform; Xcb and Xlib are declared and unavailable). macOS and
+# Windows have no Wayland, so there is no session to give them; the application on every platform
+# presents through the packed widget route instead, which the default suite covers offscreen (for
+# example bloom.ui.gpu_packed_viewer_*). A test that does not present to a native surface is not a
+# COMPOSITOR test (#726).
 
 add_executable(bloom_editor_area_chrome_test
     editor_area_chrome_tests.cpp
@@ -2731,10 +2738,12 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     target_link_libraries(bloom_ui_gpu_processing_phase_native_test
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
+    # Presentation disabled and no window, so not a compositor test: the default suite on every
+    # platform (#726).
     bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
         COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
-        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=wayland"
-        SKIP_RETURN_CODE 77 COMPOSITOR)
+        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77)
 
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
     target_include_directories(bloom_ui_gpu_packed_viewer_test
@@ -2817,16 +2826,11 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             set(packed_kind STRESS RUN_SERIAL)
         elseif(packed_case MATCHES "100$")
             set(packed_kind STRESS)
-        elseif(packed_case MATCHES "^(half|full|partial)$")
-            set(packed_kind)
         else()
-            # Presentation cases need a private compositor session.
-            set(packed_kind COMPOSITOR)
-        endif()
-        if(packed_kind STREQUAL "COMPOSITOR")
-            set(packed_platform wayland)
-        else()
-            set(packed_platform offscreen)
+            # The packed Viewer paints through ordinary widgets and presents through no native
+            # surface, so the Viewer cases are default-suite tests on every platform (#726). Their
+            # devices are the fixed reading's stated card, never the driver's live budget.
+            set(packed_kind FIXED_MEMORY)
         endif()
         bloom_add_test(
             NAME bloom.ui.gpu_packed_viewer_${packed_case}
@@ -2834,7 +2838,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                     ${bloom_ui_gpu_viewer_service_chain_loader_args} ${packed_args}
             LABELS ui gpu viewer packed native
             TIMEOUT 150
-            ENVIRONMENT "QT_QPA_PLATFORM=${packed_platform}"
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
             SKIP_RETURN_CODE 77 ${packed_kind})
     endforeach()
 
