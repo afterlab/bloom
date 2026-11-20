@@ -7,8 +7,9 @@
 #
 # The test identity (an application id, a name, a file type and a PATH value of its own) means
 # that nothing of an installed Bloom is read or changed: the installers made here install
-# "Bloom Package Check" for the current user, into WORK, and register the file type
-# .bloomcheck and the user environment value BloomPackageCheckPath. Nothing is written under
+# "Bloom Package Check <code>" for the current user, into WORK, and register the file type
+# .bloomcheck<code> and the user environment value BloomPackageCheckPath<code>, where <code> is
+# made from WORK, so two build trees never share one (#749). Nothing is written under
 # HKEY_LOCAL_MACHINE.
 #
 # Steps, each reported on one line as it passes:
@@ -51,11 +52,21 @@ endif()
 
 # --- The test identity ---------------------------------------------------------------------------
 # Not the installer's own application id (bloom.iss), so that an installed Bloom is never found.
-set(test_id "{5BEE37DA-3902-4302-9768-146EC14F0F15}")
-set(test_name "Bloom Package Check")
-set(test_extension ".bloomcheck")
-set(test_prog_id "BloomPackageCheck.Project")
-set(test_path_value "BloomPackageCheckPath")
+# Every name the install writes for the current user (the id, the uninstall entry, the Start menu
+# entry, the file type and the PATH value) ends in a code made from WORK, so the check of another
+# build tree running at the same time has names of its own (#749): with one id, its upgrade found
+# this tree's install and upgraded that one. A rerun in the same tree gets the same names and so
+# removes what a failed run left.
+get_filename_component(WORK "${WORK}" ABSOLUTE)
+string(SHA256 work_code "${WORK}")
+string(TOUPPER "${work_code}" work_code)
+string(SUBSTRING "${work_code}" 0 12 id_code)
+string(SUBSTRING "${work_code}" 0 8 name_code)
+set(test_id "{5BEE37DA-3902-4302-9768-${id_code}}")
+set(test_name "Bloom Package Check ${name_code}")
+set(test_extension ".bloomcheck${name_code}")
+set(test_prog_id "BloomPackageCheck${name_code}.Project")
+set(test_path_value "BloomPackageCheckPath${name_code}")
 set(defines "AppId={${test_id}" "AppName=${test_name}" "ProjectExtension=${test_extension}"
             "ProjectProgId=${test_prog_id}" "PathValueName=${test_path_value}")
 set(upgrade_version "9.9.9")
@@ -66,7 +77,6 @@ set(extension_key "HKCU\\Software\\Classes\\${test_extension}")
 set(prog_id_key "HKCU\\Software\\Classes\\${test_prog_id}")
 set(environment_key "HKCU\\Environment")
 
-get_filename_component(WORK "${WORK}" ABSOLUTE)
 set(package_name "Bloom-${VERSION}-windows-x86_64")
 set(package "${WORK}/package/${package_name}")
 set(installed "${WORK}/installed")

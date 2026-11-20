@@ -668,8 +668,9 @@ previous version, the entries, the file type and the `Path` entry.
 
 The `bloom.package.installers` test (Windows only, because the installer is a Windows program)
 makes two installers from the built package under a test identity of its own: another
-application id and name, the file type `.bloomcheck`, and the value `BloomPackageCheckPath` in
-place of `Path`. It installs the first silently with the PATH option, checks the files, the
+application id and name, the file type `.bloomcheck<code>`, and the value
+`BloomPackageCheckPath<code>` in place of `Path`, where `<code>` is made from the test's work
+folder, so the checks of two build trees running at once never find each other's install (#749). It installs the first silently with the PATH option, checks the files, the
 entries and the `.bloomcheck` keys, and renders a frame with `bloom-cli` from the installed
 `cli` folder. It installs the second over it and checks the upgrade, the kept previous version
 and that `Path` still holds the folder once. It uninstalls and checks that everything is gone.
