@@ -5,6 +5,7 @@
 // interfaces that exist before the fixes, so the same file builds on both.
 //   bloom_bug_batch_capture [directory]
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "isolated_qt_settings.hpp"
 #include "unique_temp_dir.hpp"
 #include "export_test_support.hpp"
 #include "node_interaction_test_support.hpp"
@@ -710,6 +711,7 @@ void captureLaneWindow() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomBugBatchCapture");
     app.setApplicationName("BugBatchCapture");
     QStandardPaths::setTestModeEnabled(true);

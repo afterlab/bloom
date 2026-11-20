@@ -5,6 +5,7 @@
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
+#include "isolated_qt_settings.hpp"
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/rational_time.hpp>
@@ -68,6 +69,7 @@ using bloom::test_support::awaitQtCondition;
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomExportQueueHostTests"));
     QApplication::setApplicationName(QStringLiteral("ExportQueueHost"));
     QStandardPaths::setTestModeEnabled(true);

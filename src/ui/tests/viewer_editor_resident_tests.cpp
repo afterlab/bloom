@@ -7,6 +7,7 @@
 // first-present/ack path is the separate native test.
 
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include <bloom/ui/viewer_editor.hpp>
 
 #include <bloom/color/bloom_neutral_builtin.hpp>
@@ -796,6 +797,7 @@ void testNativeCoverPromotionIsFencedAndStable(Expectations& expectations) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     Expectations expectations;
     testViewerEditorResidentGateIsInertAndKeepsCpuPaint(expectations);
     testViewerEditorExternalUnsafeCompletionClearsMutationGate(expectations);

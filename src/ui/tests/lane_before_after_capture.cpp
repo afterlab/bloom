@@ -5,6 +5,7 @@
 //   bloom_lane_before_after_capture <directory> <before|after> [parts]
 // writes <issue>-<phase>-<name>.png. Parts: window, layers, assets, dissolve, cards, preferences.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "isolated_qt_settings.hpp"
 #include "node_interaction_test_support.hpp"
 #include "preferences_window.hpp"
 #include "unique_temp_dir.hpp"
@@ -303,6 +304,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomLaneCapture");
     app.setApplicationName("LaneBeforeAfterCapture");
     QStandardPaths::setTestModeEnabled(true);

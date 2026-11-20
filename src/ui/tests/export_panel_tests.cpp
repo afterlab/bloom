@@ -13,6 +13,7 @@
 #include "export_render_list.hpp"
 #include "export_render_settings_dialog.hpp"
 #include "export_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 #include "window_fixture.hpp"
 
 #include <bloom/commands/operations.hpp>
@@ -1718,6 +1719,7 @@ void startedAndRenderTime(TestContext& context) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomExportPanelTests"));
     QApplication::setApplicationName(QStringLiteral("ExportPanel"));
     QStandardPaths::setTestModeEnabled(true);

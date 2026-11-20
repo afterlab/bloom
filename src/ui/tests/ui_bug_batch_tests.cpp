@@ -7,6 +7,7 @@
 #include "await_qt.hpp"
 #include "export_render_list.hpp"
 #include "export_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 #include "native_gesture_support.hpp"
 #include "node_editor_items.hpp"
 #include "node_interaction_test_support.hpp"
@@ -1169,6 +1170,7 @@ void testPixelReadoutRepaintsOnlyOnTextChange() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomBugBatchTests");
     app.setApplicationName("BugBatchTests");
     QStandardPaths::setTestModeEnabled(true);

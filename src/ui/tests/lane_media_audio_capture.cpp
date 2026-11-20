@@ -3,6 +3,7 @@
 //   bloom_lane_media_audio_capture <directory> [parts]
 // writes <issue>-<name>.png. Parts: cards, bake, statusbar, preferences.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "isolated_qt_settings.hpp"
 #include "node_interaction_test_support.hpp"
 #include "preferences_window.hpp"
 #include "window_fixture.hpp"
@@ -169,6 +170,7 @@ int main(int argc, char** argv) {
         return 2;
     }
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomLaneCapture");
     app.setApplicationName("LaneMediaAudioCapture");
     QStandardPaths::setTestModeEnabled(true);

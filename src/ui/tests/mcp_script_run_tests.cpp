@@ -7,6 +7,7 @@
 // round-trips through viewer.set, the viewer and context queries and bloom.viewer.set_level. Real
 // window and session, offscreen.
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "mcp_http_client.hpp"
 #include "window_fixture.hpp"
 
@@ -274,6 +275,7 @@ void exercise() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomTests");
     app.setApplicationName("McpScriptRun");
     ui::kit::installAfterlabTheme(app);

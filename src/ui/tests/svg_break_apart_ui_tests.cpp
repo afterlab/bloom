@@ -8,6 +8,7 @@
 
 #include "await_qt.hpp"
 #include "import_progress_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 
 #include <bloom/commands/svg_import_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -127,6 +128,7 @@ constexpr auto kPathNodes = "bloom.value-path";
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomSvgBreakApart"));
     QApplication::setApplicationName(QStringLiteral("SvgBreakApart"));
     QStandardPaths::setTestModeEnabled(true);

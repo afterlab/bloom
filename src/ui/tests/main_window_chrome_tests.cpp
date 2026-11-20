@@ -2,6 +2,7 @@
 #define BLOOM_GRAMMAR_ARTIFACT_DIR "."
 #endif
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 #undef BLOOM_GRAMMAR_ARTIFACT_DIR
@@ -1568,6 +1569,7 @@ void testProjectColorDialogPreservesCurrentIntent(Expectations& expectations) {
 int main(int argc, char** argv) {
     qputenv("QT_QPA_PLATFORM", "offscreen");
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     Expectations expectations;
     testChromeModeFromSettingsReadsTheInjectedFile(expectations);
     testLegacyLayoutMigration(expectations);

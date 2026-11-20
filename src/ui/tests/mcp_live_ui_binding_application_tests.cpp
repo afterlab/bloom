@@ -6,6 +6,7 @@
 // fixture. None of them may dirty the project or enter its undo history. Offscreen.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "unique_temp_dir.hpp"
 #include "window_fixture.hpp"
 
@@ -390,6 +391,7 @@ void testApplication() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomMcpLiveUiApplicationTests"));
     QApplication::setApplicationName(QStringLiteral("McpLiveUiApplication"));
     ui::kit::installAfterlabTheme(application);

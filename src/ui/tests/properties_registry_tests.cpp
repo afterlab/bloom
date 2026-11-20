@@ -1,5 +1,6 @@
 #include "case_timer.hpp"
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include <QAction>
 #include <QColor>
 #include <QDataStream>
@@ -3612,6 +3613,7 @@ void lineEndRows() {
 
 int main(int argc, char** argv) try {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QCoreApplication::setOrganizationName("BloomPropertiesRegistryTest");
     QSettings().clear();
     if (argc > 1 && std::string_view(argv[1]) == "--readouts") {

@@ -8,6 +8,7 @@
 // Writes <directory>/<name>-dpr1.png or -dpr15.png and prints one audit line per dialog; the exit
 // status is the number of audit findings.
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "window_fixture.hpp"
 
 #include "composition_settings_dialog.hpp"
@@ -630,6 +631,7 @@ int main(int argc, char** argv) {
     // out of the user's own.
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     kit::installAfterlabTheme(application);
     gDirectory = QString::fromLocal8Bit(argv[1]);
     gSuffix = QString::fromLatin1(argv[2]).remove(QLatin1Char('.'));

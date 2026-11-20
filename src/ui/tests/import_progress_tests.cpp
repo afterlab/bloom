@@ -8,6 +8,7 @@
 #include "await_qt.hpp"
 #include "import_progress_dialog.hpp"
 #include "import_progress_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -581,6 +582,7 @@ void dropsImportWithProgress(const QTemporaryDir& directory) {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomImportProgressTests"));
     QApplication::setApplicationName(QStringLiteral("ImportProgress"));
     QStandardPaths::setTestModeEnabled(true);

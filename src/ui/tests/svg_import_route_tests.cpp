@@ -5,6 +5,7 @@
 
 #include "await_qt.hpp"
 #include "import_progress_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 
 #include <QApplication>
 #include <QDir>
@@ -81,6 +82,7 @@ struct Harness final {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomSvgImportRoute"));
     QApplication::setApplicationName(QStringLiteral("SvgImportRoute"));
     QStandardPaths::setTestModeEnabled(true);

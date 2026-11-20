@@ -4,6 +4,7 @@
 // BLOOM_INTERPRET_CAPTURE_DIR set it also saves the video, still and sequence dialogs as PNGs.
 #include "assets_editor_internal.hpp"
 #include "interpret_footage_dialog.hpp"
+#include "isolated_qt_settings.hpp"
 
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/new_project.hpp>
@@ -297,6 +298,7 @@ void editorFlow() {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     ui::kit::installAfterlabTheme(application);
     QApplication::setOrganizationName(QStringLiteral("BloomInterpretFootageTests"));
     QApplication::setApplicationName(QStringLiteral("InterpretFootage"));

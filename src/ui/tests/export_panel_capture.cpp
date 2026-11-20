@@ -11,6 +11,7 @@
 #include "export_render_list.hpp"
 #include "export_render_settings_dialog.hpp"
 #include "export_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 
 #include <bloom/document/new_project.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -77,6 +78,7 @@ void settle() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomExportCapture");
     app.setApplicationName("ExportCapture");
     QStandardPaths::setTestModeEnabled(true);

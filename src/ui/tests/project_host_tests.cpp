@@ -16,6 +16,7 @@
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "zip_container_test_support.hpp"
 
 #include <QApplication>
@@ -1267,6 +1268,7 @@ int main(int argc, char** argv) {
     // Qt's widget file dialog saves its state into the user's Qt settings: not from a test.
     QStandardPaths::setTestModeEnabled(true);
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     Expectations expectations;
     testNewProjectConstruction(expectations);
     testDirtyAfterExecutedTransaction(expectations);

@@ -3,6 +3,7 @@
 // clients, incremental activity, the copy-config menu, the status bar indicator and the warning
 // sound.
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "mcp_test_support.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -677,6 +678,7 @@ void testRealService() {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomMcpPanelTests");
     app.setApplicationName("McpServerPanel");
     ui::kit::installAfterlabTheme(app);

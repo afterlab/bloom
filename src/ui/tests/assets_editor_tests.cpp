@@ -1,6 +1,7 @@
 #include "assets_editor_internal.hpp"
 #include "colour_space_names.hpp"
 #include "editor_chrome_test_support.hpp"
+#include "isolated_qt_settings.hpp"
 #include "reveal_in_file_manager.hpp"
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/commands/operations.hpp>
@@ -494,6 +495,7 @@ void revealPlans(TestContext& context) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomAssetsEditorTests"));
     QApplication::setApplicationName(QStringLiteral("AssetsEditor"));
     QStandardPaths::setTestModeEnabled(true);

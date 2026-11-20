@@ -6,6 +6,7 @@
 
 #include "await_qt.hpp"
 #include "import_options_pane.hpp"
+#include "isolated_qt_settings.hpp"
 #include "preferences_window.hpp"
 
 #include <QApplication>
@@ -308,6 +309,7 @@ void thumbnailsFollowInterpretation(const QTemporaryDir& directory) {
 
 int main(int argc, char** argv) {
     QApplication application(argc, argv);
+    bloom::test_support::isolateQtSettings();
     ui::kit::installAfterlabTheme(application);
     QApplication::setOrganizationName(QStringLiteral("BloomImportOptionsTests"));
     QApplication::setApplicationName(QStringLiteral("ImportOptions"));

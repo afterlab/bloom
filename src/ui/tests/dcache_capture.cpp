@@ -5,6 +5,7 @@
 // with the Disk cell's tooltip) to the directory given as the first argument; the second argument
 // is the tag ("before" or "after"). The device pixel ratio follows QT_SCALE_FACTOR.
 #pragma clang diagnostic ignored "-Wmissing-designated-field-initializers"
+#include "isolated_qt_settings.hpp"
 #include "unique_temp_dir.hpp"
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/document.hpp>
@@ -64,6 +65,7 @@ void mirrorSource(cache::SourceMirror& mirror, const char tag, const std::size_t
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     app.setOrganizationName("BloomDiskCacheCapture");
     app.setApplicationName("DiskCacheCapture");
     QStandardPaths::setTestModeEnabled(true);

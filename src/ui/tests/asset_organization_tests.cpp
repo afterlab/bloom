@@ -2,6 +2,7 @@
 #include "asset_input_picker_guard.hpp"
 #include "assets_editor_internal.hpp"
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include <QAbstractButton>
 #include <QApplication>
 #include <QDialog>
@@ -561,6 +562,7 @@ void importIntoSelectedFolder() {
 } // namespace
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomAssetOrganizationTests"));
     QApplication::setApplicationName(QStringLiteral("AssetOrganization"));
     QStandardPaths::setTestModeEnabled(true);

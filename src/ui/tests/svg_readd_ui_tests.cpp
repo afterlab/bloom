@@ -11,6 +11,7 @@
 #include "asset_drop.hpp"
 #include "assets_editor_internal.hpp"
 #include "await_qt.hpp"
+#include "isolated_qt_settings.hpp"
 #include "layer_drop.hpp"
 #include "node_editor_items.hpp"
 
@@ -193,6 +194,7 @@ QTreeWidgetItem* findRow(QTreeWidget& tree, const QString& name) {
 
 int main(int argc, char** argv) {
     QApplication app(argc, argv);
+    bloom::test_support::isolateQtSettings();
     QApplication::setOrganizationName(QStringLiteral("BloomSvgReadd"));
     QApplication::setApplicationName(QStringLiteral("SvgReadd"));
     QStandardPaths::setTestModeEnabled(true);
