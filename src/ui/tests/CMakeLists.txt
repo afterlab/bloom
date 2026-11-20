@@ -489,8 +489,8 @@ bloom_add_test(
     COMMAND bloom_memory_budget_controller_test
     LABELS ui runtime unit
     TIMEOUT 30
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
 )
-set_tests_properties(bloom.ui.memory_budget_controller PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 
 bloom_add_test(
     NAME bloom.ui.task_completion_bridge
@@ -1058,10 +1058,9 @@ target_include_directories(bloom_assets_panel_test PRIVATE ${CMAKE_CURRENT_SOURC
 target_link_libraries(bloom_assets_panel_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_assets_panel_test)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.assets-panel.dpr${scale} COMMAND bloom_assets_panel_test)
-    set_tests_properties(bloom.ui.assets-panel.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;integration;assets" TIMEOUT 60)
+    bloom_add_test(NAME bloom.ui.assets-panel.dpr${scale} COMMAND bloom_assets_panel_test
+        LABELS ui integration assets TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
@@ -1155,16 +1154,20 @@ add_executable(bloom_node_canvas_polish_test node_canvas_polish_tests.cpp)
 target_include_directories(bloom_node_canvas_polish_test PRIVATE ..)
 target_link_libraries(bloom_node_canvas_polish_test PRIVATE bloom_ui bloom_project Qt6::Test)
 bloom_enable_warnings(bloom_node_canvas_polish_test)
-bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set(bloom_node_canvas_polish_platform offscreen)
+set(bloom_node_canvas_polish_serial)
 if(WIN32)
     # The estimate is held against the cards the application draws. On Windows the offscreen platform
     # lays text out with another font engine than the application, whose labels come out a few pixels
     # wider, so this test runs on the platform the application runs on. It runs alone: in a session
     # without a desktop its windows cannot be created, and the attempts use up window resources the
     # session's other test programs need while it runs.
-    set_tests_properties(bloom.ui.node-canvas-polish
-        PROPERTIES ENVIRONMENT "QT_QPA_PLATFORM=windows" RUN_SERIAL TRUE)
+    set(bloom_node_canvas_polish_platform windows)
+    set(bloom_node_canvas_polish_serial RUN_SERIAL)
 endif()
+bloom_add_test(NAME bloom.ui.node-canvas-polish COMMAND bloom_node_canvas_polish_test
+    LABELS ui integration kit TIMEOUT 60 ${bloom_node_canvas_polish_serial}
+    ENVIRONMENT "QT_QPA_PLATFORM=${bloom_node_canvas_polish_platform}")
 
 # Issue #359: the Nodes canvas at scale -- per-move work independent of the node count, edits that
 # allocate only the items they touch, and the skipped projection. Counts work, never time.
@@ -1550,10 +1553,9 @@ target_compile_definitions(bloom_export_panel_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_export_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.export_panel_capture.dpr${scale} COMMAND bloom_export_panel_capture)
-    set_tests_properties(bloom.ui.export_panel_capture.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.export_panel_capture.dpr${scale} COMMAND bloom_export_panel_capture
+        LABELS ui grammar TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_export_queue_host_test export_queue_host_tests.cpp)
@@ -1601,10 +1603,10 @@ target_link_libraries(bloom_properties_registry_test PRIVATE bloom_ui)
 bloom_enable_warnings(bloom_properties_registry_test)
 bloom_add_test(NAME bloom.ui.properties-registry COMMAND bloom_properties_registry_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 # #582: the label audit again at a device pixel ratio of 1.5 (the full registry test above runs at 1).
-add_test(NAME bloom.ui.properties-registry.labels.dpr1.5 COMMAND bloom_properties_registry_test --label-audit)
-set_tests_properties(bloom.ui.properties-registry.labels.dpr1.5 PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5"
-    LABELS "ui;integration;kit" TIMEOUT 120)
+bloom_add_test(NAME bloom.ui.properties-registry.labels.dpr1.5
+    COMMAND bloom_properties_registry_test --label-audit
+    LABELS ui integration kit TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5")
 # #344 #349 #509: the value-node readouts resolve, and the path nodes' stamp, source and Alpha
 # Contour rows read whole (BLOOM_READOUT_CAPTURE_DIR saves their Properties captures).
 bloom_add_test(NAME bloom.ui.properties-readouts COMMAND bloom_properties_registry_test --readouts LABELS ui integration kit TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -1630,10 +1632,9 @@ target_link_libraries(bloom_ui_grammar_audit_test PRIVATE bloom_ui bloom_runtime
 target_compile_definitions(bloom_ui_grammar_audit_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_ui_grammar_audit_test)
 foreach(scale IN ITEMS 1 1.5 2)
-    add_test(NAME bloom.ui.grammar_audit.dpr${scale} COMMAND bloom_ui_grammar_audit_test)
-    set_tests_properties(bloom.ui.grammar_audit.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 60)
+    bloom_add_test(NAME bloom.ui.grammar_audit.dpr${scale} COMMAND bloom_ui_grammar_audit_test
+        LABELS ui grammar TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # One control look and one control height: every chrome row, panel header and card row of the
@@ -1644,10 +1645,9 @@ target_link_libraries(bloom_control_geometry_test PRIVATE bloom_ui bloom_runtime
 target_compile_definitions(bloom_control_geometry_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_control_geometry_test)
 foreach(scale IN ITEMS 1 1.5 2)
-    add_test(NAME bloom.ui.control_geometry.dpr${scale} COMMAND bloom_control_geometry_test)
-    set_tests_properties(bloom.ui.control_geometry.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 60)
+    bloom_add_test(NAME bloom.ui.control_geometry.dpr${scale} COMMAND bloom_control_geometry_test
+        LABELS ui grammar TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # Bloom's type roles win over the platform theme: the main-window fixture and every offscreen
@@ -1658,10 +1658,9 @@ target_link_libraries(bloom_kit_typography_test PRIVATE bloom_ui bloom_runtime_c
 target_compile_definitions(bloom_kit_typography_test PRIVATE BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_kit_typography_test)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test)
-    set_tests_properties(bloom.ui.kit_typography.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;kit;grammar" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test
+        LABELS ui kit grammar TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
@@ -1676,10 +1675,9 @@ bloom_enable_warnings(bloom_window_golden_test)
 # references exist.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(scale IN ITEMS 1 1.5)
-        add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test)
-        set_tests_properties(bloom.ui.window_golden.dpr${scale} PROPERTIES
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-            LABELS "ui;golden" TIMEOUT 60)
+        bloom_add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test
+            LABELS ui golden TIMEOUT 60
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
     endforeach()
 endif()
 
@@ -1792,10 +1790,9 @@ target_compile_definitions(bloom_assets_panel_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_assets_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.assets_panel_capture.dpr${scale} COMMAND bloom_assets_panel_capture)
-    set_tests_properties(bloom.ui.assets_panel_capture.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.assets_panel_capture.dpr${scale} COMMAND bloom_assets_panel_capture
+        LABELS ui grammar TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_chrome_capture chrome_capture.cpp)
@@ -1835,10 +1832,9 @@ target_compile_definitions(bloom_viewer_chrome_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_viewer_chrome_capture)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.viewer_chrome.dpr${scale} COMMAND bloom_viewer_chrome_capture)
-    set_tests_properties(bloom.ui.viewer_chrome.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 90)
+    bloom_add_test(NAME bloom.ui.viewer_chrome.dpr${scale} COMMAND bloom_viewer_chrome_capture
+        LABELS ui grammar TIMEOUT 90
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_media_ui_test media_ui_tests.cpp)
@@ -1846,10 +1842,9 @@ target_include_directories(bloom_media_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 target_link_libraries(bloom_media_ui_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_media_ui_test)
 foreach(scale IN ITEMS 1 1.5 2)
-    add_test(NAME bloom.ui.media.dpr${scale} COMMAND bloom_media_ui_test)
-    set_tests_properties(bloom.ui.media.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;media;integration" TIMEOUT 60)
+    bloom_add_test(NAME bloom.ui.media.dpr${scale} COMMAND bloom_media_ui_test
+        LABELS ui media integration TIMEOUT 60
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # The tests from here on write real OpenEXR fixtures. Resolve the package where it is first used,
@@ -1865,10 +1860,9 @@ target_include_directories(bloom_cryptomatte_ui_test PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(bloom_cryptomatte_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_cryptomatte_ui_test)
-add_test(NAME bloom.ui.cryptomatte COMMAND bloom_cryptomatte_ui_test)
-set_tests_properties(bloom.ui.cryptomatte PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;media;integration" TIMEOUT 120)
+bloom_add_test(NAME bloom.ui.cryptomatte COMMAND bloom_cryptomatte_ui_test
+    LABELS ui media integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #483: Z Defocus focus picking in the Viewer (the click, Shift to keep picking, Escape, undo) and
 # the focus point drawn over the frame.
@@ -1878,10 +1872,9 @@ target_link_libraries(bloom_depth_focus_pick_ui_test PRIVATE bloom_ui bloom_runt
     bloom_runtime_evaluator bloom_commands Qt6::Test)
 target_include_directories(bloom_depth_focus_pick_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_depth_focus_pick_ui_test)
-add_test(NAME bloom.ui.depth-focus-pick COMMAND bloom_depth_focus_pick_ui_test)
-set_tests_properties(bloom.ui.depth-focus-pick PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;integration" TIMEOUT 120)
+bloom_add_test(NAME bloom.ui.depth-focus-pick COMMAND bloom_depth_focus_pick_ui_test
+    LABELS ui integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #484: the on-Viewer handles of Directional, Spin and Zoom Blur: each drag edits live and is one
 # command, Escape confirms it; Spin's turn unwraps past a revolution.
@@ -1890,10 +1883,9 @@ target_include_directories(bloom_motion_blur_viewer_ui_test PRIVATE ${CMAKE_CURR
 target_link_libraries(bloom_motion_blur_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands Qt6::Test)
 bloom_enable_warnings(bloom_motion_blur_viewer_ui_test)
-add_test(NAME bloom.ui.motion-blur-viewer COMMAND bloom_motion_blur_viewer_ui_test)
-set_tests_properties(bloom.ui.motion-blur-viewer PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.motion-blur-viewer COMMAND bloom_motion_blur_viewer_ui_test
+    LABELS ui integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #599: the Viewer point handles of a Line's two ends: a constant end is set, a keyed end gets a key
 # at the playhead, a driven end takes no drag; each drag is one command.
@@ -1903,10 +1895,9 @@ target_link_libraries(bloom_line_end_viewer_ui_test PRIVATE bloom_ui bloom_runti
     bloom_runtime_evaluator bloom_commands Qt6::Test)
 target_include_directories(bloom_line_end_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_line_end_viewer_ui_test)
-add_test(NAME bloom.ui.line-end-viewer COMMAND bloom_line_end_viewer_ui_test)
-set_tests_properties(bloom.ui.line-end-viewer PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.line-end-viewer COMMAND bloom_line_end_viewer_ui_test
+    LABELS ui integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #510: the on-Viewer handles of Procedural Warp: its points and its radius ring, each drag one
 # command, Escape confirms it.
@@ -1916,10 +1907,9 @@ target_link_libraries(bloom_warp_viewer_ui_test PRIVATE bloom_ui bloom_runtime_c
     bloom_runtime_evaluator bloom_commands Qt6::Test)
 target_include_directories(bloom_warp_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_warp_viewer_ui_test)
-add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test)
-set_tests_properties(bloom.ui.warp-viewer PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test
+    LABELS ui integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #645: drilling into grouped and SVG artwork in the Viewer: levels, picks on evaluated outlines
 # on a worker, Escape/Enter/double-click, keyed point drags, selection sync, MCP level, Break Apart.
@@ -1929,10 +1919,9 @@ target_link_libraries(bloom_viewer_drill_test PRIVATE bloom_ui bloom_runtime_com
     bloom_runtime_evaluator bloom_commands Qt6::Test)
 target_include_directories(bloom_viewer_drill_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_viewer_drill_test)
-add_test(NAME bloom.ui.viewer-drill COMMAND bloom_viewer_drill_test)
-set_tests_properties(bloom.ui.viewer-drill PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.viewer-drill COMMAND bloom_viewer_drill_test
+    LABELS ui integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
@@ -1941,10 +1930,9 @@ target_include_directories(bloom_channel_pickers_ui_test PRIVATE ${CMAKE_CURRENT
 target_link_libraries(bloom_channel_pickers_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_channel_pickers_ui_test)
-add_test(NAME bloom.ui.channel-pickers COMMAND bloom_channel_pickers_ui_test)
-set_tests_properties(bloom.ui.channel-pickers PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;media;integration" TIMEOUT 120)
+bloom_add_test(NAME bloom.ui.channel-pickers COMMAND bloom_channel_pickers_ui_test
+    LABELS ui media integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # Assets validity in the application's AssetController: a Cryptomatte-only EXR sequence and an
 # H.264 video are valid assets with thumbnails, not "Missing — Relink".
@@ -1954,12 +1942,11 @@ target_include_directories(bloom_asset_validity_ui_test PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(bloom_asset_validity_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_asset_validity_ui_test)
-add_test(NAME bloom.ui.asset_validity COMMAND bloom_asset_validity_ui_test
-    --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
-set_tests_properties(bloom.ui.asset_validity PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    FIXTURES_REQUIRED media3
-    LABELS "ui;media;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.asset_validity COMMAND bloom_asset_validity_ui_test
+    --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
+    LABELS ui media integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+set_tests_properties(bloom.ui.asset_validity PROPERTIES FIXTURES_REQUIRED media3)
 
 # #364 the owner's Cryptomatte setup end to end: a beauty and a sidecar Cryptomatte-only EXR
 # sequence through Assets, node cards, Properties and the Viewer preview.
@@ -1970,10 +1957,9 @@ target_include_directories(bloom_cryptomatte_sidecar_ui_test PRIVATE ${CMAKE_CUR
 target_link_libraries(bloom_cryptomatte_sidecar_ui_test PRIVATE bloom_ui bloom_runtime_compiler
     bloom_runtime_evaluator bloom_commands OpenEXR::OpenEXR Qt6::Test)
 bloom_enable_warnings(bloom_cryptomatte_sidecar_ui_test)
-add_test(NAME bloom.ui.cryptomatte_sidecar COMMAND bloom_cryptomatte_sidecar_ui_test)
-set_tests_properties(bloom.ui.cryptomatte_sidecar PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;media;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.cryptomatte_sidecar COMMAND bloom_cryptomatte_sidecar_ui_test
+    LABELS ui media integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_media_window_capture media_window_capture.cpp)
 target_include_directories(bloom_media_window_capture PRIVATE ..)
@@ -1981,10 +1967,9 @@ target_link_libraries(bloom_media_window_capture PRIVATE bloom_ui bloom_runtime_
 target_compile_definitions(bloom_media_window_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_media_window_capture)
-add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture)
-set_tests_properties(bloom.ui.media-window.dpr1 PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
-    LABELS "ui;media;capture" TIMEOUT 60)
+bloom_add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture
+    LABELS ui media capture TIMEOUT 60
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_color_boundary_test color_boundary_tests.cpp)
 target_include_directories(bloom_color_boundary_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -2004,8 +1989,7 @@ target_link_libraries(bloom_audio_transport_test PRIVATE bloom_ui bloom_runtime_
 target_compile_definitions(bloom_audio_transport_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_audio_transport_test)
-add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test)
-set_tests_properties(bloom.ui.audio-transport PROPERTIES
+bloom_add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
 
 # #400: looped playback keeps the mixer and the transport on one work-area period.
@@ -2210,7 +2194,7 @@ if(BLOOM_BUILD_PYTHON)
     target_include_directories(bloom_ui_mcp_script_run_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     bloom_enable_warnings(bloom_ui_mcp_script_run_test)
     bloom_add_test(NAME bloom.ui.mcp-script-run COMMAND bloom_ui_mcp_script_run_test
-        LABELS ui mcp scripting python integration TIMEOUT 180 FIXED_MEMORY
+        LABELS ui mcp scripting python integration TIMEOUT 180
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
@@ -2222,7 +2206,7 @@ if(BLOOM_BUILD_PYTHON)
     add_dependencies(bloom_script_panel_test bloom-cli)
     bloom_enable_warnings(bloom_script_panel_test)
     bloom_add_test(NAME bloom.ui.script-panel COMMAND bloom_script_panel_test
-        LABELS ui scripting python integration TIMEOUT 120 FIXED_MEMORY
+        LABELS ui scripting python integration TIMEOUT 120
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 endif()
 
@@ -2829,13 +2813,15 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             # device in bloom.runtime.gpu_processing_phase_policy.
             set(packed_kind STRESS RUN_SERIAL)
         elseif(packed_case MATCHES "100$")
-            set(packed_kind STRESS)
+            set(packed_kind STRESS LIVE_MEMORY
+                "fills 100 frames planned from the machine's real card, beside the modelled cards")
         else()
             # The packed Viewer paints through ordinary widgets and presents through no native
             # surface, so the Viewer cases are default-suite tests (#726), on Linux and Windows for
             # the reason written at bloom.ui.gpu_processing_phase_native above. Their devices are
-            # the fixed reading's stated card, never the driver's live budget.
-            set(packed_kind FIXED_MEMORY)
+            # the fixed reading's stated card (cmake/BloomTesting.cmake), never the driver's live
+            # budget.
+            set(packed_kind)
         endif()
         bloom_add_test(
             NAME bloom.ui.gpu_packed_viewer_${packed_case}
@@ -2854,7 +2840,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu viewer memory soak device
         TIMEOUT 600
         ENVIRONMENT QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic BLOOM_REDUCED_MOTION=1
-        SKIP_RETURN_CODE 77 STRESS)
+        SKIP_RETURN_CODE 77 STRESS
+        LIVE_MEMORY "soaks the desktop-wired window against the real machine's memory budgets")
 
     bloom_add_test(
         NAME bloom.ui.gpu_viewer_service_chain
@@ -2926,9 +2913,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_package_gpu_shader_tools(bloom_ui_gpu_node_viewer_evidence_test)
     bloom_enable_warnings(bloom_ui_gpu_node_viewer_evidence_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
-    # Every node-evidence case plans for the fixed reading's stated card (FIXED_MEMORY): the
-    # service would otherwise plan its resident pool from the driver's live budget, which moves with
-    # every other program on the device (#726).
+    # Every node-evidence case plans for the fixed reading's stated card (cmake/BloomTesting.cmake):
+    # the service would otherwise plan its resident pool from the driver's live budget, which moves
+    # with every other program on the device (#726).
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
                               denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
                               hue-colorize node-group tile-mirror-tile tile-mirror-wrap-offset
@@ -2951,7 +2938,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
-            FIXED_MEMORY
         )
     endforeach()
     # #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
@@ -2975,7 +2961,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
-            FIXED_MEMORY
         )
     endforeach()
     # #524: the node's frame as the process's first, through the application's lazily resolving
@@ -2991,7 +2976,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
-            FIXED_MEMORY
         )
     endforeach()
 
@@ -3024,9 +3008,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
         endif()
     endif()
-    # The three cases below say FIXED_MEMORY: the preview service and the Image Statistics device
-    # route each create a device, and both are created as the fixed reading's stated card instead
-    # of planning from the driver's live budget (#726).
+    # In the three cases below the preview service and the Image Statistics device route each create
+    # a device, and both are created as the fixed reading's stated card (cmake/BloomTesting.cmake)
+    # instead of planning from the driver's live budget (#726).
     # ADR 0028 animated masks through the same real RAM preview chain: a mask path keyed on 24
     # frames, the scene builder carrying the shared preparer from this target's packaged shader
     # tools, cold GPU frames against the CPU oracle with at most one shader compile, and a warm
@@ -3041,7 +3025,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
-        FIXED_MEMORY
     )
     # #344 #530 #509: the path nodes (a keyed Trim Path, Boolean Paths, a dashed Path Stroke and its
     # core through Glow) in the interactive viewer and RAM preview on the real service: GPU-resident
@@ -3053,7 +3036,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
-        FIXED_MEMORY
     )
     # #349: Image Statistics (driving Levels) and Denoise with Auto strength in the interactive
     # viewer and RAM preview on the real service, each frame's statistics measured once on the
@@ -3066,7 +3048,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
-        FIXED_MEMORY
     )
 
     # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer
@@ -3238,12 +3219,11 @@ target_compile_definitions(bloom_ui_layer_drop_window_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 target_include_directories(bloom_ui_layer_drop_window_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_ui_layer_drop_window_test)
-add_test(NAME bloom.ui.layer-drop-window COMMAND bloom_ui_layer_drop_window_test
-    --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures")
-set_tests_properties(bloom.ui.layer-drop-window PROPERTIES
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
-    FIXTURES_REQUIRED media3
-    LABELS "ui;media;integration" TIMEOUT 180)
+bloom_add_test(NAME bloom.ui.layer-drop-window COMMAND bloom_ui_layer_drop_window_test
+    --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
+    LABELS ui media integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+set_tests_properties(bloom.ui.layer-drop-window PROPERTIES FIXTURES_REQUIRED media3)
 
 # #490: the Image Preview node's thumbnail and node editor background.
 add_executable(bloom_ui_image_preview_test image_preview_tests.cpp)
@@ -3251,7 +3231,8 @@ target_link_libraries(bloom_ui_image_preview_test PRIVATE bloom_ui)
 target_include_directories(bloom_ui_image_preview_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_image_preview_test)
 bloom_add_test(NAME bloom.ui.image-preview COMMAND bloom_ui_image_preview_test
-    LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    LABELS ui integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 # #380: the Assets header's composition frames, prepared on a worker and kept per revision.
 add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
@@ -3259,7 +3240,8 @@ target_link_libraries(bloom_ui_composition_thumbnail_test PRIVATE bloom_ui)
 target_include_directories(bloom_ui_composition_thumbnail_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_composition_thumbnail_test)
 bloom_add_test(NAME bloom.ui.composition-thumbnail COMMAND bloom_ui_composition_thumbnail_test
-    LABELS ui integration TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    LABELS ui integration TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
 target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
@@ -3335,10 +3317,9 @@ add_executable(bloom_compile_failure_test compile_failure_tests.cpp)
 target_link_libraries(bloom_compile_failure_test PRIVATE bloom_ui bloom_runtime_compiler bloom_runtime Qt6::Test)
 bloom_enable_warnings(bloom_compile_failure_test)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.compile_failure.dpr${scale} COMMAND bloom_compile_failure_test)
-    set_tests_properties(bloom.ui.compile_failure.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;unit" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.compile_failure.dpr${scale} COMMAND bloom_compile_failure_test
+        LABELS ui unit TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # #418: hovering the status bar cells and the kit's tool-tip labels again and again keeps memory
@@ -3348,10 +3329,9 @@ target_include_directories(bloom_tooltip_memory_test PRIVATE ${CMAKE_CURRENT_SOU
 target_link_libraries(bloom_tooltip_memory_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_tooltip_memory_test)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.tooltip_memory.dpr${scale} COMMAND bloom_tooltip_memory_test)
-    set_tests_properties(bloom.ui.tooltip_memory.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;unit" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.tooltip_memory.dpr${scale} COMMAND bloom_tooltip_memory_test
+        LABELS ui unit TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_mcp_panel_capture mcp_panel_capture.cpp)
@@ -3361,10 +3341,9 @@ target_compile_definitions(bloom_mcp_panel_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_mcp_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.mcp_panel_capture.dpr${scale} COMMAND bloom_mcp_panel_capture)
-    set_tests_properties(bloom.ui.mcp_panel_capture.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.mcp_panel_capture.dpr${scale} COMMAND bloom_mcp_panel_capture
+        LABELS ui grammar TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # The Profiler panel (#423): registration and glyph, feed subscription with a refcount, fixed
@@ -3385,10 +3364,10 @@ add_executable(bloom_profiler_panel_capture profiler_panel_capture.cpp)
 target_link_libraries(bloom_profiler_panel_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_profiler_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
-    add_test(NAME bloom.ui.profiler_panel_capture.dpr${scale} COMMAND bloom_profiler_panel_capture)
-    set_tests_properties(bloom.ui.profiler_panel_capture.dpr${scale} PROPERTIES
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1"
-        LABELS "ui;grammar" TIMEOUT 120)
+    bloom_add_test(NAME bloom.ui.profiler_panel_capture.dpr${scale}
+        COMMAND bloom_profiler_panel_capture
+        LABELS ui grammar TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # #724 Scopes: offscreen pictures of the panel and of the Viewer's scope region overlay, for review.
@@ -3431,8 +3410,8 @@ bloom_add_test(NAME bloom.ui.font-picker COMMAND bloom_font_picker_test LABELS u
 # It writes into <build>/font-picker-review.
 add_test(NAME bloom.ui.font-picker-review CONFIGURATIONS Review
     COMMAND bloom_font_picker_test --capture ${CMAKE_BINARY_DIR}/font-picker-review 1)
-set_tests_properties(bloom.ui.font-picker-review PROPERTIES
-    TIMEOUT 300 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+set_tests_properties(bloom.ui.font-picker-review PROPERTIES TIMEOUT 300 ENVIRONMENT
+    "QT_QPA_PLATFORM=offscreen;BLOOM_TEST_FIXED_MEMORY_READING=${BLOOM_TEST_FIXED_MEMORY_READING}")
 
 # #513 Stabilize: its card and the tracking job end to end through the controller.
 add_executable(bloom_stabilize_test stabilize_tests.cpp)

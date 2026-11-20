@@ -1,10 +1,10 @@
 #pragma once
 
-// A fixed memory reading for tests that start Bloom's own programs (bloom-mcp, bloom-cli, the
-// Python module). A test that admits work against the machine's free memory passes or fails with
-// whatever else is running, and such a test cannot hand the program a sampler the way an
-// in-process test does. So the program reads one environment variable, once, at its first
-// sample:
+// A fixed memory reading for the test suite. A test that admits work against the machine's free
+// memory or the driver's live GPU budget passes or fails with whatever else is running, so every
+// registered test (cmake/BloomTesting.cmake) runs with one environment variable, read once, at the
+// first sample, in the test program and in every Bloom program it starts (bloom-mcp, bloom-cli, the
+// Python module):
 //
 //   BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>[,unsampled]
 //

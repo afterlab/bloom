@@ -300,8 +300,8 @@ if(BUILD_TESTING)
         LABELS unit text primitives
     )
 
-    # The test-only fixed memory reading: its text form, and that a FIXED_MEMORY registration
-    # reaches the process.
+    # The test-only fixed memory reading: its text form, and that the reading every registered test
+    # gets reaches the process.
     add_executable(bloom_core_test_fixed_memory_reading_test
                    tests/test_fixed_memory_reading_tests.cpp)
     target_link_libraries(bloom_core_test_fixed_memory_reading_test PRIVATE bloom_core)
@@ -312,6 +312,5 @@ if(BUILD_TESTING)
         NAME bloom.core.test-fixed-memory-reading
         COMMAND bloom_core_test_fixed_memory_reading_test
         LABELS unit primitives
-        FIXED_MEMORY
     )
 endif()

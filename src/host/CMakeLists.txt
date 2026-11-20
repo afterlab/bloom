@@ -408,7 +408,8 @@ if(BUILD_TESTING)
         bloom_add_test(NAME bloom.host.sequence-export-streaming-soak
                        COMMAND bloom_host_sequence_export_runner_test
                        "${CMAKE_CURRENT_BINARY_DIR}/sequence-export-soak-fixtures" --streaming-soak
-                       LABELS host media output TIMEOUT 420 STRESS)
+                       LABELS host media output TIMEOUT 420 STRESS
+                       LIVE_MEMORY "bounds the resident-set growth of a 512-frame export on the real machine")
 
         add_executable(bloom_host_export_queue_service_test tests/export_queue_service_tests.cpp)
         target_link_libraries(bloom_host_export_queue_service_test PRIVATE bloom_host bloom_commands)

@@ -1587,7 +1587,7 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
         -Werror=switch)
 endif()
 
-add_test(
+bloom_add_test(
     NAME bloom.runtime.gpu_coverage_contract_mutation_proof
     COMMAND ${CMAKE_COMMAND}
             "-DBLOOM_BUILD_DIR=${CMAKE_BINARY_DIR}"
@@ -1601,9 +1601,9 @@ add_test(
             "-DBLOOM_PROBE_NEGATIVE_FEATURE=bloom_runtime_gpu_coverage_contract_feature_negative_probe"
             "-DBLOOM_REASON_FEATURE_A=SyntheticFeatureEnum"
             "-DBLOOM_REASON_FEATURE_B=${bloom_gpu_coverage_switch_diagnostic}"
-            -P "${CMAKE_CURRENT_SOURCE_DIR}/gpu_coverage_negative_probe_check.cmake")
-set_tests_properties(bloom.runtime.gpu_coverage_contract_mutation_proof
-    PROPERTIES LABELS runtime quality contract TIMEOUT 240)
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/gpu_coverage_negative_probe_check.cmake"
+    LABELS runtime quality contract
+    TIMEOUT 240)
 
 # Ownership regression for the coverage contract registries. Generated names must be owned by the
 # returned entry, never a view into a temporary. The test retains each registry, churns the
@@ -2463,6 +2463,7 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
         TIMEOUT 600
         SKIP_RETURN_CODE 77
         STRESS
+        LIVE_MEMORY "plans 4K and 6K service frames from the machine's real card budget"
     )
 endif()
 
@@ -2572,15 +2573,11 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     bloom_enable_strict_floating_point(bloom_runtime_gpu_process_frame_ocio_native_test)
     include(BloomGpuShaderTools)
     bloom_package_gpu_shader_tools(bloom_runtime_gpu_process_frame_ocio_native_test)
-    # FIXED_MEMORY: its evaluator has no card option, and its device plans (the explicit image
-    # ceiling's refusal, the 6000x4000 frame) must not follow the free memory other GPU programs
-    # on the machine leave (#750).
     bloom_add_test(
         NAME bloom.runtime.gpu_process_frame_ocio_native
         COMMAND bloom_runtime_gpu_process_frame_ocio_native_test
         LABELS runtime native gpu color export
         TIMEOUT 300
-        FIXED_MEMORY
     )
     set_tests_properties(bloom.runtime.gpu_process_frame_ocio_native
         PROPERTIES SKIP_RETURN_CODE 77)
