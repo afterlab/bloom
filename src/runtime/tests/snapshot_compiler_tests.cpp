@@ -1,3 +1,4 @@
+#include "await.hpp"
 #include "unique_temp_dir.hpp"
 #include "case_timer.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
@@ -2307,5 +2308,6 @@ int main(const int argc, char** argv) {
         std::cerr << "Unexpected test fixture failure: " << error.what() << '\n';
         return EXIT_FAILURE;
     }
-    return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? EXIT_SUCCESS
+                                                                                   : EXIT_FAILURE;
 }

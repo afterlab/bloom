@@ -277,16 +277,16 @@ void testLightRaysPixels(Expectations& expectations) {
                 return runtime::TaskResult<void>::cancelled();
             });
         expectations.expect(submission.accepted(), "the cancellation task is admitted");
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        // #750: the task's end and the shutdown are awaited through the shared helper.
         std::optional<runtime::TaskResult<void>> taken;
-        while (!taken && std::chrono::steady_clock::now() < deadline) {
+        (void)bloom::test_support::awaitCondition("the cancelled task's result", [&] {
             taken = submission.handle.tryTakeResult();
-            std::this_thread::yield();
-        }
+            return taken.has_value();
+        });
         expectations.expect(taken && cancelledOutcome, "a cancelled ray gather publishes no image");
         scheduler.beginShutdown();
-        while (!scheduler.isQuiescent() && std::chrono::steady_clock::now() < deadline)
-            std::this_thread::yield();
+        (void)bloom::test_support::awaitCondition("the scheduler drains",
+                                                  [&] { return scheduler.isQuiescent(); });
         expectations.expect(scheduler.isQuiescent(), "the cancelled ray gather shuts down safely");
     }
 }
