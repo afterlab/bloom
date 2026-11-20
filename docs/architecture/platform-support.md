@@ -867,6 +867,36 @@ The 0.1.0 zip was unpacked into a second folder with a space in its name on the 
 it: the signature verifies, and the package check with a run passes there with only the
 system's directories on `PATH`. A second Mac was not available.
 
+### Test Programs And Gatekeeper
+
+macOS scans every new program file the first time it starts (#727). The kernel finds no
+Developer ID signature on an ad-hoc signed build product, and the system policy daemon then checks
+it: an online notarization lookup, then an XProtect scan of the file. The program waits until
+the check ends. The daemon checks one file at a time and remembers each result per file, not per
+content, so a byte-identical file written again is checked again. A library a program loads is
+checked the same way. In a desktop-build validation suite of 2026-11-20 that had relinked 210
+test programs, each check took about 1.1 s. With four tests started together, a relinked test
+waited a median 3.3 s before its first instruction (about 710 s over the run). The suite took
+1,443 s of summed test time; the run before it, with nothing relinked, took 840 s. These figures come from the system
+log (`com.apple.syspolicy.exec`, AMFI and XProtect messages) and the suite's own log.
+
+The build therefore never writes a program file it does not need to:
+
+- A test program's link goes through `cmake/BloomKeepUnchangedLink.cmake` (set by `bloom_add_test`
+  on macOS only). The linker writes into the usual path, because the path goes into the program
+  (the ad-hoc signature's identifier and the image UUID). When the result has the same bytes as
+  the file it replaces, the old, already checked file is put back and marked as just built. A
+  program whose bytes changed is installed as the linker wrote it and is checked once when it
+  first starts, like any new program. `bloom.build.keep-unchanged-link` runs the launcher with a
+  stand-in linker on every system.
+- Generated sources are written only when their text changes. The third-party license catalog
+  was rewritten by every configure, so a change to any `CMakeLists.txt` relinked every program
+  that links `bloom_ui`, among them every UI test.
+
+Nothing on the Mac is changed for this: no security setting, no developer-tool exception and
+nothing installed system-wide. The check of a changed program remains, because skipping it would
+take one of those.
+
 ### Installers
 
 `bloom-package-archives` makes three files from the signed bundle, side by side in

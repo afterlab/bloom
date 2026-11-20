@@ -147,6 +147,15 @@ if(BUILD_TESTING)
             -P "${PROJECT_SOURCE_DIR}/cmake/tests/path_definition.cmake"
         LABELS unit build
         TIMEOUT 60)
+    # The link launcher that keeps an unchanged test program's file on macOS (#727). It is used
+    # only there, but it is a CMake script, so the same check runs on every system.
+    bloom_add_test(
+        NAME bloom.build.keep-unchanged-link
+        COMMAND ${CMAKE_COMMAND} "-DMODULE_DIR=${PROJECT_SOURCE_DIR}/cmake"
+            "-DWORK=${CMAKE_BINARY_DIR}/keep-unchanged-link-test"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/keep_unchanged_link.cmake"
+        LABELS unit build
+        TIMEOUT 60)
 endif()
 
 add_subdirectory(tools/quality/json)

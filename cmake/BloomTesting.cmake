@@ -64,6 +64,17 @@ function(bloom_add_test)
         if(NOT bloom_test_target_imported AND bloom_test_target_type STREQUAL "EXECUTABLE")
             target_include_directories("${bloom_test_target}"
                                        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+            # macOS scans every new program file once, when it first starts, one file at a time
+            # (Gatekeeper's online check and XProtect), and a test waits for that. A relink that
+            # gives the same bytes keeps the old, already scanned file (#727;
+            # cmake/BloomKeepUnchangedLink.cmake). Linux and Windows have no such per-file cost.
+            if(APPLE)
+                foreach(bloom_link_language IN ITEMS C CXX OBJC OBJCXX)
+                    set_property(TARGET "${bloom_test_target}"
+                        PROPERTY ${bloom_link_language}_LINKER_LAUNCHER "${CMAKE_COMMAND}" -P
+                            "${PROJECT_SOURCE_DIR}/cmake/BloomKeepUnchangedLink.cmake" --)
+                endforeach()
+            endif()
         endif()
     endif()
 
