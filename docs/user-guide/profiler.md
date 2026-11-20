@@ -49,6 +49,10 @@ memory an idle Bloom with an empty project has.
 - **Ledger configured / effective / retained**: the reusable memory you allowed in Preferences,
   what the computer's limits leave of it, and what the caches hold now (see [Memory](memory.md)).
 - **Headroom** and **Usable**: the RAM headroom preference and the capacity left for Bloom's work.
+  When Bloom could not measure this computer's memory (for example in a container that hides it),
+  Usable notes "not sampled; assumed" and the amount Bloom works with instead, half of the
+  physical memory. The GPU heap budget row says the same when the graphics driver did not report
+  its budget: Bloom then works with half of the card's memory.
 - **Physical memory**, **Available**, **Swap used**: the computer as a whole. Available memory
   comes from Bloom's slower memory sample and shows how old that sample is.
 - **Bloom in swap**: how much of Bloom's own memory the operating system has moved to swap (Linux;

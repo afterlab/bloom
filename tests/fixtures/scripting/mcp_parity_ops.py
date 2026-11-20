@@ -225,9 +225,13 @@ class ParityOperations(unittest.TestCase):
         result = self.server.tool('profiler.snapshot', {})
         self.assertTrue(result['succeeded'], result)
         snapshot = result['snapshot']
-        self.assertEqual(snapshot['schemaVersion'], 5)
+        self.assertEqual(snapshot['schemaVersion'], 6)
         # #540: schema 5 adds the Viewer block; bloom-mcp has no Viewer, so its freshness is null.
         self.assertIsNone(snapshot['viewer']['freshness'])
+        # #751: schema 6 adds what admission assumed for a capacity it could not sample; bloom-mcp
+        # runs on the fixed test reading, whose capacity is sampled, so both are null.
+        self.assertIsNone(snapshot['memory']['admissionAssumedBytes'])
+        self.assertIsNone(snapshot['gpu']['assumedBytes'])
         self.assertGreaterEqual(snapshot['serial'], 1)
         # #427: the pressure counters are always counted, and the swap field is in the schema.
         self.assertIsInstance(snapshot['pressure']['admissionWaits'], int)
