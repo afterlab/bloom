@@ -10,9 +10,17 @@
 // The supported 1920x1080 scene has two Solid layers (Normal == source-over, a fractional
 // translation, a 4:3 non-square PAR) and a genuine still-media ImageSource over a probed OpenEXR
 // asset. The media upload is therefore part of the resident native operations, and the CPU oracle
-// is the production CPU stage evaluated on the SAME snapshot. Unsupported and retirement paths are
-// exercised on their own documents/requests, never by relabelling a hand-lowered plan.
+// is the production CPU stage evaluated on the SAME snapshot. A text document (every lowering has
+// a GPU route, gpu_coverage_contract.hpp) and the retirement path are exercised on their own
+// documents/requests, never by relabelling a hand-lowered plan.
+//
+// The service is configured as the application configures it (apps/bloom/main.cpp): a processing
+// phase policy shared by the GPU scene stage and the service, and the production CPU storage
+// planner, so the CPU fallback reserves its phase the way the application's does. Admission reads
+// the fixed host memory reading and plans for the stated card of fixed_memory_budget.hpp, never
+// what this machine has free.
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -31,6 +39,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 
@@ -81,28 +90,80 @@ struct SupportedDocument final {
     return built;
 }
 
-// Builds the genuine UNSUPPORTED document: a text layer is outside the prepared GPU subset.
-struct UnsupportedDocument final {
+// Builds a text document. Text was once outside the prepared GPU subset; it is a required GPU
+// operation now (gpu_coverage_contract.hpp, CompiledText), so it renders resident like any other.
+struct TextDocument final {
     std::unique_ptr<document::Document> document;
     std::unique_ptr<commands::CommandStack> commands;
     std::unique_ptr<ui::CompositionSession> session;
     document::CompositionId compositionId;
 };
 
-[[nodiscard]] UnsupportedDocument buildUnsupportedDocument(Expectations& checks) {
-    auto newProject =
-        document::makeNewProject("Vertical Unsupported", "Main",
-                                 core::RationalTime::fromInteger(10), format1920x1080NonSquare());
-    UnsupportedDocument built;
+[[nodiscard]] TextDocument buildTextDocument(Expectations& checks) {
+    auto newProject = document::makeNewProject(
+        "Vertical Text", "Main", core::RationalTime::fromInteger(10), format1920x1080NonSquare());
+    TextDocument built;
     built.compositionId = newProject.initialCompositionId;
     built.document = std::make_unique<document::Document>(std::move(newProject.project));
     built.commands = std::make_unique<commands::CommandStack>(*built.document);
     built.session = std::make_unique<ui::CompositionSession>(*built.document, *built.commands,
                                                              built.compositionId);
     checks.expect(built.session->addTextLayer(QStringLiteral("Title"), QStringLiteral("Bloom")),
-                  "the unsupported text layer is created");
+                  "the text layer is created");
     return built;
 }
+
+// The application's processing root, with the fixed host reading. The application's sampler
+// delivers a fresh reading every few seconds and a delivery counts for ten; this fixture delivers
+// the fixed reading on the worker right before each admission instead (the GPU scene stage and the
+// CPU storage planner both run just before they reserve), so whether a reading is fresh never
+// depends on how long a wait took.
+class FixedReadingRoot final {
+  public:
+    std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy =
+        std::make_shared<runtime::GpuProcessingPhasePolicy>(32);
+
+    void deliver(const runtime::CancellationToken& cancellation) {
+        auto sample =
+            policy->sampleHostMemory(cancellation, bloom::test_support::fixedMemoryBudgetSample);
+        const std::lock_guard lock(mutex_);
+        if (!ledger_) {
+            ledger_ = std::make_unique<runtime::MemoryBudgetLedger>(
+                sample.physicalBytes, sample.machine.availableBytes.value_or(0));
+            ledger_->beginProcessSampling();
+        }
+        const auto at = runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = ledger_->applySample(std::move(sample), at);
+        policy->applyHostSample(state, ledger_->physicalByteBudget(), at);
+    }
+
+    [[nodiscard]] PreviewGpuSceneStageFunction gpuStage(PreviewGpuSceneStageFunction base) {
+        return [this, base = std::move(base)](
+                   const document::Snapshot& snapshot, const PreviewRequestIdentity& identity,
+                   const std::size_t bytes,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                   TaskContext& context) {
+            deliver(context.cancellation());
+            return base(snapshot, identity, bytes, overrides, context);
+        };
+    }
+
+    [[nodiscard]] runtime::PreviewCpuStoragePlanner
+    cpuStoragePlanner(runtime::PreviewCpuStoragePlanner base) {
+        return [this, base = std::move(base)](
+                   const document::Snapshot& snapshot, const PreviewRequestIdentity& identity,
+                   const std::size_t bytes,
+                   const std::vector<runtime::SnapshotParameterOverride>& overrides,
+                   TaskContext& context) {
+            deliver(context.cancellation());
+            return base(snapshot, identity, bytes, overrides, context);
+        };
+    }
+
+  private:
+    std::mutex mutex_;
+    std::unique_ptr<runtime::MemoryBudgetLedger> ledger_;
+};
 
 [[nodiscard]] std::string hexOf(const render::Rgba8 c) {
     char buffer[10];
@@ -141,11 +202,32 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     phase("scene", "extent=1920x1080 par=4:3 solids=2 blend=source-over translation=fractional "
                    "image-source=1 asset=probed-EXR");
 
+    // Declared before the scheduler and the service, so it outlives every worker that delivers to
+    // it and every phase the service holds.
+    FixedReadingRoot root;
+    {
+        auto mediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
+        mediaContext.assetBaseDirectory = mediaDirectory;
+        fixture.sceneBuilder = std::make_shared<CpuGpuSceneBuilder>(
+            nullptr, std::move(mediaContext), runtime::GpuSceneOcioContext{},
+            runtime::GpuScenePreparationPhase{
+                .policy = root.policy,
+                .envelope = {.metadataBytes = 1024ULL * 1024,
+                             .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                             .requestedExecutorBytes = kBudget,
+                             .deviceWorkingBytes = 512ULL * 1024 * 1024}});
+    }
+    auto residentOptions = serviceOptions(options.loader_path);
+    residentOptions.processingPhasePolicy = root.policy;
+    residentOptions.cpuStoragePlanner = root.cpuStoragePlanner(
+        ui::makeCompositionPreviewCpuStoragePlanner(fixture.compiler, fixture.evaluator));
+    // A stated card: the driver's live budget moves with every other program on the device.
+    residentOptions.deviceMemoryLimitBytes = bloom::test_support::kFixedDeviceMemoryBytes;
     TaskScheduler scheduler(schedulerConfig());
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     GpuPreviewDisplayService service(
-        scheduler, fixture.productionGpuStage(), fixture.productionCpuStage(),
-        fixture.productionCpuFallback(displayPreparer), serviceOptions(options.loader_path));
+        scheduler, root.gpuStage(fixture.productionGpuStage()), fixture.productionCpuStage(),
+        fixture.productionCpuFallback(displayPreparer), residentOptions);
 
     const bool terminal = awaitProof(
         "the GPU preview service leaves Initializing",
@@ -329,29 +411,32 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     phase("warm-reuse", "nativeDispatches=" + std::to_string(afterWarm.nativeDispatches) +
                             " cacheHits=" + std::to_string(afterWarm.gpuCacheHits));
 
-    // --- 3. Genuine unsupported document: full original CPU path with real pixels
-    // ------------------
-    UnsupportedDocument unsupported = buildUnsupportedDocument(checks);
-    const auto unsupportedSnapshot = unsupported.session->snapshot();
-    const auto unsupportedIdentity =
-        makeIdentity(3, unsupportedSnapshot, unsupported.compositionId);
-    const auto beforeUnsupported = service.status().counters;
-    auto unsupportedRequest = service.submit(TaskRequest("vertical unsupported", taskOwner),
-                                             unsupportedSnapshot, unsupportedIdentity, kBudget, {});
-    checks.expect(unsupportedRequest.status == TaskSubmissionStatus::Accepted,
-                  "the unsupported document request was admitted");
-    const auto unsupportedResult = awaitResult(unsupportedRequest.handle);
-    const auto unsupportedFrame =
-        unsupportedResult.has_value() && unsupportedResult->state() == TaskState::Succeeded
-            ? residentFrameOf(*unsupportedResult)
-            : nullptr;
-    checks.expect(unsupportedFrame != nullptr,
-                  "the unsupported document still produced a prepared frame");
-    checks.expect(!isResident(unsupportedFrame) && hasCpuPixels(unsupportedFrame),
-                  "the unsupported document took the full CPU path with real pixels (never blank)");
-    checks.expect(service.status().counters.cpuFallbacks > beforeUnsupported.cpuFallbacks,
-                  "the unsupported document incremented the CPU fallback counter");
-    phase("unsupported-fallback", "cpuFallback=1");
+    // --- 3. Text document: a GPU route like every lowering, never a CPU frame
+    // ---------------------------------
+    TextDocument text = buildTextDocument(checks);
+    const auto textSnapshot = text.session->snapshot();
+    const auto textIdentity = makeIdentity(3, textSnapshot, text.compositionId);
+    const auto beforeText = service.status().counters;
+    auto textRequest = service.submit(TaskRequest("vertical text", taskOwner), textSnapshot,
+                                      textIdentity, kBudget, {});
+    checks.expect(textRequest.status == TaskSubmissionStatus::Accepted,
+                  "the text document request was admitted");
+    const auto textResult = awaitResult(textRequest.handle);
+    const auto textFrame = textResult.has_value() && textResult->state() == TaskState::Succeeded
+                               ? residentFrameOf(*textResult)
+                               : nullptr;
+    checks.expect(isResident(textFrame) && !hasCpuPixels(textFrame),
+                  "the text document published the resident arm with no CPU display buffer: " +
+                      service.status().residentDetail);
+    const auto afterText = service.status().counters;
+    checks.expect(afterText.residentGraphJobs == beforeText.residentGraphJobs + 1U,
+                  "the text document ran exactly one resident graph job");
+    checks.expect(afterText.nativeDispatches > beforeText.nativeDispatches,
+                  "the text document performed real native operations");
+    checks.expect(afterText.cpuFallbacks == beforeText.cpuFallbacks,
+                  "the text document took no CPU fallback");
+    phase("text-resident", "nativeDispatches=" + std::to_string(afterText.nativeDispatches -
+                                                                beforeText.nativeDispatches));
 
     // --- 4. Stalled/unknown-fence retirement: parent/admission retained until proven
     // ---------------
@@ -363,6 +448,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     core->residentDisplayPollOverride = [](render::GpuResidentDisplay&) noexcept {
         return render::GpuResidentDisplayPollResult::Pending;
     };
+    const auto beforeStalled = service.status().counters;
     auto stalledRequest =
         service.submit(TaskRequest("vertical stalled", taskOwner), supportedSnapshot,
                        makeIdentity(4, supportedSnapshot, supported.compositionId), kBudget, {});
@@ -384,6 +470,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             : nullptr;
     checks.expect(!isResident(stalledFrame) && hasCpuPixels(stalledFrame),
                   "the stalled submission was released only via the CPU fallback with real pixels");
+    checks.expect(service.status().counters.cpuFallbacks > beforeStalled.cpuFallbacks,
+                  "the stalled submission incremented the CPU fallback counter");
     checks.expect(service.status().counters.retirementUnprovenTeardowns >= 1U,
                   "the bounded retirement budget forced an explicit owner-thread teardown");
     checks.expect(runtime::detail::GpuPreviewDisplayServiceTestAccess::residentRouteTerminal(*core),
@@ -432,7 +520,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     if (checks.failures() == 0) {
         std::cout
             << "PASS: genuine two-Solid + ImageSource document is GPU-resident with uploads; "
-               "warm reuse; unsupported CPU fallback; safe retirement; host-ordered shutdown\n";
+               "warm reuse; text resident; CPU fallback after an unproven retirement; host-ordered "
+               "shutdown\n";
     }
     return checks.failures() == 0 ? 0 : 1;
 }
