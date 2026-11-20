@@ -124,6 +124,11 @@ yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, const Mcp
     out.set(value, "projectFile", out.text(path.string()));
     if (tool == McpTool::ProjectSave) {
         const auto saved = session.save();
+        // Issue #748: a save that ran and did not write the file names where it stopped and why,
+        // as project.save does for the open project.
+        if (!saved.succeeded() && saved.failure.has_value())
+            return saveFailedAnswer(out, saved.message, saved.failure->stage,
+                                    saved.failure->cause);
         if (!saved.succeeded())
             throw ToolFailure(McpToolErrorCode::ProjectUnavailable,
                               "The project file could not be saved: " + saved.message);

@@ -1,4 +1,5 @@
 #include <bloom/host/save_failure_description.hpp>
+#include <bloom/host/copy_publication.hpp>
 
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -8,6 +9,7 @@
 #include <bloom/project/document_decode.hpp>
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/manifest_decode.hpp>
+#include <bloom/project/staged_copy.hpp>
 #include <bloom/project/staged_save.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 #include <bloom/project/zip_container.hpp>
@@ -18,6 +20,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <type_traits>
 #include <variant>
 
@@ -374,6 +377,20 @@ constexpr std::array<std::string_view, 5> kStagedSaveLeaseCallTokens{
 };
 static_assert(static_cast<std::size_t>(project::StagedSaveLeaseCall::AcceptVerification) + 1 ==
               kStagedSaveLeaseCallTokens.size());
+// CopyPublicationStage (src/host/include/bloom/host/copy_publication.hpp), issue #748
+constexpr std::array<std::string_view, 8> kCopyPublicationStageTokens{
+    "none",    "admission",   "preflight", "registration",
+    "staging", "staged-copy", "guard",     "cancelled",
+};
+static_assert(static_cast<std::size_t>(CopyPublicationStage::Cancelled) + 1 ==
+              kCopyPublicationStageTokens.size());
+// StagedCopyStage (src/project/include/bloom/project/staged_copy.hpp), issue #748
+constexpr std::array<std::string_view, 8> kStagedCopyStageTokens{
+    "none",       "stage-write", "stage-finish", "staged-size-disagreement",
+    "read-back-allocation", "stage-read", "verification", "accept",
+};
+static_assert(static_cast<std::size_t>(project::StagedCopyStage::Accept) + 1 ==
+              kStagedCopyStageTokens.size());
 
 template <typename Enum, std::size_t N>
 [[nodiscard]] std::string_view token(const std::array<std::string_view, N>& tokens,
@@ -872,7 +889,183 @@ struct Step final {
         outcome);
 }
 
+// Issue #748: Save a Copy's steps and causes, in the save's own words.
+[[nodiscard]] Step stagedCopyStep(const project::StagedCopyFailure& failure) {
+    using S = project::StagedCopyStage;
+    std::string phrase;
+    switch (failure.stage()) {
+    case S::StageWrite:
+        phrase = "while writing the temporary file";
+        break;
+    case S::StageFinish:
+        phrase = "while finishing the temporary file";
+        break;
+    case S::StagedSizeDisagreement:
+        phrase = "while checking the temporary file's size";
+        break;
+    case S::ReadBackAllocation:
+        phrase = "while preparing to read the temporary file back";
+        break;
+    case S::StageRead:
+        phrase = "while reading the temporary file back";
+        break;
+    case S::Verification:
+        phrase = "while verifying the written copy";
+        break;
+    case S::Accept:
+        phrase = "while accepting the verified copy";
+        break;
+    case S::None:
+        phrase = "while writing the copy";
+        break;
+    }
+    return {.token = std::string(token(kStagedCopyStageTokens, failure.stage())),
+            .phrase = std::move(phrase)};
+}
+
+[[nodiscard]] Cause stagedCopyCause(const project::StagedCopyFailure& failure) {
+    return std::visit(
+        [&](const auto& payload) -> Cause {
+            using P = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<P, std::monostate>) {
+                return phrased("none", "no cause was recorded");
+            } else if constexpr (std::is_same_v<P, project::StagedSavePlatformFailure>) {
+                return platformCause(payload.error);
+            } else if constexpr (std::is_same_v<P, project::StagedCopySizeDisagreement>) {
+                return phrased("size-disagreement",
+                               "the temporary file holds " + number(payload.stageBytes) +
+                                   " bytes, but the project file is " +
+                                   number(payload.sourceBytes) + " bytes");
+            } else if constexpr (std::is_same_v<P, project::StagedCopyByteMismatch>) {
+                return phrased("byte-mismatch", "the written copy differs from the project file "
+                                                "at byte " +
+                                                    number(payload.byteOffset));
+            } else if constexpr (std::is_same_v<P, project::StagedCopyContainerSanityFailure>) {
+                const auto name = token(kZipContainerErrorTokens, payload.error);
+                return phrased(name, "the written copy is not a readable project file (" +
+                                         words(name) + " at byte " + number(payload.byteOffset) +
+                                         ")");
+            } else if constexpr (std::is_same_v<P, project::StagedCopyResourceExhausted>) {
+                return resourceExhausted();
+            } else {
+                static_assert(std::is_same_v<P, project::StagedCopyUnexpectedFailure>);
+                return unexpectedFailure();
+            }
+        },
+        failure.payload());
+}
+
+[[nodiscard]] Cause copyPublicationCause(const CopyPublicationFailure& failure) {
+    return std::visit(
+        [&](const auto& payload) -> Cause {
+            using P = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<P, std::monostate>) {
+                if (failure.stage() == CopyPublicationStage::Cancelled)
+                    return phrased("cancelled", "the copy was cancelled");
+                return phrased("none", "no cause was recorded");
+            } else if constexpr (std::is_same_v<P, PublicationAdmissionStatus>) {
+                return admissionCause(payload);
+            } else if constexpr (std::is_same_v<P, platform::StagedArtifactError>) {
+                return platformCause(payload);
+            } else if constexpr (std::is_same_v<P, PublicationRegistrationStatus>) {
+                return registrationCause(payload);
+            } else if constexpr (std::is_same_v<P, project::StagedCopyFailure>) {
+                return stagedCopyCause(payload);
+            } else if constexpr (std::is_same_v<P, PublicationGuardStatus>) {
+                return guardCause(payload);
+            } else if constexpr (std::is_same_v<P, CopyPublicationResourceExhausted>) {
+                return resourceExhausted();
+            } else {
+                static_assert(std::is_same_v<P, CopyPublicationUnexpectedFailure>);
+                return unexpectedFailure();
+            }
+        },
+        failure.payload());
+}
+
+[[nodiscard]] Step copyPublicationStep(const CopyPublicationFailure& failure) {
+    using S = CopyPublicationStage;
+    const std::string prefix =
+        "copy." + std::string(token(kCopyPublicationStageTokens, failure.stage()));
+    switch (failure.stage()) {
+    case S::Admission:
+        return {.token = prefix, .phrase = "while starting the copy"};
+    case S::Preflight:
+        return {.token = prefix, .phrase = "while checking the destination file"};
+    case S::Registration:
+        return {.token = prefix, .phrase = "while registering the destination file"};
+    case S::Staging:
+        return {.token = prefix, .phrase = "while creating the temporary file"};
+    case S::StagedCopy:
+        if (const auto* staged = failure.payloadAs<project::StagedCopyFailure>()) {
+            auto step = stagedCopyStep(*staged);
+            step.token = prefix + "." + step.token;
+            return step;
+        }
+        return {.token = prefix, .phrase = "while writing the copy"};
+    case S::Guard:
+        return {.token = prefix, .phrase = "while starting to replace the destination file"};
+    case S::Cancelled:
+        return {.token = prefix, .phrase = "before the copy was written"};
+    case S::None:
+        break;
+    }
+    return {.token = prefix, .phrase = "before the copy could be written"};
+}
+
+[[nodiscard]] SaveFailureDescription describeCopy(Step step, Cause cause) {
+    std::string message = "Save a Copy failed " + step.phrase + ": " + cause.phrase + ".";
+    return {.stage = std::move(step.token),
+            .cause = std::move(cause.token),
+            .message = std::move(message)};
+}
+
 } // namespace
+
+std::optional<SaveFailureDescription>
+describeCopyPublicationFailure(const CopyPublicationResult& result) {
+    if (const auto* failure = result.failure()) {
+        if (failure->stage() == CopyPublicationStage::Cancelled)
+            return SaveFailureDescription{.stage = "copy.cancelled",
+                                          .cause = "cancelled",
+                                          .message =
+                                              "Save a Copy was cancelled before the copy was "
+                                              "written."};
+        auto description = describeCopy(copyPublicationStep(*failure), copyPublicationCause(*failure));
+        if (const auto reject = result.rejectDiagnostic();
+            reject.has_value() && *reject != platform::StagedArtifactError::None)
+            description.message += " Removing the temporary file also failed (" +
+                                   std::string(stagedArtifactErrorToken(*reject)) + ").";
+        return description;
+    }
+    const auto* publication = result.publication();
+    if (publication != nullptr &&
+        publication->outcome != platform::StagedArtifactPublicationOutcome::FailedBeforePublication)
+        return std::nullopt;
+    const auto error =
+        publication != nullptr ? publication->error : platform::StagedArtifactError::None;
+    return describeCopy({.token = "copy.publish",
+                         .phrase = "while replacing the destination file with the written copy"},
+                        error == platform::StagedArtifactError::None
+                            ? phrased("none", "no cause was recorded")
+                            : platformCause(error));
+}
+
+SaveFailureDescription describeFileCopyFailure(const std::error_code& error,
+                                               const bool stagedFileWritten) {
+    const auto cause = error == std::errc::no_space_on_device    ? "no-space"
+                       : error == std::errc::permission_denied   ? "permission-denied"
+                       : error == std::errc::read_only_file_system ? "read-only-file-system"
+                       : error == std::errc::is_a_directory      ? "is-a-directory"
+                                                                 : "filesystem-error";
+    return describeCopy(stagedFileWritten
+                            ? Step{.token = "copy.publish",
+                                   .phrase = "while replacing the destination file with the "
+                                             "written copy"}
+                            : Step{.token = "copy.staged-copy.stage-write",
+                                   .phrase = "while writing the temporary file"},
+                        phrased(cause, error.message()));
+}
 
 std::string_view stagedArtifactErrorToken(const platform::StagedArtifactError error) {
     return token(kStagedArtifactErrorTokens, error);

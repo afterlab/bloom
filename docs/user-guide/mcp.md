@@ -240,7 +240,7 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `project.open` | `path`, optional `discardChanges`, `stopJobs` | Replaces the open project. |
 | `project.new` | optional `discardChanges`, `stopJobs` | An untitled project. |
 | `project.close` | optional `discardChanges`, `stopJobs` | The window shows an empty project. |
-| `project.save-copy` | `path` (absolute, `.bloom`), optional `replace` | File > Save a Copy: a byte-for-byte copy of a read-only (newer or preserved) project; the open project stays where it is. An editable project answers `bloom.mcp.invalid-argument` (use `project.save-as`). |
+| `project.save-copy` | `path` (absolute, `.bloom`), optional `replace` | File > Save a Copy: a byte-for-byte copy of a read-only (newer or preserved) project; the open project stays where it is. An editable project answers `bloom.mcp.invalid-argument` (use `project.save-as`); `bloom.mcp.save-failed` when the copy could not be written. |
 | `project.cancel-open` | none | File > Cancel Open: abandons the open in progress, yours or an agent's. `bloom.mcp.invalid-argument` when nothing is opening. |
 | `editor.reveal` | `composition`, optional `time` | Shows the composition in the Viewer and moves the playhead. |
 | `selection.set` | `composition`, optional `layers`, `nodes`, `mode` (`set`, `add`, `remove`, `clear`, or the Select menus' `all-layers`, `all-nodes`, `invert-layers`, `invert-nodes`, `linked-upstream`, `linked-downstream`) | Contextual `layer`, `layers` and `selection` arguments then default to it. Invert works on the active composition's selection; the linked modes extend from `nodes`, or from the selected nodes, through links and driver bindings. |
@@ -272,13 +272,20 @@ the in-app server: `bloom-mcp` implements `project.save`, `project.save-as`, `pr
 Other refusals are `bloom.mcp.unknown-target`, `bloom.mcp.invalid-argument`, `bloom.mcp.busy` and
 `bloom.mcp.failed`, each with a message that says what to do.
 
-A `project.save` or `project.save-as` that did not write the file answers `bloom.mcp.save-failed`.
-Its message is the sentence the status bar shows ("Save failed while encoding document.json: ...")
-and its `diagnostic.detail` names the step and the cause as stable tokens, for example
-`{"stage": "publication.staged-save.build.document-encode", "cause": "value-count-exceeded"}` or
-`{"stage": "publication.preflight", "cause": "target-leaf-not-regular"}`. The project and the file
-on disk are unchanged, so the call can be retried once the cause is fixed. Both servers answer it
-the same way.
+A `project.save`, `project.save-as` or `project.save-copy` that did not write the file answers
+`bloom.mcp.save-failed`, and so does a `project.save` with `projectFile`. Its message is the
+sentence the status bar shows ("Save failed while encoding document.json: ...", "Save a Copy failed
+while checking the destination file: ...") and its `diagnostic.detail` names the step and the cause
+as stable tokens, for example
+`{"stage": "publication.staged-save.build.document-encode", "cause": "value-count-exceeded"}`,
+`{"stage": "publication.preflight", "cause": "target-leaf-not-regular"}` or, for a copy,
+`{"stage": "copy.staged-copy.stage-write", "cause": "stage-write-failed"}`. A copy's stages start
+with `copy.`: `copy.admission`, `copy.preflight`, `copy.registration`, `copy.staging`,
+`copy.staged-copy.<step>` (writing, finishing, sizing, reading back and verifying the temporary
+file), `copy.guard` and `copy.publish` (replacing the destination). The project and the file on
+disk are unchanged, so the call can be retried once the cause is fixed. Both servers answer it the
+same way; `bloom-mcp` on stdio copies the file itself and names `copy.staged-copy.stage-write` or
+`copy.publish` with the system's reason.
 
 Some of what you do in the window has no tool, on purpose: arranging panels (split, join,
 close, maximize, Reset Workspace, full screen, the toolbar), zooming and scrolling editors other

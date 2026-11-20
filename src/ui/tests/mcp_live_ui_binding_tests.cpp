@@ -58,6 +58,8 @@ void expect(const bool condition, const char* message) {
     }
 }
 
+void expect(const bool condition, const std::string& message) { expect(condition, message.c_str()); }
+
 struct World final {
     std::function<std::optional<ui::ExportPresetChoice>(const std::string&)> presetChoice;
     std::unique_ptr<ui::ServiceExportQueuePort> port;
@@ -693,6 +695,33 @@ void testBinding() {
                             request(mcp::McpProjectRequestKind::SaveAs,
                                     fs::path(projects.path().toStdString()) / "copy.bloom"));
         expect(result.refusal == McpUiRefusal::ReadOnly, "SaveAs on a read-only project -> ReadOnly");
+        // Issue #748: a Save a Copy that did not write the copy answers bloom.mcp.save-failed with
+        // the stage it stopped at and its cause, as Save and Save As do. A folder named like the
+        // copy makes the real pipeline stop at its preflight.
+        {
+            const auto blocked = fs::path(projects.path().toStdString()) / "blocked-copy.bloom";
+            fs::create_directory(blocked);
+            result = runProject(binding,
+                                request(mcp::McpProjectRequestKind::SaveCopy, blocked, false, false, true));
+            expect(result.refusal == McpUiRefusal::SaveFailed,
+                   "a copy that did not write the file answers bloom.mcp.save-failed, got " +
+                       std::string(mcp::uiRefusalCode(result.refusal)) + ": " + result.message);
+            expect(result.saveFailure.has_value() &&
+                       result.saveFailure->stage == "copy.preflight" &&
+                       result.saveFailure->cause == "target-leaf-not-regular",
+                   "its detail names the copy's stage and cause");
+            expect(result.message == "Save a Copy failed while checking the destination file: "
+                                     "the destination is not a regular file.",
+                   "its message names the stage and the cause: " + result.message);
+            expect(QApplication::activeModalWidget() == nullptr && !host.isBusy(),
+                   "a failed agent copy opens no dialog and leaves the host free");
+            const auto copied = fs::path(projects.path().toStdString()) / "copied.bloom";
+            result = runProject(binding,
+                                request(mcp::McpProjectRequestKind::SaveCopy, copied, false, false, true));
+            expect(result.ok() && fs::is_regular_file(copied) &&
+                       !host.lastCopyFailure().has_value(),
+                   "the next copy writes the file and clears the failure: " + result.message);
+        }
         const auto* settings = host.colorSettings();
         if (settings != nullptr) {
             const auto colour = port.setColorSettings(*settings);
@@ -701,6 +730,16 @@ void testBinding() {
         }
         result = runProject(binding, request(mcp::McpProjectRequestKind::New));
         expect(result.ok(), "New leaves the read-only project");
+        // An editable project has no Save a Copy: it is refused before anything runs, and no
+        // earlier copy's failure detail is reported with it.
+        result = runProject(binding,
+                            request(mcp::McpProjectRequestKind::SaveCopy,
+                                    fs::path(projects.path().toStdString()) / "editable-copy.bloom",
+                                    true));
+        expect(!result.ok() && result.refusal != McpUiRefusal::SaveFailed &&
+                   !result.saveFailure.has_value(),
+               "a copy of an editable project is refused without a save detail: " +
+                   result.message);
     }
 
     // ---- no window: typed refusals

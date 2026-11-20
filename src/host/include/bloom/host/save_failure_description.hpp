@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/host/copy_publication.hpp>
 #include <bloom/host/save_publication.hpp>
 #include <bloom/host/session_save.hpp>
 #include <bloom/project/save_archive.hpp>
@@ -7,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <system_error>
 
 // Names why a Save or Save As did not write the project file (issue #737). Every typed failure the
 // save pipeline reports -- the capture stage, every SavePublicationStage with every payload it can
@@ -48,6 +50,21 @@ describeSavePublicationFailure(const SavePublicationFailure& failure,
 [[nodiscard]] std::optional<SaveFailureDescription>
 describeSessionSaveFailure(const SessionSaveResult& result,
                            const project::SaveArchiveLimits& limits = {});
+
+// Issue #748: the description of a Save a Copy that did not write the copy, in the same tokens and
+// words ("copy.staged-copy.stage-write", "stage-write-failed", "Save a Copy failed while writing
+// the temporary file: ..."), or nullopt for one that published it (a durability warning, a newer
+// save superseding it and an external-modification conflict are reported in their own words).
+[[nodiscard]] std::optional<SaveFailureDescription>
+describeCopyPublicationFailure(const CopyPublicationResult& result);
+
+// Issue #748: the description of a Save a Copy that `bloom-mcp` on stdio runs as a plain file copy
+// staged beside the destination and renamed over it: "copy.staged-copy.stage-write" when the
+// staged file could not be written, "copy.publish" when it could not replace the destination, with
+// the cause ("no-space", "permission-denied", "read-only-file-system", "is-a-directory",
+// "filesystem-error") and the system's own words.
+[[nodiscard]] SaveFailureDescription describeFileCopyFailure(const std::error_code& error,
+                                                             bool stagedFileWritten);
 
 // The stable token of one platform staged-artifact error ("stage-write-failed", ...), shared with
 // Save a Copy's own failure words.

@@ -85,6 +85,16 @@ Current current(McpServerCore::State& core, const McpRequestControl& control) {
 
 } // namespace
 
+yyjson_mut_val* saveFailedAnswer(Json& out, const std::string& message, const std::string& stage,
+                                 const std::string& cause) {
+    auto* refused = refusal(out, McpUiRefusal::SaveFailed, message);
+    auto* detail = out.object();
+    out.set(detail, "stage", out.text(stage));
+    out.set(detail, "cause", out.text(cause));
+    out.set(yyjson_mut_obj_get(refused, "diagnostic"), "detail", detail);
+    return refused;
+}
+
 // The time contract every client shares: an integer is a whole frame of `composition` at its frame
 // rate, and [numerator, denominator] is an exact time in seconds.
 core::RationalTime frameOrSecondsArgument(yyjson_val* value, const document::Snapshot& snapshot,

@@ -1041,9 +1041,24 @@ void McpLiveUiBinding::onCopyFinished(const ProjectHostOperationOutcome outcome,
         return;
     const bool saved = outcome == ProjectHostOperationOutcome::Published ||
                        outcome == ProjectHostOperationOutcome::PublishedWithWarning;
-    finishPending(saved ? McpUiRefusal::None : McpUiRefusal::Failed,
-                  saved ? tr("Saved a copy of %1. %2").arg(quoted(projectName()), message)
-                        : message);
+    if (saved) {
+        finishPending(McpUiRefusal::None,
+                      tr("Saved a copy of %1. %2").arg(quoted(projectName()), message));
+        return;
+    }
+    // Issue #748: a copy that did not write the file answers bloom.mcp.save-failed with the stage
+    // it stopped at and the cause, as Save and Save As do; one refused because Bloom was busy
+    // answers bloom.mcp.busy.
+    const auto& failure = project_.lastCopyFailure();
+    if (!failure.has_value()) {
+        finishPending(McpUiRefusal::Failed, message);
+        return;
+    }
+    const auto refusal = failure->stage == "start" && failure->cause == "busy"
+                             ? McpUiRefusal::Busy
+                             : McpUiRefusal::SaveFailed;
+    finishPending(refusal, message,
+                  mcp::McpSaveFailureDetail{.stage = failure->stage, .cause = failure->cause});
 }
 
 void McpLiveUiBinding::onOpenFinished(const ProjectHostOperationOutcome outcome,

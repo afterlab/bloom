@@ -900,13 +900,11 @@ void ProjectHost::promptAndBeginSaveAs() {
 
 void ProjectHost::requestSaveCopy() {
     if (isBusy()) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Another project operation is already in progress."));
+        refuseCopy("busy", tr("Another project operation is already in progress."));
         return;
     }
     if (!canSaveCopy()) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Save a Copy is not available for this project."));
+        refuseCopy("unavailable", tr("Save a Copy is not available for this project."));
         return;
     }
     promptAndBeginSaveCopy();
@@ -917,12 +915,11 @@ void ProjectHost::promptAndBeginSaveCopy() {
     // dialogs" / "do NOT add a third provider unless something genuinely breaks") -- Save Copy's
     // dialog is presentation-identical to Save As's: choose a destination file.
     if (agentOperation_) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Save a Copy needs a file path when an agent asks for it."));
+        refuseCopy("no-path", tr("Save a Copy needs a file path when an agent asks for it."));
         return;
     }
     if (!saveAsPathProvider_) {
-        finishCopy(ProjectHostOperationOutcome::Refused, tr("No Save dialog is configured."));
+        refuseCopy("no-dialog", tr("No Save dialog is configured."));
         return;
     }
     auto chosen = saveAsPathProvider_();
@@ -973,8 +970,7 @@ void ProjectHost::beginSaveAs(std::filesystem::path path) {
 
 void ProjectHost::beginSaveCopy(std::filesystem::path path) {
     if (isBusy() || !canSaveCopy()) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Another project operation is already in progress."));
+        refuseCopy("busy", tr("Another project operation is already in progress."));
         return;
     }
     startSaveCopy(std::move(path));
@@ -1016,14 +1012,12 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
     // Callers (requestSaveCopy()/beginSaveCopy()) already checked isBusy()/canSaveCopy(); repeated
     // defensively, matching startSave()'s own precedent.
     if (!canSaveCopy() || !publicationCoordinator_ || !artifactCoordinator_) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Another project operation is already in progress."));
+        refuseCopy("busy", tr("Another project operation is already in progress."));
         return;
     }
     auto operation = makeOperation();
     if (!operation.has_value()) {
-        finishCopy(ProjectHostOperationOutcome::Refused,
-                   tr("Not enough memory is available to start this copy."));
+        refuseCopy("resource-exhausted", tr("Not enough memory is available to start this copy."));
         return;
     }
     host::AsyncCopyPublicationRequest request{
@@ -1038,7 +1032,7 @@ void ProjectHost::startSaveCopy(std::filesystem::path targetPath) {
         host::beginCopyPublication(scheduler_, *publicationCoordinator_, *artifactCoordinator_,
                                    std::move(request), std::move(*operation));
     if (!begun) {
-        finishCopy(ProjectHostOperationOutcome::Refused, tr("The copy could not be started."));
+        refuseCopy("not-started", tr("The copy could not be started."));
         return;
     }
     inFlight_.emplace<host::AsyncCopyPublication>(std::move(begun).takeHandle());
@@ -1217,8 +1211,19 @@ void ProjectHost::finishOpen(const ProjectHostOperationOutcome outcome, const QS
     emit openFinished(outcome, message, operationOrigin());
 }
 
-void ProjectHost::finishCopy(const ProjectHostOperationOutcome outcome, const QString& message) {
+void ProjectHost::finishCopy(const ProjectHostOperationOutcome outcome, const QString& message,
+                             std::optional<host::SaveFailureDescription> failure) {
+    lastCopyFailure_ = std::move(failure);
     emit copyFinished(outcome, message, operationOrigin());
+}
+
+void ProjectHost::refuseCopy(const std::string_view cause, const QString& message) {
+    finishCopy(ProjectHostOperationOutcome::Refused, message,
+               host::SaveFailureDescription{
+                   .stage = "start",
+                   .cause = std::string(cause),
+                   .message = message.toStdString(),
+               });
 }
 
 void ProjectHost::handleSaveResult(host::SessionSaveResult result) {
@@ -1435,14 +1440,19 @@ void ProjectHost::handleCopyResult(host::CopyPublicationResult result) {
     // sessionReplaced() emission here, ever.
     const auto targetName = QString::fromStdString(pendingCopyTargetPath_.filename().string());
 
+    // Issue #748: a copy that did not write the file names the stage it stopped at and its cause,
+    // in the dialog and the MCP diagnostic alike, as Save and Save As do.
+    auto failure = host::describeCopyPublicationFailure(result);
     if (!result) {
-        const auto* failure = result.failure();
-        if (failure != nullptr && failure->stage() == host::CopyPublicationStage::Cancelled) {
+        const auto* failed = result.failure();
+        if (failed != nullptr && failed->stage() == host::CopyPublicationStage::Cancelled) {
             finishCopy(ProjectHostOperationOutcome::Cancelled, tr("The copy was cancelled."));
             return;
         }
-        finishCopy(ProjectHostOperationOutcome::Failed,
-                   tr("The copy failed before the file could be written."));
+        const auto text = failure.has_value()
+                              ? QString::fromStdString(failure->message)
+                              : tr("The copy failed before the file could be written.");
+        finishCopy(ProjectHostOperationOutcome::Failed, text, std::move(failure));
         return;
     }
 
@@ -1479,10 +1489,12 @@ void ProjectHost::handleCopyResult(host::CopyPublicationResult result) {
         break;
     case platform::StagedArtifactPublicationOutcome::FailedBeforePublication:
         outcome = ProjectHostOperationOutcome::Failed;
-        message = tr("The copy failed before the file could be written.");
+        message = failure.has_value() ? QString::fromStdString(failure->message)
+                                      : tr("The copy failed before the file could be written.");
         break;
     }
-    finishCopy(outcome, message);
+    finishCopy(outcome, message,
+               outcome == ProjectHostOperationOutcome::Failed ? std::move(failure) : std::nullopt);
 }
 
 std::optional<project::ProjectIoOperationMemory> ProjectHost::makeOperation() const {

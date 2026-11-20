@@ -275,6 +275,14 @@ class ProjectHost final : public QObject {
         return lastSaveFailure_;
     }
 
+    // Issue #748: why the last Save a Copy did not write the copy, in the same shape: set before
+    // copyFinished() is emitted for a copy that was refused or failed, and cleared for every other
+    // outcome. The MCP binding answers it as the detail of a bloom.mcp.save-failed diagnostic.
+    [[nodiscard]] const std::optional<host::SaveFailureDescription>&
+    lastCopyFailure() const noexcept {
+        return lastCopyFailure_;
+    }
+
   public slots:
     // Composes the unsaved-change flow, then REPLACES the session in-place with a fresh
     // createNew() session (decision 1). Emits sessionReplaced() on success.
@@ -372,7 +380,12 @@ class ProjectHost final : public QObject {
     // A save refused before it ran: records `cause` (stage "start") for lastSaveFailure().
     void refuseSave(std::string_view cause, const QString& message);
     void finishOpen(ProjectHostOperationOutcome outcome, const QString& message);
-    void finishCopy(ProjectHostOperationOutcome outcome, const QString& message);
+    // Emits copyFinished(); `failure` (a copy that was refused or did not write the file) becomes
+    // lastCopyFailure(), which every other outcome clears.
+    void finishCopy(ProjectHostOperationOutcome outcome, const QString& message,
+                    std::optional<host::SaveFailureDescription> failure = std::nullopt);
+    // A copy refused before it ran: records `cause` (stage "start") for lastCopyFailure().
+    void refuseCopy(std::string_view cause, const QString& message);
     [[nodiscard]] ProjectHostOperationOrigin operationOrigin() const noexcept {
         return agentOperation_ ? ProjectHostOperationOrigin::Agent
                                : ProjectHostOperationOrigin::Artist;
@@ -403,6 +416,7 @@ class ProjectHost final : public QObject {
     bool confirmingExports_ = false;
     bool agentOperation_ = false;
     std::optional<host::SaveFailureDescription> lastSaveFailure_;
+    std::optional<host::SaveFailureDescription> lastCopyFailure_;
     void createExportQueue();
     void retireExportQueue(host::ExportStopCause cause);
 

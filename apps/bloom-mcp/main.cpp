@@ -6,6 +6,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/host/save_failure_description.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/mcp/server_core.hpp>
 #include <bloom/media/cache/source_mirror_settings.hpp>
@@ -28,6 +29,7 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 
 namespace {
@@ -143,12 +145,19 @@ int serve(scripting::Session& session) {
             std::error_code copied;
             std::filesystem::copy_file(session.displayPath(), staged,
                                        std::filesystem::copy_options::overwrite_existing, copied);
-            if (!copied)
+            const bool wrote = !copied;
+            if (wrote)
                 std::filesystem::rename(staged, request.path, copied);
             if (copied) {
                 std::filesystem::remove(staged, ignored);
-                return refuse(mcp::McpUiRefusal::Failed,
-                              "The copy could not be written: " + copied.message());
+                // Issue #748: name where the copy stopped and why, as a failed save does.
+                const auto described = host::describeFileCopyFailure(copied, wrote);
+                auto failed = result;
+                failed.refusal = mcp::McpUiRefusal::SaveFailed;
+                failed.message = described.message;
+                failed.saveFailure =
+                    mcp::McpSaveFailureDetail{.stage = described.stage, .cause = described.cause};
+                return done(std::move(failed));
             }
             result.path = request.path;
             result.message = "Saved a copy of " + result.projectName + ".";

@@ -2028,7 +2028,10 @@ project file can (the limit is 8000000)." A limit cause names the limit. The ste
 starting the save, checking, registering or creating the destination's temporary file, encoding
 `manifest.json` or `document.json`, packing the archive, writing, finishing, sizing or reading back
 the temporary file, verifying the written file (naming the verification step), and replacing the
-project file. A cancelled save reads "The save was cancelled before the file was written." The
+project file. Save a Copy reports in the same form, "Save a Copy failed `<while step>`:
+`<cause>`." (for example "Save a Copy failed while checking the destination file: the destination
+is not a regular file."), naming the same steps for the copy's temporary file and the destination.
+A cancelled save reads "The save was cancelled before the file was written." The
 status bar always shows the sentence. A Save, Save As or Save a Copy the artist started also opens
 "The project could not be saved." with the sentence beneath it; one an agent started never opens a
 dialog, so the agent gets the same sentence with a typed code instead, and the window is left free.

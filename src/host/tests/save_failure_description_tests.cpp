@@ -1,4 +1,5 @@
 #include <bloom/host/save_failure_description.hpp>
+#include <bloom/host/copy_publication.hpp>
 
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -11,6 +12,7 @@
 #include <bloom/project/document_reconstruct.hpp>
 #include <bloom/project/manifest_decode.hpp>
 #include <bloom/project/save_archive.hpp>
+#include <bloom/project/staged_copy.hpp>
 #include <bloom/project/staged_save.hpp>
 #include <bloom/project/strict_json_dom.hpp>
 #include <bloom/project/zip_container.hpp>
@@ -20,10 +22,12 @@
 #include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <set>
 #include <source_location>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <variant>
 
 // Issue #737: every typed reason a Save or Save As can stop names its stage and its cause, in the
@@ -640,6 +644,126 @@ void testSessionResults(Expectations& e) {
 
 } // namespace
 
+// ---- Issue #748: Save a Copy names its stage and cause in the same tokens and words -----------
+
+[[nodiscard]] std::optional<SaveFailureDescription>
+copyFailure(const bloom::host::CopyPublicationStage stage,
+            bloom::host::CopyPublicationFailurePayload payload) {
+    return std::visit(
+        [&](auto value) {
+            return bloom::host::describeCopyPublicationFailure(
+                bloom::host::CopyPublicationResult::failure(
+                    bloom::host::CopyPublicationFailure(stage, std::move(value))));
+        },
+        std::move(payload));
+}
+
+void testCopyPublicationFailures(Expectations& e) {
+    using bloom::host::CopyPublicationStage;
+    namespace p = bloom::project;
+    const auto expectCopy = [&e](const std::optional<SaveFailureDescription>& description,
+                                 const std::string_view stage, const std::string_view cause,
+                                 const std::string_view messagePart,
+                                 const std::source_location location =
+                                     std::source_location::current()) {
+        e.expect(description.has_value(), "a failed copy is described", location);
+        if (!description)
+            return;
+        expectDescription(e, *description, stage, cause, messagePart, location);
+        e.expect(description->message.starts_with("Save a Copy failed ") ||
+                     description->message.starts_with("Save a Copy was cancelled"),
+                 "a copy's message says it was Save a Copy: " + description->message, location);
+    };
+    expectCopy(copyFailure(CopyPublicationStage::Preflight,
+                           StagedArtifactError::TargetLeafNotRegular),
+               "copy.preflight", "target-leaf-not-regular",
+               "Save a Copy failed while checking the destination file: the destination is not a "
+               "regular file.");
+    expectCopy(copyFailure(CopyPublicationStage::Admission,
+                           PublicationAdmissionStatus::PublicationTrackingLimit),
+               "copy.admission", "publication-tracking-limit", "while starting the copy");
+    expectCopy(copyFailure(CopyPublicationStage::Registration,
+                           PublicationRegistrationStatus::ResourceUnavailable),
+               "copy.registration", "resource-unavailable", "ran out of memory");
+    expectCopy(copyFailure(CopyPublicationStage::Staging, StagedArtifactError::StageCreationFailed),
+               "copy.staging", "stage-creation-failed", "while creating the temporary file");
+    expectCopy(copyFailure(CopyPublicationStage::StagedCopy,
+                           p::StagedCopyFailure(p::StagedCopyStage::StageWrite,
+                                                p::StagedSavePlatformFailure{
+                                                    .error = StagedArtifactError::StageWriteFailed,
+                                                    .call = {}})),
+               "copy.staged-copy.stage-write", "stage-write-failed", "check the free disk space");
+    expectCopy(copyFailure(CopyPublicationStage::StagedCopy,
+                           p::StagedCopyFailure(p::StagedCopyStage::StagedSizeDisagreement,
+                                                p::StagedCopySizeDisagreement{.sourceBytes = 10,
+                                                                              .stageBytes = 9})),
+               "copy.staged-copy.staged-size-disagreement", "size-disagreement", "Save a Copy");
+    expectCopy(copyFailure(CopyPublicationStage::StagedCopy,
+                           p::StagedCopyFailure(p::StagedCopyStage::Verification,
+                                                p::StagedCopyByteMismatch{.byteOffset = 4})),
+               "copy.staged-copy.verification", "byte-mismatch", "differs from the project file");
+    expectCopy(copyFailure(CopyPublicationStage::StagedCopy,
+                           p::StagedCopyFailure(p::StagedCopyStage::ReadBackAllocation,
+                                                p::StagedCopyResourceExhausted{})),
+               "copy.staged-copy.read-back-allocation", "resource-exhausted", "out of memory");
+    expectCopy(copyFailure(CopyPublicationStage::Guard, PublicationGuardStatus::TargetBusy),
+               "copy.guard", "target-busy", "another save of the same file");
+    expectCopy(copyFailure(CopyPublicationStage::Cancelled, std::monostate{}), "copy.cancelled",
+               "cancelled", "Save a Copy was cancelled");
+    // Every stage names itself, with a memory failure as with an unexpected one.
+    std::set<std::string> stages;
+    for (int value = 1; value < static_cast<int>(CopyPublicationStage::Cancelled); ++value) {
+        const auto stage = static_cast<CopyPublicationStage>(value);
+        for (const bool memory : {true, false}) {
+            const auto description =
+                memory ? copyFailure(stage, bloom::host::CopyPublicationResourceExhausted{})
+                       : copyFailure(stage, bloom::host::CopyPublicationUnexpectedFailure{});
+            e.expect(description.has_value() && isToken(description->stage) &&
+                         isToken(description->cause) &&
+                         !contains(description->stage, "unrecognized") &&
+                         description->message.starts_with("Save a Copy failed "),
+                     "copy stage " + std::to_string(value) + " is named" +
+                         (description ? ": " + description->stage + " / " + description->cause
+                                      : std::string{}));
+            if (description)
+                stages.insert(description->stage);
+        }
+    }
+    e.expect(stages.size() == static_cast<std::size_t>(CopyPublicationStage::Cancelled) - 1,
+             "every copy stage has a distinct token");
+    // Every staged-copy step names itself.
+    std::set<std::string> steps;
+    for (int value = 1; value <= static_cast<int>(p::StagedCopyStage::Accept); ++value) {
+        const auto description = copyFailure(
+            CopyPublicationStage::StagedCopy,
+            p::StagedCopyFailure(static_cast<p::StagedCopyStage>(value),
+                                 p::StagedCopyUnexpectedFailure{}));
+        e.expect(description.has_value() && isToken(description->stage) &&
+                     description->stage.starts_with("copy.staged-copy."),
+                 "staged-copy step " + std::to_string(value) + " is named");
+        if (description)
+            steps.insert(description->stage);
+    }
+    e.expect(steps.size() == static_cast<std::size_t>(p::StagedCopyStage::Accept),
+             "every staged-copy step has a distinct token");
+
+    // bloom-mcp on stdio copies the file itself: the same stage tokens and the system's words.
+    expectCopy(bloom::host::describeFileCopyFailure(
+                   std::make_error_code(std::errc::no_space_on_device), false),
+               "copy.staged-copy.stage-write", "no-space",
+               "Save a Copy failed while writing the temporary file: ");
+    expectCopy(bloom::host::describeFileCopyFailure(
+                   std::make_error_code(std::errc::is_a_directory), true),
+               "copy.publish", "is-a-directory",
+               "while replacing the destination file with the written copy");
+    expectCopy(bloom::host::describeFileCopyFailure(
+                   std::make_error_code(std::errc::permission_denied), true),
+               "copy.publish", "permission-denied", "Save a Copy failed");
+    expectCopy(bloom::host::describeFileCopyFailure(
+                   std::make_error_code(std::errc::io_error), false),
+               "copy.staged-copy.stage-write", "filesystem-error", "Save a Copy failed");
+}
+
 int main() {
     Expectations expectations;
     testAdmission(expectations);
@@ -654,5 +778,6 @@ int main() {
     testStagedSaveVerification(expectations);
     testEveryEnumeratorIsNamed(expectations);
     testSessionResults(expectations);
+    testCopyPublicationFailures(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

@@ -380,6 +380,11 @@ using FrozenJson = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>;
 // Waits at most two seconds for a file call in progress and answers true then (fail closed).
 [[nodiscard]] bool fileSessionHolds(McpServerCore::State& core, const std::filesystem::path& path);
 // project.save and project.close on such a file.
+// Issue #737/#748: the answer to a save that ran and did not write the file: bloom.mcp.save-failed,
+// `message` as its message and {stage, cause} as diagnostic.detail.
+[[nodiscard]] yyjson_mut_val* saveFailedAnswer(Json& out, const std::string& message,
+                                               const std::string& stage, const std::string& cause);
+
 [[nodiscard]] yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, McpTool tool,
                                               const std::filesystem::path& path,
                                               yyjson_val* arguments,

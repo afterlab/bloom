@@ -2931,6 +2931,24 @@ void secondProjectFile() {
             server.call("query", file(R"(,"kind":"parameter","parameter":1)"));
         expect(contains(implicitComposition, R"("isError":false)"),
                "query parameter defaults to the context composition: " + implicitComposition);
+        // Issue #748: a save in a projectFile session that ran and did not write the file answers
+        // bloom.mcp.save-failed with the stage it stopped at and its cause, as project.save does
+        // for the open project. A folder where the file was makes the save stop at its preflight.
+        {
+            const auto aside = folder / "second.aside";
+            std::filesystem::rename(second, aside);
+            std::filesystem::create_directory(second);
+            const auto failed = server.call("project.save", file(""));
+            expect(contains(failed, R"("code":"bloom.mcp.save-failed")") &&
+                       contains(failed, R"("detail":{"stage":"publication.preflight")") &&
+                       contains(failed, R"("cause":"target-leaf-not-regular")") &&
+                       contains(failed, "Save failed while checking the destination") &&
+                       !contains(failed, R"("saved":true)"),
+                   "a projectFile save that did not write the file names its stage and cause: " +
+                       failed);
+            std::filesystem::remove(second);
+            std::filesystem::rename(aside, second);
+        }
         const auto saved = server.call("project.save", file(""));
         expect(contains(saved, R"("saved":true)"), "the second project saves: " + saved);
         const auto closed = server.call("project.close", file(""));
