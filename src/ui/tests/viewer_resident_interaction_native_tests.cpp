@@ -1,5 +1,6 @@
 // Native resident viewer interaction, cancellation recovery and safe teardown acceptance.
 #include "await_qt.hpp"
+#include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -174,6 +175,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         ui::applyGpuResidentBudgetPlan(gpuOptions, budgetPlan);
         ui::applyGpuResidentCacheLimits(*frameCache, budgetPlan);
     }
+    // A stated card: the resident capacity plan would otherwise follow the driver's live budget,
+    // which moves with every other program on the device.
+    gpuOptions.deviceMemoryLimitBytes = bloom::test_support::kFixedDeviceMemoryBytes;
     const auto generalPrograms = options.general ? generalDisplayPrograms() : nullptr;
     if (options.general && !generalPrograms)
         return unavailable(options, "packaged GPU tools unavailable");
