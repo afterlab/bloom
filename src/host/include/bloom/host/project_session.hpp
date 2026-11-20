@@ -55,6 +55,17 @@ using SessionPathIntentGeneration = core::Id<SessionPathIntentGenerationTag>;
 class ProjectSession;
 class ProjectSessionTestAccess;
 
+// #748: what one project file can save and reopen (project::ProjectCapacityLimits), for the hosts
+// that advertise it. An edit that would take an editable session's project past one is refused at
+// the edit with commands::CommandStatus::ProjectTooLarge.
+struct ProjectCapacity final {
+    std::uint64_t jsonValues = 0;
+    std::uint64_t documentBytes = 0;
+    std::uint64_t containerEntries = 0;
+    std::uint64_t stringBytes = 0;
+};
+[[nodiscard]] ProjectCapacity projectCapacity() noexcept;
+
 enum class ProjectSessionContentKind : std::uint8_t {
     DecodedDocument,
     PreservedReadOnly,

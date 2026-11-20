@@ -2,8 +2,8 @@
 // handshake and tools/call dispatch for both hosts. Moved from apps/bloom-mcp/server.cpp.
 #include "core_internal.hpp"
 
+#include <bloom/host/project_session.hpp>
 #include <bloom/platform/owner_only_secret.hpp>
-#include <bloom/project/project_capacity.hpp>
 
 #include <algorithm>
 #include <array>
@@ -200,7 +200,7 @@ yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
     }
     put(McpLimit::TransactOutputs, kMcpTransactOutputLimit);
     // #748: what one project file can save and reopen; an edit past one is refused at the edit.
-    constexpr project::ProjectCapacityLimits capacity;
+    const auto capacity = host::projectCapacity();
     put(McpLimit::ProjectJsonValues, capacity.jsonValues);
     put(McpLimit::ProjectDocumentBytes, capacity.documentBytes);
     put(McpLimit::ProjectContainerEntries, capacity.containerEntries);

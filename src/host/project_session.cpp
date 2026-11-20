@@ -582,6 +582,14 @@ void ProjectSession::setColorSettingsChangedHandler(std::function<void()> handle
         color_->changed = std::move(handler);
 }
 
+ProjectCapacity projectCapacity() noexcept {
+    constexpr project::ProjectCapacityLimits limits;
+    return {.jsonValues = limits.jsonValues,
+            .documentBytes = limits.documentBytes,
+            .containerEntries = limits.containerEntries,
+            .stringBytes = limits.stringBytes};
+}
+
 void ProjectSession::installCapacityCheck() {
     if (commandStack_ == nullptr)
         return;
