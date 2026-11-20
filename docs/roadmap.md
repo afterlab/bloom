@@ -34,6 +34,7 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
+| v0.1.0-alpha.2 (2026-11-20): large projects that always save, agent work over MCP that stays quiet and responsive at scale, the MCP field-test bugs, and crash reports kept on the user's machine | the rows below, down to the save fix |
 | Crash reports: Crashpad's out-of-process handler in every package, a text report and a minidump kept on the user's machine, a notice on the next start, debug symbols kept as release-workflow artifacts | #736 |
 | Field-test bugs: a project Bloom lets you build always saves (edits that would make it too large are refused at the edit), Save a Copy names its cause, Corner Pin edge-on streaks, Crop against its picture, capture publication after the cache folder is cleared | #748 #738 #739 #740 |
 | MCP at scale: asynchronous `transact` with idempotency keys and retry hints, subscriptions to coalesced change events, keys for many parameters in one operation | #747 |
@@ -68,15 +69,7 @@ and [`plans/production-workflows-release.md`](plans/production-workflows-release
 
 In the tracker's order. Everything starts when the owner gives the go-ahead.
 
-### 1. The v0.1.0-alpha.2 release
-
-In preparation. It releases what landed since v0.1.0-alpha.1: the save fixes for large projects,
-the MCP work at scale, quiet agent work, the field-test bugs and crash reports (#737 #746 #744
-#745 #741 #747 #748 #738 #739 #740 #736, the rows above v0.1.0-alpha.1 under
-[Recently landed](#recently-landed)). The release notes are its section of
-[`CHANGELOG.md`](../CHANGELOG.md).
-
-### 2. Node groups
+### 1. Node groups
 
 Each group is one coherent area with one validation and one landing.
 
@@ -91,7 +84,7 @@ The planned nodes and their delivery levels are in the [node catalogue](product/
 designed in [`architecture/instancing.md`](architecture/instancing.md) under
 [ADR 0023](decisions/0023-instances-and-per-element-data.md).
 
-### 3. Tests
+### 2. Tests
 
 | Issue | What it is |
 | --- | --- |
@@ -101,7 +94,7 @@ designed in [`architecture/instancing.md`](architecture/instancing.md) under
 | #729 | GPU admission policy overwrites the Viewer's recorded device need with another class's grant |
 | #304 | GPU validation: hosted CI, sustained memory tests, LeakSanitizer and native macOS and Windows runs |
 
-### 4. Performance
+### 3. Performance
 
 Waits for benchmarking.
 
