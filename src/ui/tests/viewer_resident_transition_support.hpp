@@ -251,6 +251,15 @@ waitForTransitionIdentity(bloom::ui::CompositionPreviewController& controller,
     using namespace bloom;
     using namespace std::chrono_literals;
     const auto revision = session.snapshot().revision();
+    // The selection click before this changed the overlay revision: until the Viewer has applied
+    // the new overlay it has no current mapping and a press starts no gesture (the same setup
+    // prerequisite as the main drag's), so no new native work would ever be submitted.
+    const bool mappingReady = bloom::test_support::awaitQtCondition(
+        "viewer mapping is applied before the resolution drag",
+        [&] { return viewer.mappingForTest().has_value(); });
+    checks.expect(mappingReady, "the selected outline mapping is applied before the drag");
+    if (!mappingReady)
+        return false;
     sendNativeMouse(window, container, QEvent::MouseButtonPress, centre, Qt::LeftButton,
                     Qt::LeftButton);
     gate->submitted.store(false, std::memory_order_release);
