@@ -64,8 +64,9 @@ macOS or Windows, so a tree configured with the option there reports its composi
 The compositor tests are Linux only by nature: each presents to a native Vulkan surface, and Wayland
 is the only presentation platform Bloom implements, so macOS and Windows have no session to give
 them (the reason is written beside the registrations in `src/ui/tests/CMakeLists.txt`). A test that
-presents to no native surface, such as the packed Viewer cases, is an ordinary default-suite test on
-all three platforms.
+presents to no native surface, such as the packed Viewer cases, is an ordinary default-suite test. The
+packed Viewer and processing-phase cases are built where the build has Qt's Vulkan feature (Linux and
+Windows); the macOS Qt build has none, and building them there is open (#726).
 
 ```sh
 python3 tools/local/sprint_validation.py milestone \

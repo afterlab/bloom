@@ -15,7 +15,7 @@ endif()
 # presents to a native Vulkan surface, and the only presentation platform Bloom implements is
 # Wayland (render::GpuPresentationPlatform; Xcb and Xlib are declared and unavailable). macOS and
 # Windows have no Wayland, so there is no session to give them; the application on every platform
-# presents through the packed widget route instead, which the default suite covers offscreen (for
+# presents through the packed widget route instead, which default-suite cases cover offscreen (for
 # example bloom.ui.gpu_packed_viewer_*). A test that does not present to a native surface is not a
 # COMPOSITOR test (#726).
 
@@ -2738,8 +2738,12 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     target_link_libraries(bloom_ui_gpu_processing_phase_native_test
         PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
     bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
-    # Presentation disabled and no window, so not a compositor test: the default suite on every
-    # platform (#726).
+    # Presentation disabled and no window, so not a compositor test but a default-suite one (#726).
+    # Like every target in this block it is built only where BLOOM_UI_VULKAN_AVAILABLE: Linux and
+    # Windows. The macOS build's Qt has no Vulkan feature, so the block is not built there, though
+    # this case and the packed Viewer cases below need only the pinned Vulkan headers (the shared
+    # gpu_service_chain_fixture.hpp includes them for its surface helper). That is why they run on
+    # two platforms; building them on macOS is open (#726).
     bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
         COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
         TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
@@ -2828,8 +2832,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             set(packed_kind STRESS)
         else()
             # The packed Viewer paints through ordinary widgets and presents through no native
-            # surface, so the Viewer cases are default-suite tests on every platform (#726). Their
-            # devices are the fixed reading's stated card, never the driver's live budget.
+            # surface, so the Viewer cases are default-suite tests (#726), on Linux and Windows for
+            # the reason written at bloom.ui.gpu_processing_phase_native above. Their devices are
+            # the fixed reading's stated card, never the driver's live budget.
             set(packed_kind FIXED_MEMORY)
         endif()
         bloom_add_test(
