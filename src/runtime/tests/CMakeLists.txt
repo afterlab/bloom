@@ -2572,11 +2572,15 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     bloom_enable_strict_floating_point(bloom_runtime_gpu_process_frame_ocio_native_test)
     include(BloomGpuShaderTools)
     bloom_package_gpu_shader_tools(bloom_runtime_gpu_process_frame_ocio_native_test)
+    # FIXED_MEMORY: its evaluator has no card option, and its device plans (the explicit image
+    # ceiling's refusal, the 6000x4000 frame) must not follow the free memory other GPU programs
+    # on the machine leave (#750).
     bloom_add_test(
         NAME bloom.runtime.gpu_process_frame_ocio_native
         COMMAND bloom_runtime_gpu_process_frame_ocio_native_test
         LABELS runtime native gpu color export
         TIMEOUT 300
+        FIXED_MEMORY
     )
     set_tests_properties(bloom.runtime.gpu_process_frame_ocio_native
         PROPERTIES SKIP_RETURN_CODE 77)
