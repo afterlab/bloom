@@ -16,6 +16,7 @@
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
@@ -493,6 +494,23 @@ void testRequireDevice(Session& session, runtime::TaskScheduler& scheduler,
     expect(cpu.succeeded && cpu.publishedFrames == 1 && cpu.gpuEvaluatedFrames == 0 &&
                cpu.cpuReferenceFrames == 1,
            "a CPU render reports its CPU reference frame explicitly");
+    // #553: and names why it is not a GPU frame, for an image and a movie alike.
+    const auto namesItsReason = [](const RenderResult& result) {
+        return result.cpuReferenceReason.starts_with(
+                   "This frame was evaluated on the CPU reference path: ") &&
+               !result.cpuReferenceReason.ends_with("no reason was recorded");
+    };
+    expect(namesItsReason(cpu),
+           "a CPU render names its CPU reference reason: " + cpu.cpuReferenceReason);
+    if (output::mediaWorkerAvailableV1()) {
+        const auto movie =
+            still(root / "device/cpu.mov", false, output::OutputPresetV1::ProResMovV1);
+        expect(movie.succeeded && movie.cpuReferenceFrames == 1 && namesItsReason(movie),
+               "a CPU movie render names its CPU reference reason: " + movie.cpuReferenceReason +
+                   " " + movie.diagnostic);
+    } else {
+        std::cout << "NotRun: CPU movie reason: no media worker here\n";
+    }
 
     // The per-frame guard behind the early check: a runner told to require a device refuses the
     // CPU frame before it is published, even when the caller skipped the device check.

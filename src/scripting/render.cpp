@@ -358,6 +358,9 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
                     details += (details.empty() ? "" : "; ") + entry.message;
                 if (entry.code == "export.capacity.assumed")
                     result.capacityAssumptions.push_back(entry.message);
+                if (entry.code == "export.device.cpu-reference" &&
+                    result.cpuReferenceReason.empty())
+                    result.cpuReferenceReason = entry.message;
             }
         };
         while (true) {

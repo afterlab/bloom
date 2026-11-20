@@ -108,6 +108,7 @@ struct detail::SequenceExportWorkV1 {
     SequenceExportFailureStageV1 failureStage = SequenceExportFailureStageV1::Unclassified;
     std::uint64_t encoded = 0;
     core::Sha256Hasher approvals;
+    std::string cpuReferenceReason;
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     std::uint64_t gpuReadbacks = 0;
@@ -226,6 +227,7 @@ struct detail::SequenceExportWorkV1 {
         if (encoder)
             workerMemory = encoder->workerMemory();
         out.workerMemory = workerMemory;
+        out.cpuReferenceReason = cpuReferenceReason;
         out.gpuEvaluatedFrames = gpuEvaluatedFrames;
         out.gpuNativeDispatches = gpuNativeDispatches;
         out.gpuReadbacks = gpuReadbacks;
@@ -1026,6 +1028,8 @@ struct SequenceExportRunnerV1::State {
                    !std::exchange(cpuFallbackLogged, true)) {
             // A CPU reference frame always names its reason (#553).
             const auto& reason = result.gpuProvenance()->cpuFallbackReason;
+            work->cpuReferenceReason =
+                reason.empty() ? std::string("no reason was recorded") : reason;
             std::cerr << "Bloom export: frame " << work->request.range.firstFrame + frame.offset
                       << " was evaluated on the CPU reference path: "
                       << (reason.empty() ? std::string("no reason was recorded") : reason)

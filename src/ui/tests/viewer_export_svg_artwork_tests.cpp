@@ -870,7 +870,10 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
                       route.gpu ? label + " was genuinely evaluated on the device"
                                 : label + " on the CPU reference never touched a device");
         checks.expect(!route.gpu || result.cpuReferenceFrames == 0,
-                      label + " took no CPU reference frame on the GPU route");
+                      label + " took no CPU reference frame on the GPU route" +
+                          (result.cpuReferenceReason.empty()
+                               ? std::string{}
+                               : " (" + result.cpuReferenceReason + ")"));
     };
     for (std::size_t index = 0; index < kShownFrames.size(); ++index) {
         const auto label = prefix + "still " + std::to_string(kShownFrames.at(index));

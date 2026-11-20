@@ -1881,6 +1881,12 @@ class MediaDriver final : public DriverBase {
         route_ = provenance.cpuReferenceFrames > 0 || provenance.cpuDisplayFrames > 0
                      ? ExportDeviceRoute::CpuReference
                      : ExportDeviceRoute::Gpu;
+        if (provenance.cpuReferenceFrames > 0)
+            log(runtime::DiagnosticSeverity::Warning, "export.device.cpu-reference",
+                "This frame was evaluated on the CPU reference path: " +
+                    (result.cpuReferenceReason.empty() ? std::string("no reason was recorded")
+                                                       : result.cpuReferenceReason),
+                std::nullopt);
         if (const auto* analysis = runner_->analysis())
             provenance.implementationNote = analysis->implementationNote;
         if (!platformFailure_.empty())

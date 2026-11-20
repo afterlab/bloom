@@ -65,6 +65,9 @@ struct RenderResult final {
     // Frames evaluated on the CPU reference path (no device, or a scene/recovery the GPU route
     // could not admit). Explicit, never folded into gpuEvaluatedFrames.
     std::uint64_t cpuReferenceFrames = 0;
+    // Why the first CPU reference frame was not a GPU frame (#553): the export log's
+    // `export.device.cpu-reference` line. Empty while every frame was evaluated on the device.
+    std::string cpuReferenceReason = {};
     std::uint64_t gpuNativeDispatches = 0;
     // The real final device-to-host readback submission count. `gpuReadbacks` is the pre-existing
     // compatibility name for this same genuine counter (one final readback per evaluated frame);

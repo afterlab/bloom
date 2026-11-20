@@ -189,6 +189,8 @@ struct SequenceExportResultV1 {
     // only). `gpuEvaluatedFrames` counts frames whose attempt actually ran the GPU bridge;
     // `gpuNativeDispatches` and `gpuReadbacks` are the summed per-attempt counters. Zero when no
     // provider was supplied or every frame fell back to the CPU reference path.
+    // Why the first CPU reference frame was not a GPU frame (#553); empty while none was.
+    std::string cpuReferenceReason = {};
     std::uint64_t gpuEvaluatedFrames = 0;
     std::uint64_t gpuNativeDispatches = 0;
     // `gpuReadbacks` is the pre-existing compatibility name for the summed final readback

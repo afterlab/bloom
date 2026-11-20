@@ -382,7 +382,9 @@ of them present, and its log entry lists the retained phases and images the root
   FrameCount, Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication and
   DeviceProvenance, each with expected and observed values. Overall: Failed if any check failed,
   Warning if any warned, else Passed. Any frame evaluated on the CPU reference path is a
-  DeviceProvenance warning, so such a frame is never presented as GPU.
+  DeviceProvenance warning, so such a frame is never presented as GPU. The job's log names why
+  the first such frame was not a GPU frame (`export.device.cpu-reference`), for an image, image
+  sequence and movie output alike, and a scripted render returns that line with its result.
 
 ### 11. What the panel reads, and from which thread
 
