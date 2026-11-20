@@ -129,12 +129,8 @@ template <typename Value>
     return true;
 }
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
-selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report,
-               const bool smallest = false) {
-    auto sizes = kSizes;
-    if (smallest)
-        std::ranges::reverse(sizes);
-    for (const auto& candidate : sizes) {
+selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report) {
+    for (const auto& candidate : kSizes) {
         if (runtime::detail::gpuPreviewDisplaySelectsNative(
                 report, static_cast<std::uint64_t>(candidate.first) * candidate.second,
                 runtime::detail::gpuPreviewDisplayHandoffOverheadMicros())) {
@@ -316,11 +312,11 @@ void testCpuPaths(Expectations& expectations) {
     }
 }
 // Device: full submit -> native -> product provenance and CPU pixel parity.
-// The largest (or the smallest) of kSizes the device route takes on this device, from a probe
-// service's qualification; nothing when there is no device or no size qualifies (both said).
+// The largest of kSizes the device route takes on this device, from a probe service's
+// qualification; nothing when there is no device or no size qualifies (both said).
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
 deviceEligibleSize(Expectations& expectations, TaskScheduler& scheduler, const std::string& loader,
-                   const bool requireDevice, const bool smallest = false) {
+                   const bool requireDevice) {
     runtime::detail::PreviewDisplayServiceTestFixture probe(16, 9);
     if (probe.processor == nullptr) {
         expectations.expect(!requireDevice, "the neutral processor builds");
@@ -334,7 +330,7 @@ deviceEligibleSize(Expectations& expectations, TaskScheduler& scheduler, const s
         }
         report = probeService.status().qualification;
     }
-    const auto size = report != nullptr ? selectableSize(*report, smallest) : std::nullopt;
+    const auto size = report != nullptr ? selectableSize(*report) : std::nullopt;
     if (!size.has_value())
         std::cout << "SKIP: no device-eligible size beats the two service handoffs\n";
     return size;
@@ -434,11 +430,12 @@ void testLateFallbackSameFrame(Expectations& expectations, const std::string& lo
 // Device: one CPU worker is free while the final GPU parent is pending. The native job is held
 // in flight by the service's poll seam until the test has seen the CPU worker run other work, so
 // the window is there by construction rather than by how long the device takes (#750); the
-// dispatch deadline's clock is held still with it.
+// dispatch deadline's clock is held still with it. The frame is the size the provenance case
+// proves takes the device route.
 void testWorkerFreedWhilePending(Expectations& expectations, const std::string& loader,
                                  const bool requireDevice) {
     TaskScheduler scheduler(config(1));
-    const auto size = deviceEligibleSize(expectations, scheduler, loader, requireDevice, true);
+    const auto size = deviceEligibleSize(expectations, scheduler, loader, requireDevice);
     if (!size.has_value()) {
         return;
     }
@@ -476,6 +473,15 @@ void testWorkerFreedWhilePending(Expectations& expectations, const std::string& 
     expectations.expect(
         settled && runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core),
         "a device-eligible frame dispatches its native job");
+    if (!runtime::detail::GpuPreviewDisplayServiceTestAccess::isNativeInFlight(*core)) {
+        const auto counters = service.status().counters;
+        std::cerr << "  " << size->first << 'x' << size->second
+                  << " took no native job: CPU fallbacks " << counters.cpuFallbacks;
+        for (std::size_t reason = 0; reason < counters.cpuFallbacksByReason.size(); ++reason)
+            std::cerr << (reason == 0 ? " by reason [" : ", ")
+                      << counters.cpuFallbacksByReason[reason];
+        std::cerr << "]\n";
+    }
     auto unrelated = scheduler.submit<int>(
         runtime::TaskRequest("Unrelated CPU work", owner(7), runtime::TaskPriority::Background),
         [](TaskContext&) { return TaskResult<int>::succeeded(7); });
