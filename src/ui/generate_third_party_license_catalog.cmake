@@ -290,7 +290,13 @@ string(APPEND _bloom_catalog_body
 
 set(BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP
     "${CMAKE_CURRENT_BINARY_DIR}/generated/third_party_license_catalog.generated.cpp")
-file(WRITE "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}" "${_bloom_catalog_body}")
+# Written only when its text changes: every configure runs this script, and a rewritten source
+# rebuilds bloom_ui and relinks every program that links it, among them all the UI tests (on macOS
+# each relinked program is scanned again when it first starts, #727).
+file(WRITE "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}.new" "${_bloom_catalog_body}")
+file(COPY_FILE "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}.new"
+    "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}" ONLY_IF_DIFFERENT)
+file(REMOVE "${BLOOM_THIRD_PARTY_LICENSE_CATALOG_CPP}.new")
 
 # Reconfigure (and so regenerate) whenever a source license file -- registered above -- or this
 # script changes.
