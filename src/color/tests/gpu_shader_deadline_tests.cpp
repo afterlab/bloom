@@ -35,7 +35,8 @@ ScheduledDeadline::Sources sourcesOf(Waits& waits) {
             [&waits](const std::int64_t processId) {
                 waits.asked = processId;
                 return waits.process;
-            }};
+            },
+            {}};
 }
 
 } // namespace
@@ -126,6 +127,20 @@ int main() {
         bare.processStarted(12);
         bare.refresh();
         check(bare.current() == bare.start() + 10s, "no sources at all is wall-clock time too");
+    }
+    // #731: a held limit does not end, however long ago it was reached; released, it ends as it
+    // would have. While held, a read under it waits in short steps.
+    {
+        bool held = true;
+        ScheduledDeadline::Sources sources;
+        sources.held = [&held] { return held; };
+        ScheduledDeadline deadline(0ms, 120s, std::move(sources));
+        check(!deadline.expired(), "a held limit does not end");
+        check(deadline.current() > deadline.start() &&
+                  deadline.current() <= deadline.start() + 120s,
+              "a read under a held limit waits a step, never past the ceiling");
+        held = false;
+        check(deadline.expired(), "a released limit that was reached ends at once");
     }
     // The real sources: reading them never moves the limit backwards or past the ceiling.
     {

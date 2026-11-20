@@ -46,7 +46,13 @@ class ScheduledDeadline final {
     struct Sources {
         std::function<std::optional<std::chrono::nanoseconds>()> thisThread;
         std::function<std::optional<std::chrono::nanoseconds>(std::int64_t processId)> process;
+        // Tests only (#731): while it answers true the limit is held open; it does not end before
+        // the ceiling, and a read under it waits in steps of kHeldStep. A test ends a compile's
+        // limit at a point it chose (after its hung tool has started) instead of at an instant on
+        // the clock. Empty in every product compile.
+        std::function<bool()> held;
     };
+    static constexpr std::chrono::milliseconds kHeldStep{10};
     ScheduledDeadline(std::chrono::milliseconds limit, std::chrono::milliseconds ceiling);
     ScheduledDeadline(std::chrono::milliseconds limit, std::chrono::milliseconds ceiling,
                       Sources sources);
@@ -76,6 +82,18 @@ class ScheduledDeadline final {
     std::chrono::nanoseconds finishedProcessWait_{0};
     std::chrono::nanoseconds liveProcessWait_{0};
     std::int64_t liveProcess_ = 0;
+    bool held_ = false;
+};
+
+// Tests only (#731): a compile under a deadline the test made (see
+// ScheduledDeadline::Sources::held).
+struct GpuShaderCompilerTestAccess final {
+    [[nodiscard]] static GpuShaderCompileResult compileUnder(GpuShaderCompiler& compiler,
+                                                             const GpuShaderCompileRequest& request,
+                                                             const GpuShaderCancellation& cancel,
+                                                             ScheduledDeadline& deadline) {
+        return compiler.compileWithin(request, cancel, deadline);
+    }
 };
 
 BoundedHash hashFileBounded(const std::string& path, std::size_t ceiling,

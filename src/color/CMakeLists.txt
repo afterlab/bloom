@@ -78,6 +78,9 @@ if(BUILD_TESTING)
             "BLOOM_GPU_SHADER_TEST_HELPER=\"$<TARGET_FILE:bloom_color_gpu_shader_test_helper>\""
     )
     target_link_libraries(bloom_color_gpu_shader_test PRIVATE bloom_color_gpu_shader)
+    # #731: the hung-child cases end the compile under a deadline the test holds open
+    # (gpu_shader_compiler_process.hpp, private to the library).
+    target_include_directories(bloom_color_gpu_shader_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
     target_include_directories(bloom_color_gpu_shader_test
         PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
     add_dependencies(bloom_color_gpu_shader_test bloom_color_gpu_shader_test_helper)

@@ -15,7 +15,8 @@ namespace bloom::color {
 
 namespace gpu_shader_detail {
 class ScheduledDeadline;
-}
+struct GpuShaderCompilerTestAccess;
+} // namespace gpu_shader_detail
 
 // Caller-provided, already-validated qualified paths to the pinned tools. The adapter never
 // consults PATH, a package registry, or an ambient environment variable.
@@ -111,6 +112,7 @@ class GpuShaderCompiler final {
     [[nodiscard]] GpuShaderCompilerStats stats() const;
 
   private:
+    friend struct gpu_shader_detail::GpuShaderCompilerTestAccess;
     struct State;
     struct ToolResolution {
         std::optional<render::GpuShaderToolIdentity> identity;

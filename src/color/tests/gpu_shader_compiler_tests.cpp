@@ -1,3 +1,5 @@
+#include "await.hpp"
+#include "gpu_shader_compiler_process.hpp"
 #include "process_probe.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -244,6 +246,75 @@ void testDiagnosticCeilings(Expectations& expectations, const std::string& glsla
                             "captured tool diagnostics stay inside the byte ceiling");
 }
 
+// #731: a compile whose tool hangs, ended by its limit or by cancellation. Each case runs its
+// own copy of the hanging tool, which records its process id once it runs. The compile runs on its
+// own thread under a limit held open by the test, so neither the limit nor the cancellation can
+// end it before the tool has started: the test waits for the tool's record, takes a hold on the
+// running process, and only then ends the compile. Termination is the held process's exit, not a
+// lookup of an id the system may already have given to another process. Nothing here depends on
+// how long anything takes.
+enum class HungEnd { Deadline, Cancellation };
+
+[[nodiscard]] std::string describe(const bloom::color::GpuShaderCompileResult& result) {
+    std::string text = result.status == GpuShaderCompileStatus::Compiled    ? "compiled"
+                       : result.status == GpuShaderCompileStatus::Cancelled ? "cancelled"
+                                                                            : "failed";
+    if (result.failure)
+        text += " (code " + std::to_string(static_cast<int>(result.failure->code)) + ": " +
+                result.failure->diagnostic + ")";
+    return text;
+}
+
+void testHungChild(Expectations& expectations, FixtureDirectory& fixtures,
+                   const std::string& spirvVal, const HungEnd end) {
+    using bloom::color::gpu_shader_detail::GpuShaderCompilerTestAccess;
+    using bloom::color::gpu_shader_detail::ScheduledDeadline;
+    const bool cancelling = end == HungEnd::Cancellation;
+    const std::string label = cancelling ? "cancellation during a hung child" : "a hung child";
+    const auto tool = fixtures.tool(cancelling ? "hang-cancel" : "hang-deadline");
+    const auto request = baseRequest(tool, spirvVal);
+    GpuShaderCompiler compiler;
+    std::atomic<bool> released{false};
+    std::atomic<bool> finished{false};
+    bloom::color::GpuShaderCompileResult result;
+    std::thread compile([&] {
+        // A one-millisecond limit, held open until the test releases it; for the cancellation it
+        // stays held, so only the cancellation can end the compile.
+        ScheduledDeadline::Sources sources;
+        sources.held = [&] { return cancelling || !released.load(); };
+        ScheduledDeadline deadline(1ms, 120s, std::move(sources));
+        result = GpuShaderCompilerTestAccess::compileUnder(
+            compiler, request, [&] { return cancelling && released.load(); }, deadline);
+        finished.store(true);
+    });
+    long long processId = 0;
+    const bool settled =
+        bloom::test_support::awaitCondition(label + ": the tool starts or the compile ends", [&] {
+            std::ifstream(tool + ".pid") >> processId;
+            return processId > 0 || finished.load();
+        });
+    expectations.expect(settled && processId > 0 && !finished.load(),
+                        label + ": the hung child starts and records its process id");
+    std::optional<bloom::test_support::ProcessWatch> watch;
+    if (processId > 0)
+        watch.emplace(processId);
+    expectations.expect(watch && watch->valid() && !watch->exited(),
+                        label + ": the hung child is running when the compile is ended");
+    released.store(true);
+    compile.join();
+    if (cancelling) {
+        expectations.expect(result.status == GpuShaderCompileStatus::Cancelled,
+                            "cancellation during a hung child terminates the compile: " +
+                                describe(result));
+    } else {
+        expectations.expect(result.status == GpuShaderCompileStatus::Failed && result.failure &&
+                                result.failure->code == GpuShaderCompileError::Timeout,
+                            "a hung child hits the compile deadline: " + describe(result));
+    }
+    expectations.expect(watch && watch->valid() && watch->exited() && watch->collected(),
+                        label + ": the child is killed and reaped when the compile returns");
+}
+
 void testFakeToolFailures(Expectations& expectations, FixtureDirectory& fixtures,
                           const std::string& glslang, const std::string& spirvVal) {
     GpuShaderCompiler compiler;
@@ -262,29 +333,8 @@ void testFakeToolFailures(Expectations& expectations, FixtureDirectory& fixtures
     expectations.expect(invalid.status == GpuShaderCompileStatus::Failed && invalid.failure &&
                             invalid.failure->code == GpuShaderCompileError::ValidationFailed,
                         "a failing spirv-val is a typed validation failure");
-    const auto hangTool = fixtures.tool("hang");
-    request = baseRequest(hangTool, spirvVal);
-    // Long enough for the child to start and record its process id on a busy machine.
-    request.limits.deadline = 1000ms;
-    const auto timedOut = compiler.compile(request);
-    expectations.expect(timedOut.status == GpuShaderCompileStatus::Failed && timedOut.failure &&
-                            timedOut.failure->code == GpuShaderCompileError::Timeout,
-                        "a hung child hits the compile deadline");
-    // The compile has returned, so the child must already be killed and reaped: its process id no
-    // longer names a process (an unreaped child would still be listed as a zombie).
-    long long hungProcessId = 0;
-    std::ifstream(hangTool + ".pid") >> hungProcessId;
-    expectations.expect(hungProcessId > 0, "the hung child started and recorded its process id");
-    if (hungProcessId > 0)
-        expectations.expect(bloom::test_support::processGone(hungProcessId),
-                            "a hung child is killed and reaped when the compile returns");
-    request = baseRequest(fixtures.tool("hang"), spirvVal);
-    const auto cancelStart = std::chrono::steady_clock::now();
-    const auto cancelled = compiler.compile(request, [cancelStart]() {
-        return std::chrono::steady_clock::now() - cancelStart > 150ms;
-    });
-    expectations.expect(cancelled.status == GpuShaderCompileStatus::Cancelled,
-                        "cancellation during a hung child terminates the compile");
+    testHungChild(expectations, fixtures, spirvVal, HungEnd::Deadline);
+    testHungChild(expectations, fixtures, spirvVal, HungEnd::Cancellation);
 }
 
 std::optional<GpuShaderCompileError> errorCode(const bloom::color::GpuShaderCompileResult& result) {
@@ -606,5 +656,5 @@ int main() {
     testConcurrentSameKey(expectations, glslang, spirvVal);
     testDiagnosticsAndEntryPointNul(expectations, glslang, spirvVal);
     testCacheEviction(expectations, glslang, spirvVal);
-    return expectations.failures() == 0 ? 0 : 1;
+    return expectations.failures() + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

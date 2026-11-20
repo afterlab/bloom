@@ -6,8 +6,10 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <string>
+#include <system_error>
 #include <thread>
 
 int main(int argc, char** argv) {
@@ -22,10 +24,15 @@ int main(int argc, char** argv) {
         }
     }
     if (name.find("hang") != std::string::npos) {
-        // Records its process id beside the executable so the test can check the child is gone.
+        // Records its process id beside the executable once it runs: the test's sign that the
+        // child has started (#731). Written whole under another name and then renamed, so the
+        // test never reads a part of it.
         if (argc > 0 && argv[0] != nullptr) {
             const auto processId = bloom::test_support::currentProcessId();
-            std::ofstream(std::string(argv[0]) + ".pid") << processId << '\n';
+            const std::string recorded = std::string(argv[0]) + ".pid";
+            std::ofstream(recorded + ".part") << processId << '\n';
+            std::error_code error;
+            std::filesystem::rename(recorded + ".part", recorded, error);
         }
         while (true) {
             std::this_thread::sleep_for(std::chrono::seconds(1));

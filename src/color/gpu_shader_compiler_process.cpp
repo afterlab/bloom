@@ -39,7 +39,8 @@ ScheduledDeadline::Sources systemSources() {
     return {[] { return runQueueWait("/proc/thread-self/schedstat"); },
             [](const std::int64_t processId) {
                 return runQueueWait("/proc/" + std::to_string(processId) + "/schedstat");
-            }};
+            },
+            {}};
 #else
     return {};
 #endif
@@ -60,6 +61,11 @@ ScheduledDeadline::ScheduledDeadline(const std::chrono::milliseconds limit,
 }
 
 void ScheduledDeadline::refresh() {
+    held_ = sources_.held && sources_.held();
+    if (held_) {
+        current_ = std::min(ceiling_, std::max(current_, Clock::now() + kHeldStep));
+        return;
+    }
     if (threadAtStart_ && sources_.thisThread) {
         if (const auto now = sources_.thisThread(); now && *now > *threadAtStart_)
             threadWait_ = std::max(threadWait_, *now - *threadAtStart_);
@@ -74,9 +80,13 @@ void ScheduledDeadline::refresh() {
 }
 
 bool ScheduledDeadline::expired() {
-    if (Clock::now() < current_)
+    // While held, every call looks again, so a release is seen at once.
+    if (!held_ && Clock::now() < current_)
         return false;
     refresh();
+    // A held limit does not end however late this thread runs, until the ceiling.
+    if (held_)
+        return Clock::now() >= ceiling_;
     return Clock::now() >= current_;
 }
 

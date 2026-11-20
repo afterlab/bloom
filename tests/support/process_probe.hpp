@@ -1,8 +1,9 @@
 #pragma once
 
 // What tests do to, and ask about, a child process by its id, spelled once for every platform:
-// kill it from outside, ask whether it is gone, end the calling process abruptly, and the text a
-// supervisor reports for a process that was killed this way.
+// kill it from outside, ask whether it is gone, hold it to see its end (ProcessWatch), end the
+// calling process abruptly, and the text a supervisor reports for a process that was killed this
+// way.
 
 #include <cstdint>
 #include <string_view>
@@ -18,9 +19,16 @@
 #else
 #include <cerrno>
 #include <csignal>
+#include <poll.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#if defined(__linux__)
+#include <sys/syscall.h>
+#elif defined(__APPLE__)
+#include <sys/event.h>
+#include <time.h>
+#endif
 #endif
 
 namespace bloom::test_support {
@@ -69,6 +77,110 @@ inline constexpr unsigned kKilledExitCode = 9;
     return ::kill(static_cast<pid_t>(pid), 0) != 0;
 #endif
 }
+
+// A hold on one process, taken while it is known to be running. Its id names the process only
+// until it is collected, after which the system may give the id to a new process; the hold names
+// this process alone, so what it answers never depends on how soon an id is reused (#731).
+// Windows: a process handle. Linux: a process file descriptor (pidfd). macOS: a kqueue that
+// watches the process for its exit.
+class ProcessWatch final {
+  public:
+    explicit ProcessWatch(const std::int64_t pid) : pid_(pid) {
+#if defined(_WIN32)
+        handle_ = OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE,
+                              static_cast<DWORD>(pid));
+#elif defined(__linux__)
+        fd_ = static_cast<int>(::syscall(SYS_pidfd_open, static_cast<pid_t>(pid), 0));
+#elif defined(__APPLE__)
+        queue_ = ::kqueue();
+        if (queue_ >= 0) {
+            struct kevent change{};
+            EV_SET(&change, static_cast<uintptr_t>(pid), EVFILT_PROC, EV_ADD | EV_ONESHOT,
+                   NOTE_EXIT, 0, nullptr);
+            if (::kevent(queue_, &change, 1, nullptr, 0, nullptr) != 0) {
+                ::close(queue_);
+                queue_ = -1;
+            }
+        }
+#endif
+    }
+    ProcessWatch(const ProcessWatch&) = delete;
+    ProcessWatch& operator=(const ProcessWatch&) = delete;
+    ~ProcessWatch() {
+#if defined(_WIN32)
+        if (handle_ != nullptr)
+            CloseHandle(handle_);
+#elif defined(__linux__)
+        if (fd_ >= 0)
+            ::close(fd_);
+#elif defined(__APPLE__)
+        if (queue_ >= 0)
+            ::close(queue_);
+#endif
+    }
+
+    // Whether the hold was taken: false when no process had the id.
+    [[nodiscard]] bool valid() const noexcept {
+#if defined(_WIN32)
+        return handle_ != nullptr;
+#elif defined(__linux__)
+        return fd_ >= 0;
+#elif defined(__APPLE__)
+        return queue_ >= 0;
+#else
+        return false;
+#endif
+    }
+
+    // Whether the process has ended. Never waits.
+    [[nodiscard]] bool exited() {
+#if defined(_WIN32)
+        return handle_ != nullptr && WaitForSingleObject(handle_, 0) == WAIT_OBJECT_0;
+#elif defined(__linux__)
+        if (fd_ < 0)
+            return false;
+        pollfd ready{fd_, POLLIN, 0};
+        return ::poll(&ready, 1, 0) == 1 && (ready.revents & POLLIN) != 0;
+#elif defined(__APPLE__)
+        if (!exited_ && queue_ >= 0) {
+            struct kevent event{};
+            const timespec now{0, 0};
+            exited_ = ::kevent(queue_, nullptr, 0, &event, 1, &now) == 1 &&
+                      (event.fflags & NOTE_EXIT) != 0;
+        }
+        return exited_;
+#else
+        return false;
+#endif
+    }
+
+    // Whether the process, a child of this process, has ended and been collected by its
+    // supervisor: nothing is left of it to wait on. On POSIX only this process's own children can
+    // be waited on, so an id reused by an unrelated process still answers collected. Windows keeps
+    // no ended child to collect: the end is the answer.
+    [[nodiscard]] bool collected() {
+        if (!exited())
+            return false;
+#if defined(_WIN32)
+        return true;
+#else
+        int status = 0;
+        errno = 0;
+        return ::waitpid(static_cast<pid_t>(pid_), &status, WNOHANG) == -1 && errno == ECHILD;
+#endif
+    }
+
+  private:
+    std::int64_t pid_ = 0;
+#if defined(_WIN32)
+    HANDLE handle_ = nullptr;
+#elif defined(__linux__)
+    int fd_ = -1;
+#elif defined(__APPLE__)
+    int queue_ = -1;
+    bool exited_ = false;
+#endif
+};
 
 [[nodiscard]] inline std::int64_t currentProcessId() {
 #if defined(_WIN32)
