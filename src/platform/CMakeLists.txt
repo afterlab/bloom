@@ -235,7 +235,9 @@ if(BUILD_TESTING AND (CMAKE_SYSTEM_NAME STREQUAL "Linux" OR APPLE))
     # Inherited descriptor numbers (the source snapshot and staged output a child receives) are a
     # POSIX mechanism; the Windows supervisor refuses a launch that asks for them.
     add_executable(bloom_platform_process_descriptor_test tests/process_descriptor_tests.cpp)
-    target_link_libraries(bloom_platform_process_descriptor_test PRIVATE bloom_platform_process)
+    # The staged-output cases (Linux) stage their artifact through the coordinator in bloom_platform.
+    target_link_libraries(bloom_platform_process_descriptor_test PRIVATE bloom_platform_process
+                          bloom_platform)
     bloom_enable_warnings(bloom_platform_process_descriptor_test)
     bloom_add_test(NAME bloom.platform.process_descriptors
                    COMMAND bloom_platform_process_descriptor_test LABELS unit platform process)

@@ -547,7 +547,15 @@ reopens it for its own QC, and the host adopts exactly the bytes the worker hash
 (`StagedArtifactLease::adoptExternalWrite`) before its independent verification read and the atomic
 publication. No encoded copy crosses the protocol and no capped spool file exists. Where the
 platform cannot hand out the descriptor, the lease answers `UnsupportedPlatform` and the encoded
-bytes are copied into a lease staged at publication as before.
+bytes are copied into a lease staged at publication as before. The host's own descriptor for that
+file is an ordinary open, so in a busy host it can be any number, including 3 or 4, where the
+launch installs the start gate and the source snapshot. The supervisor therefore copies every
+inherited descriptor (snapshot, staged artifact, frame arena) from a duplicate above every number it
+installs, so no copy can replace or close another before it is installed
+(`bloom.platform.process_descriptors` places the staged descriptor at 3 and at 4). A worker the
+host cannot start or reach names the operation (launch, write, read or finish) and the system's
+error in the export's failure, for example "Media worker could not be started (launch: Permission
+denied (13))".
 
 `src/media` owns provider-neutral discovery, stream descriptions, indexing, decode products, proxy
 requests, audio products, provider selection, and media diagnostics. `src/output` owns export intent,

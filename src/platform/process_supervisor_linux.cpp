@@ -212,30 +212,34 @@ ProcessSupervisor::launch(const ProcessOptions& options) {
     if (code == 0)
         code = posix_spawn_file_actions_addopen(&actions.value, STDERR_FILENO, "/dev/null",
                                                 O_WRONLY, 0);
+    // An inherited source may itself hold one of the numbers the actions install or close (3 to
+    // 6): the staged writer is an ordinary open and takes the lowest free number, so it can be 3 or
+    // 4 in a busy host. The gate's copy to 3, the close of 4 or 5, or an earlier copy would then
+    // replace or close it before it is copied, and the child would receive the wrong file at its
+    // number or no launch at all. Every source is copied from a duplicate above every target.
+    const auto aboveTargets = [&code](const int descriptor) {
+        Fd copy(descriptor < 0 ? -1 : ::fcntl(descriptor, F_DUPFD_CLOEXEC, 7));
+        if (code == 0 && copy.get() < 0)
+            code = descriptor < 0 ? EBADF : errno;
+        return copy;
+    };
+    Fd snapshotSource, stagedSource, arenaSource;
+    if (code == 0 && options.inputSnapshot)
+        snapshotSource = aboveTargets(options.inputSnapshot->descriptor());
+    if (code == 0 && options.stagedOutput)
+        stagedSource = aboveTargets(options.stagedOutput->descriptor());
+    if (code == 0 && options.frameArena)
+        arenaSource = aboveTargets(options.frameArena->descriptor());
     if (code == 0)
         code = posix_spawn_file_actions_adddup2(&actions.value, gate[0].get(), 3);
     if (code == 0 && options.inputSnapshot)
-        code = posix_spawn_file_actions_adddup2(&actions.value, options.inputSnapshot->descriptor(),
-                                                4);
+        code = posix_spawn_file_actions_adddup2(&actions.value, snapshotSource.get(), 4);
     if (code == 0 && !options.inputSnapshot)
         code = posix_spawn_file_actions_addclose(&actions.value, 4);
-    if (code == 0 && options.stagedOutput && options.stagedOutput->descriptor() < 0)
-        code = EBADF;
     if (code == 0 && options.stagedOutput)
-        code =
-            posix_spawn_file_actions_adddup2(&actions.value, options.stagedOutput->descriptor(), 5);
+        code = posix_spawn_file_actions_adddup2(&actions.value, stagedSource.get(), 5);
     if (code == 0 && options.frameArena && !options.stagedOutput)
         code = posix_spawn_file_actions_addclose(&actions.value, 5);
-    // The arena's own descriptor may be one of the low numbers the actions above install (4 or 5),
-    // which would replace it before it is copied: copy it from a duplicate above every target.
-    Fd arenaSource;
-    if (code == 0 && options.frameArena) {
-        arenaSource = Fd(options.frameArena->descriptor() < 0
-                             ? -1
-                             : ::fcntl(options.frameArena->descriptor(), F_DUPFD_CLOEXEC, 7));
-        if (arenaSource.get() < 0)
-            code = EBADF;
-    }
     if (code == 0 && options.frameArena)
         code = posix_spawn_file_actions_adddup2(&actions.value, arenaSource.get(), 6);
     if (code == 0)
