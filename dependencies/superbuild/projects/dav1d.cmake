@@ -3,10 +3,19 @@
 # tests, examples or docs); FFmpeg's LGPL libdav1d wrapper links it into the worker's shared
 # libavcodec. The Meson configure vector is the adjacent dav1d.configure-arguments file, copied
 # into the lock and checked byte for byte. x86 assembly uses the superbuild-private NASM.
+#
+# Reviewed source patch (dependencies/patches/dav1d/, recorded in the lock with its digest): 0001
+# keeps MSVC from evaluating __has_include_next in the compat stdatomic.h, which MSVC 19.52 and
+# newer reject even inside an expression defined(__clang__) has already made false.
 set(BLOOM_DAV1D_VERSION 1.5.4)
 set(BLOOM_DAV1D_URL
     "https://downloads.videolan.org/pub/videolan/dav1d/${BLOOM_DAV1D_VERSION}/dav1d-${BLOOM_DAV1D_VERSION}.tar.xz")
 set(BLOOM_DAV1D_SHA256 686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5)
+
+set(BLOOM_DAV1D_PATCHES "${CMAKE_CURRENT_LIST_DIR}/../../patches/dav1d")
+# On Windows, the patch program of the MSYS2 installation the FFmpeg build uses.
+find_program(BLOOM_DAV1D_PATCH_PROGRAM NAMES patch
+    HINTS "$ENV{MSYS2_ROOT}/usr/bin" "C:/msys64/usr/bin" REQUIRED)
 
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_LIST_DIR}/dav1d.configure-arguments")
@@ -22,6 +31,8 @@ ExternalProject_Add(bloom_dependency_dav1d
     DOWNLOAD_NO_PROGRESS ON
     DOWNLOAD_EXTRACT_TIMESTAMP ON
     DEPENDS ${BLOOM_CODEC_DEPENDS}
+    PATCH_COMMAND "${BLOOM_DAV1D_PATCH_PROGRAM}" -p1 --forward --batch
+        "--input=${BLOOM_DAV1D_PATCHES}/0001-msvc-evaluate-has-include-next-only-under-clang.patch"
     CONFIGURE_COMMAND ${CMAKE_COMMAND} -E env
         CC=${CMAKE_C_COMPILER}
         ${BLOOM_DEPENDENCY_COMMON_ENV}

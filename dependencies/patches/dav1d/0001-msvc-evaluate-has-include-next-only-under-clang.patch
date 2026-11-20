@@ -1,0 +1,33 @@
+Bloom: evaluate __has_include_next in the MSVC stdatomic.h compat header only under clang.
+
+The header chose clang-cl's own stdatomic.h with
+`#if defined(__clang__) && __has_include_next(<stdatomic.h>)`. MSVC defines no
+__has_include_next, and from compiler version 19.52 its preprocessor rejects the
+expression even though defined(__clang__) has already made it false (error C7780,
+"function-like macro '__has_include_next' is not defined", then fatal error C1017).
+The test now sits in an #if nested inside `#if defined(__clang__)`, which MSVC skips
+without evaluating, and sets a local macro that selects the same branch as before.
+Every compiler that accepted the unmodified header takes the branch it took before.
+
+Upstream fixed the same failure after 1.5.4 by defining a fallback __has_include_next
+(VideoLAN dav1d commit a34e0685b9111b9eb1d7835ea7bea5b425dced73, released in 1.5.5).
+
+--- a/include/compat/msvc/stdatomic.h
++++ b/include/compat/msvc/stdatomic.h
+@@ -32,7 +32,15 @@
+ #pragma warning(push)
+ #pragma warning(disable:4067)    /* newline for __has_include_next */
+ 
+-#if defined(__clang__) && __has_include_next(<stdatomic.h>)
++/* MSVC 19.52 rejects __has_include_next in an #if expression even when
++ * defined(__clang__) has already made it false, so only clang evaluates it. */
++#if defined(__clang__)
++#  if __has_include_next(<stdatomic.h>)
++#    define DAV1D_COMPAT_MSVC_CLANG_STDATOMIC_H 1
++#  endif
++#endif
++
++#if defined(DAV1D_COMPAT_MSVC_CLANG_STDATOMIC_H)
+    /* use the clang stdatomic.h with clang-cl*/
+ #  include_next <stdatomic.h>
+ #else /* ! stdatomic.h */

@@ -58,8 +58,9 @@ reviewed patches under `dependencies/patches/ffmpeg/`. The lock, recipe, detache
 and license/review/security records are the authority for the configuration and source offer; the desktop `bloom` target does not link FFmpeg.
 
 The bundled codec libraries (OpenH264, Kvazaar, dav1d, SVT-AV1, libvpx, Opus) are compiled from
-their locked source archives into the worker's LGPL `libavcodec`; each archive is part of that
-library's corresponding source, and each license text is part of Bloom's third-party license
+their locked source archives into the worker's LGPL `libavcodec`; each archive (for dav1d, with the
+reviewed patch under `dependencies/patches/dav1d/`) is part of that library's corresponding source,
+and each license text is part of Bloom's third-party license
 catalogue. Bloom uses no Cisco-distributed binary.
 
 ### OpenH264

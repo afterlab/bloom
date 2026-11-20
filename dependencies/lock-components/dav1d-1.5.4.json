@@ -10,7 +10,7 @@
     "provenancePolicy": "required",
     "provenanceReview": {
       "path": "dependencies/licenses/dav1d/provenance.md",
-      "sha256": "sha256:de1378d77b583869a4f96930de1f451cd646dcc7af0ec4995cff3635ce56269c"
+      "sha256": "sha256:b8813dbe962b2eb61a00f47a864808f40eb954a559b00fb997786fb653d63d45"
     },
     "provenance": [
       {
@@ -37,14 +37,21 @@
     "noticeFiles": [],
     "sourceObligation": "corresponding-source",
     "correspondingSourceArchiveSha256": "sha256:686616b7c69eb88d44459391ab25cac13b6647a3b288835c5784e71c1514a5c5",
-    "modified": false,
+    "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/dav1d/review.md",
-      "sha256": "sha256:9b7a4990264a0898fe8af67a5b47e28d66f5140eb5e2def8cee6fdfeabc7de60"
+      "sha256": "sha256:b7e4492f9b630ba65bfd7c3b36999e04d27a0143a6d894e07227a15652453be4"
     },
-    "reviewedAt": "2026-10-31"
+    "reviewedAt": "2026-11-20"
   },
-  "patches": [],
+  "patches": [
+    {
+      "path": "dependencies/patches/dav1d/0001-msvc-evaluate-has-include-next-only-under-clang.patch",
+      "sha256": "sha256:ef1640d433585ce0a1b287c04e89c50b9d83d5de56f9a65ba1cb952b3442b27f",
+      "applyOrder": 0,
+      "reason": "Evaluate __has_include_next in the MSVC stdatomic.h compat header only under clang, which MSVC 19.52 and newer otherwise reject"
+    }
+  ],
   "dependencies": [
     {
       "name": "nasm",

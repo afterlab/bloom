@@ -18,6 +18,7 @@
 - Verification result: `gpg --verify` reported a good signature made 2026-07-14 by the VideoLAN
   Release Signing Key. The key's validity period ended 2026-08-01, after the signature was made.
 
-The same locked archive is the corresponding-source archive for the static library linked into
-`libavcodec`. Bloom does not modify the source; the superbuild verifies the SHA-256 before
-extraction and builds from the populated archive cache with downloads disabled.
+The same locked archive plus the reviewed patch under `dependencies/patches/dav1d/` (see
+`review.md`) is the corresponding source for the static library linked into `libavcodec`. The
+superbuild verifies the archive's SHA-256 before extraction, applies the patch in the lock's
+recorded order, and builds from the populated archive cache with downloads disabled.
