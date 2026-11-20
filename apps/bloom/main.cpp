@@ -4,9 +4,11 @@
 #include "sequence_export_process_teardown.hpp"
 
 #include <algorithm>
+#include <bloom/core/diagnostic_record.hpp>
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/core/version.hpp>
 #include <bloom/core/worker_thread.hpp>
+#include <bloom/crash/crash_reporter.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -50,6 +52,7 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/composition_thumbnail_controller.hpp>
+#include <bloom/ui/crash_notice.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
 #include <bloom/ui/editor_registry.hpp>
 #include <bloom/ui/export_queue_adapter.hpp>
@@ -119,6 +122,48 @@
 #include <windows.h>
 #endif
 
+namespace {
+
+// Qt's messages go where they always went, and into the crash report's last log lines (#736).
+QtMessageHandler previousMessageHandler = nullptr;
+
+void recordQtMessage(const QtMsgType type, const QMessageLogContext& context,
+                     const QString& message) {
+    const char* level = "debug";
+    switch (type) {
+    case QtDebugMsg:
+        level = "debug";
+        break;
+    case QtInfoMsg:
+        level = "info";
+        break;
+    case QtWarningMsg:
+        level = "warning";
+        break;
+    case QtCriticalMsg:
+        level = "critical";
+        break;
+    case QtFatalMsg:
+        level = "fatal";
+        break;
+    }
+    bloom::core::recordLogLine(std::string("Qt ") + level + ": " + message.toStdString());
+    if (previousMessageHandler != nullptr)
+        previousMessageHandler(type, context, message);
+    else
+        std::fprintf(stderr, "%s\n", qPrintable(qFormatLogMessage(type, context, message)));
+}
+
+// A clean exit removes the program's prepared crash report.
+struct FinishCrashReporter final {
+    FinishCrashReporter() = default;
+    FinishCrashReporter(const FinishCrashReporter&) = delete;
+    FinishCrashReporter& operator=(const FinishCrashReporter&) = delete;
+    ~FinishCrashReporter() { bloom::crash::finishCrashReporter(); }
+};
+
+} // namespace
+
 int main(int argc, char* argv[]) try {
     // Before anything starts: no display, settings, profile or single-instance logic has run.
     const bool reportVersion = argc == 2 && std::string_view(argv[1]) == "--version";
@@ -143,6 +188,17 @@ int main(int argc, char* argv[]) try {
 #endif
         return 0;
     }
+    // Crash reports (#736): from here on a crash leaves a minidump and a text report in the
+    // per-user crash folder. Earlier crashes are collected and pruned in the background; the
+    // notice below offers the newest once.
+    bloom::crash::captureStandardError();
+    const auto crashReporter =
+        bloom::crash::startCrashReporter({.program = "bloom",
+                                          .executable = bloom::host::currentExecutablePath(),
+                                          .directory = {},
+                                          .collect = true});
+    const FinishCrashReporter finishCrashReporter;
+    previousMessageHandler = qInstallMessageHandler(recordQtMessage);
     QApplication application(argc, argv);
     // Qt's shared pool runs Bloom work too; give its threads the stack every Bloom thread has.
     QThreadPool::globalInstance()->setStackSize(
@@ -1347,6 +1403,21 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&window, &bloom::ui::MainWindow::preferencesChanged, &window,
                      applyExportWorkerLimits);
     QTimer::singleShot(0, &projectHost, &bloom::ui::ProjectHost::offerRecoveryOnStartup);
+
+    // #736: "Bloom quit unexpectedly" on the next start after a crash, once per crash. Never in a
+    // headless run (the package check's, an offscreen platform) and never while an agent session
+    // is open: the crash then waits for the next interactive start, and MCP reports it as data.
+    const bool headlessSession =
+        qEnvironmentVariableIsSet(bloom::ui::kPackageCheckProfileVariable) ||
+        QGuiApplication::platformName() == QLatin1String("offscreen") ||
+        QGuiApplication::platformName() == QLatin1String("minimal");
+    bloom::ui::CrashNotice crashNotice(
+        window,
+        {.directory = crashReporter.directory,
+         .mayShow = [headlessSession,
+                     &agentSessions] { return !headlessSession && !agentSessions.sessionOpen(); },
+         .waitForCollection = {}});
+    QTimer::singleShot(0, &crashNotice, &bloom::ui::CrashNotice::start);
 
     // NOLINTEND(clang-analyzer-cplusplus.NewDeleteLeaks)
     const int result = application.exec();

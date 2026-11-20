@@ -4,6 +4,7 @@
 
 #include <bloom/core/standard_streams.hpp>
 #include <bloom/core/version.hpp>
+#include <bloom/crash/crash_reporter.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
@@ -530,6 +531,20 @@ int main(int argc, char** argv) {
         std::cout << "bloom-cli " << bloom::core::version() << '\n';
         return 0;
     }
+    // Crash reports (#736): a crash from here on leaves a minidump and a text report in the
+    // per-user crash folder; earlier crashes are collected and pruned in the background.
+    bloom::crash::captureStandardError();
+    static_cast<void>(
+        bloom::crash::startCrashReporter({.program = "bloom-cli",
+                                          .executable = bloom::host::currentExecutablePath(),
+                                          .directory = {},
+                                          .collect = true}));
+    struct FinishCrashReporter final {
+        FinishCrashReporter() = default;
+        FinishCrashReporter(const FinishCrashReporter&) = delete;
+        FinishCrashReporter& operator=(const FinishCrashReporter&) = delete;
+        ~FinishCrashReporter() { bloom::crash::finishCrashReporter(); }
+    } const finishCrashReporter;
     // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
     runtime::fonts::installHeadlessFontTransport();
 #if defined(BLOOM_BUILD_PYTHON)

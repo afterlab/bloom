@@ -5,6 +5,9 @@ if(TARGET bloom-media-worker)
     add_dependencies(bloom-mcp bloom-media-worker)
 endif()
 bloom_enable_warnings(bloom-mcp)
+# Crash reports (#736): the reporter, and the handler beside the program in the build tree.
+target_link_libraries(bloom-mcp PRIVATE bloom_crash_program)
+bloom_crash_stage_handler(bloom-mcp)
 # A package keeps the tool beside the application (cmake/BloomPackageLayout.cmake). The macOS
 # bundle is filled in the build tree (apps/bloom/CMakeLists.txt); installed alone the tool goes to
 # bin.

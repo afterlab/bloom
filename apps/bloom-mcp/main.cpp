@@ -2,6 +2,7 @@
 // headless export queue over it and the shared server core from src/mcp, then serve stdio.
 #include <bloom/core/standard_streams.hpp>
 #include <bloom/core/version.hpp>
+#include <bloom/crash/crash_reporter.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
@@ -327,6 +328,20 @@ int main(int argc, char** argv) {
         std::cout << "bloom-mcp " << bloom::core::version() << '\n';
         return 0;
     }
+    // Crash reports (#736): a crash from here on leaves a minidump and a text report in the
+    // per-user crash folder; earlier crashes are collected and pruned in the background.
+    bloom::crash::captureStandardError();
+    static_cast<void>(
+        bloom::crash::startCrashReporter({.program = "bloom-mcp",
+                                          .executable = bloom::host::currentExecutablePath(),
+                                          .directory = {},
+                                          .collect = true}));
+    struct FinishCrashReporter final {
+        FinishCrashReporter() = default;
+        FinishCrashReporter(const FinishCrashReporter&) = delete;
+        FinishCrashReporter& operator=(const FinishCrashReporter&) = delete;
+        ~FinishCrashReporter() { bloom::crash::finishCrashReporter(); }
+    } const finishCrashReporter;
     // An export that needs a Google font waits for the download (docs/architecture/fonts.md).
     bloom::runtime::fonts::installHeadlessFontTransport();
     try {

@@ -4,6 +4,12 @@ qt_add_executable(bloom
 
 target_link_libraries(bloom PRIVATE bloom_runtime bloom_runtime_compiler bloom_ui)
 bloom_enable_warnings(bloom)
+# Crash reports (#736): the reporter, and on Linux and Windows the handler beside the program in
+# the build tree (the macOS bundle gets its copy with the workers below).
+target_link_libraries(bloom PRIVATE bloom_crash_program)
+if(NOT APPLE)
+    bloom_crash_stage_handler(bloom)
+endif()
 
 set_target_properties(
     bloom
@@ -209,6 +215,14 @@ if(APPLE)
             COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bloom-color-worker>"
                 "$<TARGET_FILE_DIR:bloom>/")
         list(APPEND bloom_bundle_worker_targets bloom-color-worker)
+    endif()
+    # The crash handler (#736), beside the application and the command-line programs, where each
+    # of them looks for it.
+    if(TARGET bloom-crash-handler)
+        list(APPEND bloom_bundle_worker_commands
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:bloom-crash-handler>"
+                "$<TARGET_FILE_DIR:bloom>/")
+        list(APPEND bloom_bundle_worker_targets bloom-crash-handler)
     endif()
     # The update helper (ADR 0041), beside the application.
     if(TARGET bloom-update-helper)

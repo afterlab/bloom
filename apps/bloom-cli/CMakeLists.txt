@@ -2,6 +2,9 @@ add_executable(bloom-cli main.cpp)
 
 target_link_libraries(bloom-cli PRIVATE bloom_scripting bloom_media_cache)
 bloom_enable_warnings(bloom-cli)
+# Crash reports (#736): the reporter, and the handler beside the program in the build tree.
+target_link_libraries(bloom-cli PRIVATE bloom_crash_program)
+bloom_crash_stage_handler(bloom-cli)
 
 # A package keeps the tool beside the application (cmake/BloomPackageLayout.cmake). The macOS
 # bundle is filled in the build tree (apps/bloom/CMakeLists.txt); installed alone the tool goes to
