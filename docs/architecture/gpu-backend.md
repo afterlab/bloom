@@ -1675,9 +1675,15 @@ refused) waits the same way whenever the room can come back: the device caches c
 admitted frames will release what they hold, or another program took device memory while it ran
 (the measured capacity fell below what it was admitted with). When nothing fits now, RAM preview
 and read-ahead keep one frame waiting so the run resumes when room returns. Before, a second program
-filling the device made every frame `BudgetRefused`, and the fill ended with nothing cached. The
-explicit CPU fallback remains only for a frame that already had every byte the device could give
-with nothing left to evict, for an unsupported subset and for device loss.
+filling the device made every frame `BudgetRefused`, and the fill ended with nothing cached. Every
+native producer reports a buffer or image it could not allocate as a refused step, and the scene
+executor reads a refused step whose allocation the device refused for room as over budget, so the
+same wait follows on every route. The path coverage's buffers did not (#750): a coverage range
+buffer refused for room read as an unavailable device, and an export frame admitted while another
+program held the device took the CPU path; `bloom.runtime.gpu_process_frame` proves a path shape's
+refused coverage buffer waits and then renders on the GPU. The explicit CPU fallback remains only
+for a frame that already had every byte the device could give with nothing left to evict, for an
+unsupported subset and for device loss.
 **The caches leave room for the next frame (#682).** A RAM fill used to let the reusable scene
 cache grow to the whole device: on a 12 GiB card it filled the device, and from then on every frame
 whose admitted phase had to grow for its images (`raiseExecutorNeed`) waited. That wait never asked

@@ -655,11 +655,16 @@ void runIdleTrimReturnsRetentionTest(Expectations& expectations, const Options& 
 // took the memory after the frame was admitted) is a capacity wait at the frame boundary. Before,
 // it came back as an over-budget failure and the final render took the CPU reference path for that
 // frame (minutes at 4K). The fixed device report, made from inside the running frame, leaves the
-// device no room after admission; once it is retired the same frame renders on the GPU.
-void runDeviceRoomRefusalWaitsTest(Expectations& expectations, const Options& options) {
+// device no room after admission; once it is retired the same frame renders on the GPU. It runs
+// for two scenes: two solids with 1 MiB left, whose refused allocation is an image, and a path
+// shape with none left, whose first allocation, a path-coverage buffer, is refused (#750: that
+// refusal used to read as an unavailable device, and the export rendered the frame on the CPU).
+void runDeviceRoomRefusalWaitsTest(
+    Expectations& expectations, const Options& options, const std::string& label,
+    const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
+    const std::uint64_t fixedEpoch, const std::uint64_t roomBytes, const bool expectCoverage) {
     using namespace bloom::runtime;
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
-    constexpr std::uint64_t mib = 1024ULL * 1024;
     bloom::render::test::FinalHostRetirementScope host;
     const auto policy = std::make_shared<GpuProcessingPhasePolicy>(4, host.owner);
     policy->setHeadroom({.ramBytes = 0, .vramBytes = 0});
@@ -678,16 +683,12 @@ void runDeviceRoomRefusalWaitsTest(Expectations& expectations, const Options& op
     sample.processSampleFresh = true;
     sample.sampleSerial = 1;
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
-    const auto plan =
-        twoSolidPlan(format(1920, 1080), Color4d{0.25, 0.5, 0.125, 1.0}, LayerValues{},
-                     Color4d{0.75, 0.125, 0.5, 0.5}, LayerValues{}, 1920.0, 1080.0, 9900);
     auto request = requestFor(*plan);
     request.pixelStorageByteLimit = gib;
-    constexpr std::uint64_t fixedEpoch = std::numeric_limits<std::uint64_t>::max() - 544;
     const bloom::render::GpuAllocationBudget full{
         .source = bloom::render::GpuAllocationBudgetSource::MemoryBudget,
         .device_local_bytes = 64 * gib,
-        .available_bytes = mib,
+        .available_bytes = roomBytes,
         .device_uuid = {0x05, 0x44}};
     bool reported = false;
     const auto takeTheRoom = [&](const EvaluationProgress& progress) {
@@ -695,21 +696,26 @@ void runDeviceRoomRefusalWaitsTest(Expectations& expectations, const Options& op
             reported = policy->reportDevice(fixedEpoch, full);
     };
     const auto refused = evaluator->evaluate(plan, request, {}, takeTheRoom);
-    expectations.expect(reported, "device room: the device is filled after admission");
+    expectations.expect(reported, label + ": the device is filled after admission");
     expectations.expect(refused.status == GpuProcessFrameStatus::Failed && !refused.frame &&
                             refused.diagnostic.code ==
                                 GpuProcessFrameDiagnosticCode::AwaitingCapacity,
-                        "device room: a mid-frame device refusal waits for capacity");
-    if (refused.diagnostic.code != GpuProcessFrameDiagnosticCode::AwaitingCapacity)
-        std::cerr << "device room: diagnostic " << static_cast<int>(refused.diagnostic.code) << ' '
-                  << refused.diagnostic.message << '\n';
+                        label + ": a mid-frame device refusal waits for capacity");
+    std::cout << label << ": diagnostic " << static_cast<int>(refused.diagnostic.code) << ' '
+              << refused.diagnostic.message << '\n';
+    if (expectCoverage)
+        expectations.expect(refused.diagnostic.message.find("coverage") != std::string::npos,
+                            label + ": the refused allocation is the path coverage's");
     static_cast<void>(policy->retireDeviceReport(fixedEpoch, true));
     const auto recovered = evaluator->evaluate(plan, request);
     expectations.expect(recovered.frame != nullptr &&
                             recovered.frame->identity().provider == EvaluationProvider::GpuResident,
-                        "device room: with the room back the same frame renders on the GPU");
+                        label + ": with the room back the same frame renders on the GPU");
+    if (expectCoverage)
+        expectations.expect(recovered.counters.coveredSolidDispatches > 0,
+                            label + ": the recovered frame ran the native path coverage");
     evaluator->beginShutdown();
-    std::cout << "DEVICE_ROOM mid-frame refusal waits, then renders\n";
+    std::cout << "DEVICE_ROOM " << label << ": mid-frame refusal waits, then renders\n";
 }
 
 int run(int argc, char** argv) {
@@ -812,7 +818,20 @@ int run(int argc, char** argv) {
     runProcessingPhaseTest(expectations, options);
     runDistinctFramesKeepRoomTest(expectations, options);
     runIdleTrimReturnsRetentionTest(expectations, options);
-    runDeviceRoomRefusalWaitsTest(expectations, options);
+    runDeviceRoomRefusalWaitsTest(
+        expectations, options, "device room",
+        twoSolidPlan(format(1920, 1080), Color4d{0.25, 0.5, 0.125, 1.0}, LayerValues{},
+                     Color4d{0.75, 0.125, 0.5, 0.5}, LayerValues{}, 1920.0, 1080.0, 9900),
+        std::numeric_limits<std::uint64_t>::max() - 544, 1024ULL * 1024, false);
+    {
+        ShapeFixtureValues values;
+        values.kind = bloom::document::ShapeKind::Path;
+        values.size = {200.0, 120.0};
+        runDeviceRoomRefusalWaitsTest(expectations, options, "device room, path coverage",
+                                      vectorLeafPlan(format(256, 160), makeShape(values, 9950),
+                                                     LayerValues{.position = {128.0, 80.0}}, 9950),
+                                      std::numeric_limits<std::uint64_t>::max() - 750, 0, true);
+    }
 
     if (!expectations.ok()) {
         std::cerr << "FAIL: GPU process-frame expectations failed\n";

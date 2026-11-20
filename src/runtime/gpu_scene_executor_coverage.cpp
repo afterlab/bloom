@@ -42,9 +42,15 @@ diagnosticFromPathCoverage(const render::GpuPathCoverageDiagnostic& diagnostic) 
     case render::GpuPathCoverageDiagnosticCode::WrongThread:
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::WrongThread, diagnostic.message);
     case render::GpuPathCoverageDiagnosticCode::DeviceUnavailable:
-    case render::GpuPathCoverageDiagnosticCode::AllocationFailed:
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DeviceUnavailable,
                               diagnostic.message);
+    // A buffer the producer could not allocate is a refused native step, as for every other
+    // producer: when the device refused it for room (its native storage refusal), the executor
+    // reports it over budget and the frame waits for capacity at its boundary (#750,
+    // gpu-backend.md "Capacity never sends a frame to the CPU"). Before, it read as an unavailable
+    // device, and an export rendered the frame on the CPU reference path.
+    case render::GpuPathCoverageDiagnosticCode::AllocationFailed:
+        return makeDiagnostic(GpuSceneExecutorDiagnosticCode::DispatchRefused, diagnostic.message);
     case render::GpuPathCoverageDiagnosticCode::Unsupported:
     case render::GpuPathCoverageDiagnosticCode::ShaderRejected:
         return makeDiagnostic(GpuSceneExecutorDiagnosticCode::Unsupported, diagnostic.message);
