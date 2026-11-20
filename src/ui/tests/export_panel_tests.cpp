@@ -67,9 +67,11 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <filesystem>
+#include <iostream>
 #include <thread>
 
 namespace {
@@ -1027,20 +1029,31 @@ void saveAsPreset(TestContext& context) {
         }
         rig.port.presets.reset();
         // The store is written on the blocking-I/O executor: let the write land before shutdown,
-        // which would cancel it if it had not started.
+        // which would cancel it if it had not started. The wait reads the scheduler's own task
+        // state and the folder is read only afterwards: opening the store's files while it writes
+        // holds the temporary file it renames into place, and Windows refuses to rename a file
+        // another handle has open, so the save failed (#749).
+        const auto writing = [&] {
+            return std::ranges::any_of(
+                scheduler.snapshots(), [](const runtime::TaskSnapshot& task) {
+                    return task.name == "Save export presets" && !runtime::isTerminal(task.state);
+                });
+        };
+        context.expect(bloom::test_support::awaitQtCondition("the preset store write finishes",
+                                                             [&] { return !writing(); }),
+                       "the preset store write finishes");
+        // A temporary the store did not rename into place is not the store.
         const auto written = [&] {
             for (const auto& entry : QDir(folder.path()).entryInfoList(QDir::Files)) {
+                if (entry.fileName().endsWith(QStringLiteral(".tmp")))
+                    continue;
                 QFile file(entry.filePath());
                 if (file.open(QIODevice::ReadOnly) && file.readAll().contains("Alpha master"))
                     return true;
             }
             return false;
         };
-        // Read once per turn and judged on that reading: the store replaces its file, so a second
-        // look right after a successful one can meet the file while it is being replaced.
-        context.expect(bloom::test_support::awaitQtCondition("the preset store file is written",
-                                                             [&] { return written(); }),
-                       "the store file holds the saved preset");
+        context.expect(written(), "the store file holds the saved preset");
         scheduler.beginShutdown();
         context.expect(bloom::test_support::awaitQtCondition(
                            "scheduler quiescent after the preset store write",
