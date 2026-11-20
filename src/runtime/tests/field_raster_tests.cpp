@@ -8,6 +8,8 @@
 #include "field_raster.hpp"
 #include "field_test_programs.hpp"
 #include "image_effect.hpp"
+#include <bloom/core/field_program.hpp>
+#include <bloom/render/ocio_gpu_program.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
 #include <algorithm>
@@ -178,6 +180,56 @@ void testEveryOperationRasters() {
             if (op != FieldOp::Constant && !(op == FieldOp::Force && variant == 2))
                 expect(varies, name + ": the field varies across the frame");
         }
+}
+
+// #750: the GPU program of a field compiles only the operations its table runs. The whole
+// vocabulary in one program took a device compiler tens of seconds on a cold driver cache, so a
+// Viewer's first field frame missed every wait. Operand values never change the program; another
+// operation set gets a program of its own.
+void testGpuProgramCompilesItsOperations() {
+    using core::field::fieldOpBit;
+    std::vector<core::Sha256Digest> digests;
+    for (const auto op : core::field::kFieldOps) {
+        const auto name = std::string(core::field::fieldOpName(op));
+        const auto grade = prepare(programs::operationProgram(op, 1000, 0));
+        expect(grade.has_value(), name + ": the program prepares");
+        if (!grade)
+            continue;
+        const auto operations = core::field::fieldTableOperations(grade->data);
+        const auto built = runtime::detail::buildColorGradeProgram(
+            runtime::detail::ColorGradeKind::FieldRaster, grade->data);
+        expect(built.succeeded() && render::validateOcioGpuProgram(*built.program(), {}) ==
+                                        render::OcioGpuProgramError::None,
+               name + ": the GPU program builds");
+        if (!built.succeeded())
+            continue;
+        const auto& text = built.program()->shaderText;
+        expect((operations & fieldOpBit(op)) != 0 &&
+                   text.find("#define BFK_OPS " + std::to_string(operations) + "\n") !=
+                       std::string::npos,
+               name + ": the program compiles exactly the operations of its table");
+        expect(op == FieldOp::ProceduralWarp ||
+                   (operations & fieldOpBit(FieldOp::ProceduralWarp)) == 0,
+               name + ": no operation the table does not run is compiled");
+        digests.push_back(built.program()->shaderTextDigest);
+    }
+    std::ranges::sort(digests);
+    expect(std::ranges::adjacent_find(digests) == digests.end(),
+           "each operation's program has a text of its own");
+
+    const auto grade = prepare(programs::operationProgram(FieldOp::Constant, 1000, 0));
+    if (!grade)
+        return;
+    auto changed = grade->data;
+    changed.back() += 0.25F;
+    const auto a = runtime::detail::buildColorGradeProgram(
+        runtime::detail::ColorGradeKind::FieldRaster, grade->data);
+    const auto b = runtime::detail::buildColorGradeProgram(
+        runtime::detail::ColorGradeKind::FieldRaster, changed);
+    expect(a.succeeded() && b.succeeded() &&
+               a.program()->shaderTextDigest == b.program()->shaderTextDigest &&
+               a.program()->uniformBufferData != b.program()->uniformBufferData,
+           "a changed operand is data: the program text stays");
 }
 
 // A Raw scalar raster's pixel is the program's value at the pixel's centre.
@@ -380,6 +432,7 @@ void testMaskDistanceMatchesBruteForce() {
 int main() {
     try {
         testEveryOperationRasters();
+        testGpuProgramCompilesItsOperations();
         testNoiseVectorOutput();
         testRasterIsTheSampledField();
         testImageSlotReadsTheStoredTexels();

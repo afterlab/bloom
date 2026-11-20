@@ -1,10 +1,11 @@
 // Included inside bloom::runtime::detail after the shared effect-emission vocabulary.
 //
-// #525 Fields on the GPU. A field raster is the one fixed field program (ColorGradeKind::FieldRaster)
-// dispatched over an image holding its target and its program's images: the slots are moved beside
-// the target (an atlas, a source-over Merge of exact translations over a transparent base), the
-// program reads each slot at its atlas position, and the target is cut back out. Without images the
-// dispatched image is the target's own transparent window. The table is the CPU reference's, with
+// #525 Fields on the GPU. A field raster is the field program (ColorGradeKind::FieldRaster), built
+// with only the operations its table runs (#750, fieldRasterProgramText), dispatched over an image
+// holding its target and its program's images: the slots are moved beside the target (an atlas, a
+// source-over Merge of exact translations over a transparent base), the program reads each slot at
+// its atlas position, and the target is cut back out. Without images the dispatched image is the
+// target's own transparent window. The table is the CPU reference's, with
 // the same geometry (fieldRasterProgramData), so both evaluate one kernel over identical data.
 //
 // A mask's signed distance is the two fixed exact passes (buildMaskDistanceProgram) over the mask
@@ -43,7 +44,7 @@ residentFieldInput(const std::size_t value, const OperationIndex operation,
     return std::nullopt;
 }
 
-// Prepares the one fixed program `leg` over a `width` x `height` dispatch.
+// Prepares the program of `leg` (its table's operations) over a `width` x `height` dispatch.
 [[nodiscard]] inline std::optional<GpuSceneLeafFailure>
 prepareFieldLeg(const GpuOcioTransformSpec& leg, const render::ImageWindow window,
                 const GpuSceneEffectEmissionContext& ctx, const GpuSceneOcioContext& ocioContext,

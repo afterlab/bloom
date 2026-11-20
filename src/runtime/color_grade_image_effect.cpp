@@ -965,7 +965,7 @@ prepareColorize(const ColorizeKernel& kernel, const std::span<const double> valu
     case ColorGradeKind::Vignette:
         return vignetteProgramText();
     case ColorGradeKind::FieldRaster:
-        return fieldRasterProgramText();
+        return {}; // One program per operation set: the caller asks with the table's operations.
     case ColorGradeKind::DepthMap:
         return depthMapProgramText();
     case ColorGradeKind::Defocus:
@@ -1564,6 +1564,8 @@ render::OcioGpuProgramResult buildColorGradeProgram(const ColorGradeKind kind,
                              ? pixelMathProgramText()
                          : kind == ColorGradeKind::Motion
                              ? motionProgramText(static_cast<int>(data[0]))
+                         : kind == ColorGradeKind::FieldRaster
+                             ? fieldRasterProgramText(core::field::fieldTableOperations(data))
                              : glslProgramText(kind);
     program.uniformBufferStorage = true;
     program.uniformBufferSize = data.size() * sizeof(float);

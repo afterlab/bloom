@@ -50,7 +50,13 @@ that does not read the clock has one table, one cache identity and one cache ent
 `src/core/field_kernel.glsl` is the only implementation of every operation. It is compiled twice:
 as C++ by `src/core/field_program.cpp` (the CPU reference, built without contraction or fast math)
 and as GLSL 4.60 inside the GPU program `runtime::detail::fieldRasterProgramText()`. Both hosts
-interpret the same table. Every intermediate is a `precise` binary32 value; every transcendental
+interpret the same table. Each operation's case in the kernel compiles under its own bit of
+`BFK_OPS`: the CPU reference sets every bit, and a GPU program sets the bits of the operations its
+own table runs (`core::field::fieldTableOperations`), so a device never compiles an operation the
+program cannot run. One program holding the whole vocabulary took a device's pipeline compiler
+about 30 seconds on a cold driver cache, so a Viewer's first field frame missed every wait (#750);
+a program of a few operations compiles in under a second. The operand values are data, so a keyed
+parameter keeps the program; a program that adds an operation gets a program text of its own. Every intermediate is a `precise` binary32 value; every transcendental
 (exp2, log2, sin, cos, atan2, pow) is Bloom's own polynomial, because a device's built-ins are only
 specified to a few ulps; lattice hashing is integer only (SplitMix64-keyed seeds,
 `core::primitives::hashWord`), and the seed is hashed with the lattice cell, never added to a
@@ -80,7 +86,7 @@ A raster is `runtime::FieldRasterKernel` on a canvas, lowered as a colour-grade 
   look of full resolution.
 
 On the CPU the raster runs in row bands under the request's pixel budget with cancellation per row
-(`applyFieldRaster`). On the GPU it is one dispatch of the fixed program
+(`applyFieldRaster`). On the GPU it is one dispatch of the program for the table's operations
 (`gpu_scene_field_emission.ipp`): without images over the canvas window; with images over an
 **atlas** that places each image slot beside the target by exact integer translations composited
 over a transparent base, after which the target is cut back out. The program reads a slot at its
@@ -335,7 +341,10 @@ Nordenstam, "Curl-Noise for Procedural Fluid Flow", SIGGRAPH 2007), divergence-f
 - `src/runtime/tests/field_raster_tests.cpp`: every operation rasters; a raster pixel is the Field
   Sample value at its centre; an Image slot returns stored texels exactly; sub-samples; the Mask
   mode; cache identity; loop periodicity; budget; cancellation; the mask distance against brute
-  force.
+  force; each operation's GPU program compiles exactly its table's operations, and a changed
+  operand keeps the program text.
+- `src/core/tests/field_program_tests.cpp` also checks that a table names exactly its operations
+  and that every operation's case in the kernel compiles only under its own `BFK_OPS` bit.
 - `src/runtime/tests/snapshot_compiler_field_tests.ipp`: lowering of rasters, one program for a
   chain, Explicit extents, Field Sample drivers, image slots, the four-image limit, mute.
 - GPU coverage (`gpu_coverage_contract.hpp`): `effect.FieldRasterKernel`, `effect.MaskDistanceKernel`,

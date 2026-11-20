@@ -6,6 +6,10 @@
 //   BFK_P           GLSL `precise` (nothing in C++, built without contraction or fast math)
 //   BFK_OUT(T)      an out parameter; BFK_INOUT(T) an inout one
 //   BFK_CTX         the context parameter every data or image read takes; BFK_CTXA passes it on
+//   BFK_OPS         the operations compiled in, bit n for op n (core::field::FieldOp): every one
+//                   on the CPU reference; on the GPU only those of the program's own table, so a
+//                   device compiles no operation the program cannot run (#750: the whole
+//                   vocabulary in one program took a device compiler tens of seconds)
 //   vec2/vec3/vec4  the vector types, built only from their components
 //   bfk_data(BFK_CTXA, i)                 the i-th vec4 of the prepared table
 //   bfk_texel(BFK_CTXA, slot, x, y)       a stored premultiplied texel of image slot `slot`
@@ -4123,12 +4127,17 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
         vec4 x3 = i3 >= 0 ? r[i3] : zero;
         vec4 v = zero;
         switch (op) {
+#if (BFK_OPS >> 0) & 1
         case 0:
             v = vec4(px, py, 0.0f, 0.0f);
             break;
+#endif
+#if (BFK_OPS >> 1) & 1
         case 1:
             v = bfk_data(BFK_CTXA, base);
             break;
+#endif
+#if (BFK_OPS >> 2) & 1
         case 2: {
             v = bfk_op_noise(BFK_CTXA, base, x0.x, x0.y);
             vec4 h3 = bfk_data(BFK_CTXA, base + 3);
@@ -4140,39 +4149,63 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             }
             break;
         }
+#endif
+#if (BFK_OPS >> 3) & 1
         case 3:
             v = bfk_op_voronoi(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 4) & 1
         case 4:
             v = bfk_op_random(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 5) & 1
         case 5:
             v = bfk_op_pattern(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 6) & 1
         case 6:
             v = bfk_op_gradient(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 7) & 1
         case 7:
             v = bfk_op_shape(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 8) & 1
         case 8:
             v = bfk_op_image(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 9) & 1
         case 9:
             v = bfk_op_force(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 10) & 1
         case 10:
             v = bfk_op_math(BFK_CTXA, base, x0, x1, x2);
             break;
+#endif
+#if (BFK_OPS >> 11) & 1
         case 11:
             v = bfk_op_remap(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 12) & 1
         case 12:
             v = bfk_op_transform(BFK_CTXA, base, x0, x1, i1 >= 0);
             break;
+#endif
+#if (BFK_OPS >> 13) & 1
         case 13:
             v = bfk_op_swizzle(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 14) & 1
         case 14: {
             vec4 d = bfk_data(BFK_CTXA, base);
             BFK_P float cx = i0 >= 0 ? x0.x : d.x;
@@ -4182,6 +4215,8 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             v = vec4(cx, cy, cz, cw);
             break;
         }
+#endif
+#if (BFK_OPS >> 15) & 1
         case 15: {
             vec4 d = bfk_data(BFK_CTXA, base);
             BFK_P float ox = x0.x + d.x;
@@ -4189,36 +4224,57 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
             v = vec4(ox, oy, 0.0f, 0.0f);
             break;
         }
+#endif
+#if (BFK_OPS >> 16) & 1
         case 16:
             v = bfk_op_derivative(BFK_CTXA, base, x0, x1, x2, x3);
             break;
+#endif
+#if (BFK_OPS >> 17) & 1
         case 17:
             v = bfk_op_cell_centre(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 18) & 1
         case 18:
             v = bfk_op_arrow(BFK_CTXA, base, x0, x1, x2);
             break;
+#endif
+#if (BFK_OPS >> 19) & 1
         case 19:
             v = bfk_op_streak(BFK_CTXA, base, x0, x1);
             break;
+#endif
+#if (BFK_OPS >> 20) & 1
         case 20:
             v = bfk_op_ramp(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 21) & 1
         case 21:
             v = bfk_op_lens_warp(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 22) & 1
         case 22:
             v = bfk_op_test_card(BFK_CTXA, base, x0.x, x0.y);
             break;
+#endif
+#if (BFK_OPS >> 23) & 1
         case 23:
             v = bfk_op_rays(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 24) & 1
         case 24:
             v = bfk_op_homography(BFK_CTXA, base, x0);
             break;
+#endif
+#if (BFK_OPS >> 25) & 1
         case 25:
             v = bfk_op_procedural_warp(BFK_CTXA, base, x0);
             break;
+#endif
         default:
             v = zero;
             break;

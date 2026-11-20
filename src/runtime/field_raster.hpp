@@ -73,8 +73,11 @@ prepareFieldTable(const FieldProgram& program, std::span<const double> values,
                                                                         std::span<const double>);
 // A structural check of the full program data (core::field::validFieldTable).
 [[nodiscard]] bool validFieldProgramData(const std::vector<float>& data) noexcept;
-// The fixed GPU program text: the kernel, its GLSL dialect and the entry point.
-[[nodiscard]] const std::string& fieldRasterProgramText();
+// The GPU program text of a table that runs `operations` (core::field::fieldTableOperations): the
+// kernel with only those operations compiled in, its GLSL dialect and the entry point. Operand
+// values never change it, so a keyed parameter reuses the program; a program that adds an
+// operation gets a text of its own (#750).
+[[nodiscard]] std::string fieldRasterProgramText(core::field::FieldOpSet operations);
 
 // Where a raster's target and image slots lie in the image it is evaluated over.
 struct FieldRasterPlacement final {

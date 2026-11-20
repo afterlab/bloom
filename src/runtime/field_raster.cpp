@@ -604,32 +604,30 @@ std::optional<std::vector<float>> fieldRasterProgramData(const PreparedColorGrad
     return data;
 }
 
-const std::string& fieldRasterProgramText() {
-    static const std::string text = [] {
-        std::string out =
-            "layout(set = 0, binding = 0, std430) readonly buffer BloomFieldData { vec4 values[]; "
-            "} bloom_field_data;\n"
-            "precise float bloom_ocio_cpu_div(float a, float b);\n"
-            "#define BFK_FN\n"
-            "#define BFK_P precise\n"
-            "#define BFK_OUT(T) out T\n"
-            "#define BFK_INOUT(T) inout T\n"
-            "#define BFK_CTX int bfk_context\n"
-            "#define BFK_CTXA bfk_context\n"
-            "vec4 bfk_data(int c, int i) { return bloom_field_data.values[i]; }\n"
-            "vec4 bfk_texel(int c, int slot, int x, int y) {\n"
-            " ivec2 size = imageSize(bloom_ocio_input);\n"
-            " if (x < 0 || y < 0 || x >= size.x || y >= size.y) { return vec4(0.0); }\n"
-            " return imageLoad(bloom_ocio_input, ivec2(x, y));\n"
-            "}\n"
-            "precise float bfk_div(float a, float b) { return bloom_ocio_cpu_div(a, b); }\n"
-            "uint bfk_bits(float f) { return floatBitsToUint(f); }\n"
-            "float bfk_float(uint u) { return uintBitsToFloat(u); }\n";
-        out += field::fieldKernelGlsl();
-        out += "\nvec4 bloom_field(ivec2 c) { return bfk_dispatch_pixel(0, c.x, c.y); }\n";
-        return out;
-    }();
-    return text;
+std::string fieldRasterProgramText(const core::field::FieldOpSet operations) {
+    std::string out =
+        "layout(set = 0, binding = 0, std430) readonly buffer BloomFieldData { vec4 values[]; "
+        "} bloom_field_data;\n"
+        "precise float bloom_ocio_cpu_div(float a, float b);\n"
+        "#define BFK_FN\n"
+        "#define BFK_P precise\n"
+        "#define BFK_OUT(T) out T\n"
+        "#define BFK_INOUT(T) inout T\n"
+        "#define BFK_CTX int bfk_context\n"
+        "#define BFK_CTXA bfk_context\n"
+        "vec4 bfk_data(int c, int i) { return bloom_field_data.values[i]; }\n"
+        "vec4 bfk_texel(int c, int slot, int x, int y) {\n"
+        " ivec2 size = imageSize(bloom_ocio_input);\n"
+        " if (x < 0 || y < 0 || x >= size.x || y >= size.y) { return vec4(0.0); }\n"
+        " return imageLoad(bloom_ocio_input, ivec2(x, y));\n"
+        "}\n"
+        "precise float bfk_div(float a, float b) { return bloom_ocio_cpu_div(a, b); }\n"
+        "uint bfk_bits(float f) { return floatBitsToUint(f); }\n"
+        "float bfk_float(uint u) { return uintBitsToFloat(u); }\n";
+    out += "#define BFK_OPS " + std::to_string(operations & core::field::kAllFieldOps) + "\n";
+    out += field::fieldKernelGlsl();
+    out += "\nvec4 bloom_field(ivec2 c) { return bfk_dispatch_pixel(0, c.x, c.y); }\n";
+    return out;
 }
 
 namespace {

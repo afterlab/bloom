@@ -86,6 +86,52 @@ void testBuilderAndValidation(Expectations& e) {
              "the kernel text is embedded");
 }
 
+// #750: a GPU program compiles only the operations its table runs. The table names its operations,
+// and the kernel compiles every operation's case under that operation's own bit of BFK_OPS, so a
+// device never compiles an operation the program cannot run.
+void testTableOperations(Expectations& e) {
+    const auto constant = single(FieldOp::Constant, field::encodeConstant({1.0, 2.0, 3.0, 4.0}));
+    e.expect(field::fieldTableOperations(constant) ==
+                 (field::fieldOpBit(FieldOp::Coordinate) | field::fieldOpBit(FieldOp::Constant)),
+             "a table's operations are exactly the ops of its instructions");
+    auto corrupt = constant;
+    corrupt[0] = 1.0F;
+    e.expect(field::fieldTableOperations(corrupt) == 0, "an invalid table runs no operation");
+    e.expect(field::kAllFieldOps == (field::FieldOpSet{1} << field::kFieldOps.size()) - 1U,
+             "every operation has a bit of its own");
+
+    const auto kernel = field::fieldKernelGlsl();
+    const auto run = kernel.find("BFK_FN vec4 bfk_run(");
+    const auto end = kernel.find("default:", run);
+    e.expect(run != std::string_view::npos && end != std::string_view::npos,
+             "the kernel has its instruction loop");
+    if (run == std::string_view::npos || end == std::string_view::npos)
+        return;
+    const auto loop = kernel.substr(run, end - run);
+    std::size_t cases = 0;
+    for (std::size_t at = loop.find("case "); at != std::string_view::npos;
+         at = loop.find("case ", at + 1))
+        ++cases;
+    e.expect(cases == field::kFieldOps.size(), "the instruction loop has one case per operation");
+    for (const auto op : field::kFieldOps) {
+        const auto n = std::to_string(static_cast<int>(op));
+        const auto guarded = "#if (BFK_OPS >> " + n + ") & 1\n        case " + n + ":";
+        e.expect(loop.find(guarded) != std::string_view::npos,
+                 "operation " + std::string(field::fieldOpName(op)) +
+                     " compiles only under its own bit");
+    }
+    std::size_t opens = 0;
+    std::size_t closes = 0;
+    for (std::size_t at = loop.find("#if "); at != std::string_view::npos;
+         at = loop.find("#if ", at + 1))
+        ++opens;
+    for (std::size_t at = loop.find("#endif"); at != std::string_view::npos;
+         at = loop.find("#endif", at + 1))
+        ++closes;
+    e.expect(opens == field::kFieldOps.size() && closes == opens,
+             "each operation's case closes its own guard");
+}
+
 field::NoiseParameters noise(const field::NoiseType type, const field::NoiseFractal fractal) {
     field::NoiseParameters p;
     p.type = type;
@@ -1423,6 +1469,7 @@ void testTestCard(Expectations& e) {
 int main() {
     Expectations expectations;
     testBuilderAndValidation(expectations);
+    testTableOperations(expectations);
     testNoise(expectations);
     testVoronoi(expectations);
     testGenerators(expectations);

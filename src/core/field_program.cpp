@@ -89,6 +89,9 @@ struct Context final {
 #define BFK_INOUT(T) T&
 #define BFK_CTX const Context& bfk_context
 #define BFK_CTXA bfk_context
+// The CPU reference runs every operation.
+#define BFK_OPS 0x3FFFFFF
+static_assert(BFK_OPS == kAllFieldOps, "BFK_OPS names every field operation");
 
 #include "field_kernel.glsl"
 
@@ -98,6 +101,7 @@ struct Context final {
 #undef BFK_INOUT
 #undef BFK_CTX
 #undef BFK_CTXA
+#undef BFK_OPS
 
 } // namespace
 } // namespace kernel
@@ -1410,6 +1414,17 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
 }
 
 } // namespace
+
+FieldOpSet fieldTableOperations(const std::span<const float> table) noexcept {
+    if (!validFieldTable(table))
+        return 0;
+    FieldOpSet operations = 0;
+    const auto instructions = static_cast<std::size_t>(table[2]);
+    for (std::size_t i = 0; i < instructions; ++i)
+        operations |= fieldOpBit(
+            static_cast<FieldOp>(static_cast<int>(table[(kFieldTableCode + 2U * i) * 4U])));
+    return operations;
+}
 
 bool validFieldTable(const std::span<const float> table) noexcept {
     if (table.size() % 4U != 0U || table.size() < kFieldTableCode * 4U ||

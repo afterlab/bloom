@@ -83,6 +83,19 @@ inline constexpr std::array kFieldOps{
     FieldOp::Ramp,       FieldOp::LensWarp,   FieldOp::TestCard,   FieldOp::Rays,
     FieldOp::Homography, FieldOp::ProceduralWarp};
 
+// A set of operations, bit n for op n: what a program's table runs (fieldTableOperations), and so
+// what the GPU program built for it compiles (field_kernel.glsl, BFK_OPS).
+using FieldOpSet = std::uint32_t;
+[[nodiscard]] constexpr FieldOpSet fieldOpBit(const FieldOp op) noexcept {
+    return FieldOpSet{1} << static_cast<unsigned>(op);
+}
+inline constexpr FieldOpSet kAllFieldOps = [] {
+    FieldOpSet all = 0;
+    for (const auto op : kFieldOps)
+        all |= fieldOpBit(op);
+    return all;
+}();
+
 // Stable lower-case names (coverage ids, diagnostics). No default case: a new op is a -Wswitch
 // error until it is named.
 [[nodiscard]] constexpr std::string_view fieldOpName(const FieldOp op) noexcept {
@@ -711,6 +724,8 @@ void setFieldTexelScale(std::vector<float>& table, double unitsPerTexel) noexcep
 // Structural check of a table before either route interprets it: the magic and version, every
 // instruction's op, registers and parameter block within the table, every value finite.
 [[nodiscard]] bool validFieldTable(std::span<const float> table) noexcept;
+// The operations a valid table's instructions run (empty for an invalid table).
+[[nodiscard]] FieldOpSet fieldTableOperations(std::span<const float> table) noexcept;
 
 // --- Evaluation (the CPU reference) -----------------------------------------------------------
 
