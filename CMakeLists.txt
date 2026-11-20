@@ -156,6 +156,26 @@ if(BUILD_TESTING)
             -P "${PROJECT_SOURCE_DIR}/cmake/tests/keep_unchanged_link.cmake"
         LABELS unit build
         TIMEOUT 60)
+    # #750: every registered test runs with the fixed memory reading, or is a stress test that
+    # names why it measures the real machine (cmake/BloomTesting.cmake). The second test proves the
+    # check rejects each way a test can miss the reading.
+    bloom_add_test(
+        NAME bloom.quality.test_memory_reading
+        COMMAND ${CMAKE_COMMAND} "-DTREE=${CMAKE_BINARY_DIR}" "-DCONFIG=$<CONFIG>"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_memory_reading.cmake"
+        LABELS quality build
+        TIMEOUT 60)
+    set(bloom_memory_check_rejected fixture.gpu-unstated fixture.no-properties
+        fixture.live-default-suite fixture.stress-unnamed fixture.empty-reason
+        fixture.empty-reading fixture.sub-unstated)
+    list(JOIN bloom_memory_check_rejected "," bloom_memory_check_rejected)
+    bloom_add_test(
+        NAME bloom.quality.test_memory_reading_rejects
+        COMMAND ${CMAKE_COMMAND} "-DTREE=${PROJECT_SOURCE_DIR}/cmake/tests/test_memory_reading"
+            "-DEXPECT_REJECTED=${bloom_memory_check_rejected}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_memory_reading.cmake"
+        LABELS quality build unit
+        TIMEOUT 60)
 endif()
 
 add_subdirectory(tools/quality/json)

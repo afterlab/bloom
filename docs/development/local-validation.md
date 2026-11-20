@@ -145,7 +145,7 @@ injected.
 
 | Argument | Label | Configure option | For |
 |---|---|---|---|
-| `STRESS` | `stress` | `BLOOM_ENABLE_STRESS_TESTS` | large sizes, long fills, soaks, real-machine memory |
+| `STRESS` | `stress` | `BLOOM_ENABLE_STRESS_TESTS` | large sizes, long fills, soaks, real-machine memory (`LIVE_MEMORY "<reason>"`) |
 | `BENCH` | `bench` | `BLOOM_ENABLE_BENCH_TESTS` | benchmark programs kept runnable at a smoke size |
 | `COMPOSITOR` | `compositor` | `BLOOM_ENABLE_COMPOSITOR_TESTS` | tests that need a private compositor session (the runner starts one on Linux) |
 
@@ -184,26 +184,34 @@ test code: a source under a `tests` folder, or one whose name has `test` or `tes
 (`*_tests.cpp`, `*_test_support.hpp`, `test_*.py`). `bloom_add_test` adds
 `tests/support` to the include path of every test program it registers.
 
-A test that starts one of Bloom's own programs (`bloom-mcp`, `bloom-cli`, the Python module) cannot
-hand it a sampler. Those programs read one test-only environment variable instead, once, at their
-first memory sample:
+No test in the suite plans against the memory the machine happens to have free (#750). Bloom's
+memory sample and every GPU device read one test-only environment variable instead, once, at their
+first memory sample, in the test program and in every Bloom program it starts (`bloom-mcp`,
+`bloom-cli`, the Python module):
 
 ```text
 BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>[,unsampled]
 ```
 
 With it set, the host memory sample is that physical and available memory with no process limit,
-and every GPU device is created as a card of the declared size, so admission does not move with
-what else is running. Without it nothing changes; nothing in the product sets it, no setting maps
-to it, and a value that does not parse is reported on stderr and ignored. `bloom_add_test` sets it
-(16 GiB, 8 GiB available, an 8 GiB card) for every test whose command names one of those programs
-or the built Python module, and for a test registered with `FIXED_MEMORY` because its own code
-starts one. Stress tests never get it. The `unsampled` form makes the capacity impossible to
-sample on purpose (#751): the host sample cannot read the process memory limits, as on a Linux
-host without `/sys`, and the declared card's live budget query goes unanswered.
-`bloom.cli.render-unsampled-capacity` renders through it and checks that the render completes on
-admission's stated assumption and says what it assumed. The declaration is
-`src/core/include/bloom/core/test_fixed_memory_reading.hpp`.
+and every GPU device is created as a card of the declared size whose budget is that size less its
+own allocations, never the driver's live budget, so admission and device plans do not move with
+what else is running: another test, a build, the user's own Bloom or any other GPU program. A
+device a test creates with its own card keeps that card. Without the variable nothing changes;
+nothing in the product sets it, no setting maps to it, and a value that does not parse is reported
+on stderr and ignored. `bloom_add_test` sets it (16 GiB, 8 GiB available, an 8 GiB card) for every
+test it registers; a test that names its own reading in `ENVIRONMENT` keeps it. The one exception
+is a test that exists to measure the real machine (its real card, its real memory over a soak): it
+is registered `STRESS` with `LIVE_MEMORY "<reason>"`, the reason naming what it measures, so it
+never runs in the default suite. `bloom.quality.test_memory_reading` reads the CTest files the
+build wrote and fails for any registered test that runs without the reading and is not such a named
+stress exception, for example a test registered with a bare `add_test`, or one whose `ENVIRONMENT`
+was replaced after registration; `bloom.quality.test_memory_reading_rejects` proves it rejects each
+of those shapes. The `unsampled` form makes the capacity impossible to sample on purpose (#751):
+the host sample cannot read the process memory limits, as on a Linux host without `/sys`, and the
+declared card's live budget query goes unanswered. `bloom.cli.render-unsampled-capacity` renders
+through it and checks that the render completes on admission's stated assumption and says what it
+assumed. The declaration is `src/core/include/bloom/core/test_fixed_memory_reading.hpp`.
 
 The runner itself has a small local test suite:
 
