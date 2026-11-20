@@ -157,6 +157,12 @@ class WorkerGate final {
         return entered_;
     }
 
+    // Blocks the calling worker until another one has entered.
+    void awaitEntered() {
+        std::unique_lock lock(mutex_);
+        condition_.wait(lock, [this] { return entered_; });
+    }
+
     void release() {
         std::lock_guard lock(mutex_);
         released_ = true;
@@ -1352,11 +1358,16 @@ void testCompositionSwitchEndsTheRunAndKeepsItsFrames(Expectations& expectations
     finishFixture(fixture, expectations);
 }
 
-// A transient frame failure is retried, not a reason to end the run on its own.
 // #544: frames prepare side by side and finish in any order, but they land in the cache in frame
 // order, so the cached range is always one run from the start of the work area. A frame that
 // finished ahead of an earlier one waits for it, and counts against the fill width meanwhile.
-void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
+// #750: which of the two workers reaches its frame first is the machine's to decide. The test holds
+// frame 1 by its time, never by the order preparations start (a gate on the first preparation to
+// start held frame 2 whenever its worker won, so frame 1 landed and frame 3 started), and it runs
+// both orders: frame 1's worker first, and frame 2's first.
+void testRamPreviewLandsFramesInOrder(Expectations& expectations, const bool frameTwoStartsFirst) {
+    const std::string order =
+        frameTwoStartsFirst ? " (frame 2 starts first)" : " (frame 1 starts first)";
     SessionFixture fixture(makeTestProject("RAM in-order landing", time(6, 25)), 2);
     expectations.expect(animateSolidLayer(fixture.session),
                         "the in-order fixture composition is animated across its range");
@@ -1364,11 +1375,36 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
         bloom::test_support::awaitQtCondition("in-order fixture renders its first frame",
                                               [&] { return isReady(fixture.controller); }),
         "the in-order fixture renders its first frame");
-    const auto before = fixture.preparationCount.load();
-    // The run's first preparation (frame 1; frame 0 is the Viewer's) blocks until released.
-    fixture.gateAtCall = before;
+    // Frame 0 is the Viewer's. The run's frame 1 prepares only once released; frame 2 marks that it
+    // started (its gate is open from the start), and frame 1 may wait for that mark.
+    WorkerGate frameOneHeld;
+    WorkerGate frameTwoStarted;
+    frameTwoStarted.release();
+    int submitted = 0;
+    const auto preparation = fixture.countingPipeline();
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](runtime::TaskRequest request, const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            ++submitted;
+            return fixture.scheduler.submit<ui::PreviewPreparationResultHandle>(
+                std::move(request),
+                [&frameOneHeld, &frameTwoStarted, &preparation, frameTwoStartsFirst, snapshot,
+                 identity, bytes, overrides](runtime::TaskContext& context) {
+                    if (identity.time == time(1, 25)) {
+                        if (frameTwoStartsFirst)
+                            frameTwoStarted.awaitEntered();
+                        frameOneHeld.enterAndWait();
+                    } else if (identity.time == time(2, 25)) {
+                        frameTwoStarted.enterAndWait();
+                    }
+                    return preparation(snapshot, identity, bytes, overrides, context);
+                });
+        };
+    // The CPU pipeline's own width (a submitter alone would make the fill serial).
     ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
-                                        fixture.bridge, fixture.countingPipeline());
+                                        fixture.bridge, preparation, nullptr, submitter,
+                                        ui::RamPreviewPipeline::kMaxInFlight);
     bool contiguous = true;
     // Connected after the controller's own coverage handler, so it reads the updated run.
     QObject::connect(&fixture.controller.frameCache(), &ui::PreviewFrameCache::entryRetained,
@@ -1379,32 +1415,40 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations) {
             contiguous = false;
     });
     ramPreview.start();
+    expectations.expect(ramPreview.fillWidth() == 2,
+                        "the run prepares two frames side by side" + order);
     expectations.expect(
-        bloom::test_support::awaitQtCondition("frame 1 is preparing and held at the gate",
-                                              [&] { return fixture.gate.entered(); }),
-        "frame 1 is preparing and held at the gate");
-    // Frame 2 prepares beside it and finishes first; it is held, not cached.
-    expectations.expect(bloom::test_support::awaitQtCondition(
-                            "frame 2 prepares beside the held frame 1",
-                            [&] { return fixture.preparationCount.load() == before + 2; }),
-                        "frame 2 prepares beside the held frame 1");
-    for (int spin = 0; spin < 50; ++spin)
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-    expectations.expect(fixture.preparationCount.load() == before + 2,
-                        "a frame held for in-order landing counts against the fill width");
+        bloom::test_support::awaitQtCondition("frame 1 is preparing and held at its gate",
+                                              [&] { return frameOneHeld.entered(); }),
+        "frame 1 is preparing and held at its gate" + order);
+    // Frame 2 prepares beside it and finishes first; it is held, not cached. Its result is taken in
+    // the same turn that decides what the fill starts next, so once it counts as prepared that
+    // decision is made: no wait for something not to happen.
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("frame 2 finishes beside the held frame 1",
+                                              [&] { return ramPreview.preparedFrameCount() == 1; }),
+        "frame 2 finishes beside the held frame 1" + order);
+    expectations.expect(submitted == 2,
+                        "a frame held for in-order landing counts against the fill width" + order);
     expectations.expect(ramPreview.cachedFrameCount() == 1,
-                        "frame 2 does not land ahead of frame 1 (only frame 0 is cached)");
-    fixture.gate.release();
+                        "frame 2 does not land ahead of frame 1 (only frame 0 is cached)" + order);
+    frameOneHeld.release();
     expectations.expect(
         bloom::test_support::awaitQtCondition("in-order run finishes once frame 1 lands",
                                               [&] { return !ramPreview.isCaching(); }),
-        "the in-order run finishes once frame 1 lands");
+        "the in-order run finishes once frame 1 lands" + order);
     expectations.expect(ramPreview.cachedFrameCount() == 6 && contiguous,
                         "every frame landed and the cached range was one run from the start "
-                        "throughout");
+                        "throughout" +
+                            order);
+    expectations.expect(submitted == 5, "each of frames 1 to 5 was filled once" + order);
+    // A failed step above must not leave a worker at a gate.
+    frameTwoStarted.enterAndWait();
+    frameOneHeld.release();
     finishFixture(fixture, expectations);
 }
 
+// A transient frame failure is retried, not a reason to end the run on its own.
 void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM transient failure", time(6, 25)));
     expectations.expect(
@@ -2224,7 +2268,8 @@ int main(int argc, char** argv) {
         testResolutionChangeCancelsAnActiveRamPreview(expectations);
         testImportedSvgPreviewAtHalfScale(expectations);
         testRamPreviewRetriesATransientFrameFailure(expectations);
-        testRamPreviewLandsFramesInOrder(expectations);
+        testRamPreviewLandsFramesInOrder(expectations, false);
+        testRamPreviewLandsFramesInOrder(expectations, true);
         testRamPreviewIgnoresSessionOnlyActivity(expectations);
         testCompositionSwitchEndsTheRunAndKeepsItsFrames(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);
