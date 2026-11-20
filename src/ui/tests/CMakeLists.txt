@@ -2917,6 +2917,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     bloom_package_gpu_shader_tools(bloom_ui_gpu_node_viewer_evidence_test)
     bloom_enable_warnings(bloom_ui_gpu_node_viewer_evidence_test)
     bloom_enable_strict_floating_point(bloom_ui_gpu_node_viewer_evidence_test)
+    # Every node-evidence case plans for the fixed reading's stated card (FIXED_MEMORY): the
+    # service would otherwise plan its resident pool from the driver's live budget, which moves with
+    # every other program on the device (#726).
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
                               denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
                               hue-colorize node-group tile-mirror-tile tile-mirror-wrap-offset
@@ -2939,6 +2942,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
+            FIXED_MEMORY
         )
     endforeach()
     # #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
@@ -2962,6 +2966,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
+            FIXED_MEMORY
         )
     endforeach()
     # #524: the node's frame as the process's first, through the application's lazily resolving
@@ -2977,6 +2982,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             LABELS ui gpu viewer node-evidence
             TIMEOUT 300
             COMPOSITOR
+            FIXED_MEMORY
         )
     endforeach()
 
@@ -3009,6 +3015,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 PROPERTIES FIXTURES_REQUIRED gpu_route_proofs FIXTURES_SETUP gpu_route_proof_ram)
         endif()
     endif()
+    # The three cases below say FIXED_MEMORY: the preview service and the Image Statistics device
+    # route each create a device, and both are created as the fixed reading's stated card instead
+    # of planning from the driver's live budget (#726).
     # ADR 0028 animated masks through the same real RAM preview chain: a mask path keyed on 24
     # frames, the scene builder carrying the shared preparer from this target's packaged shader
     # tools, cold GPU frames against the CPU oracle with at most one shader compile, and a warm
@@ -3023,6 +3032,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
+        FIXED_MEMORY
     )
     # #344 #530 #509: the path nodes (a keyed Trim Path, Boolean Paths, a dashed Path Stroke and its
     # core through Glow) in the interactive viewer and RAM preview on the real service: GPU-resident
@@ -3034,6 +3044,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
+        FIXED_MEMORY
     )
     # #349: Image Statistics (driving Levels) and Denoise with Auto strength in the interactive
     # viewer and RAM preview on the real service, each frame's statistics measured once on the
@@ -3046,6 +3057,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         LABELS ui gpu ram
         TIMEOUT 300
         COMPOSITOR
+        FIXED_MEMORY
     )
 
     # Independent native acceptance for direct manipulation ON the genuine GPU-resident viewer

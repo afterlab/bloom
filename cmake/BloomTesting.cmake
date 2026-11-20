@@ -25,7 +25,9 @@ set(BLOOM_TEST_FIXED_MEMORY_READING "17179869184,8589934592,8589934592"
 #                [SKIP_RETURN_CODE <code>] [RUN_SERIAL] [FIXED_MEMORY] [STRESS] [BENCH] [COMPOSITOR])
 # A test whose command names bloom-cli, bloom-mcp, the MCP HTTP test host or the built Python
 # module directory gets the fixed memory reading by itself; a test program that starts one of them
-# from its own code says FIXED_MEMORY. A stress test never gets it: it is there for the real machine.
+# from its own code says FIXED_MEMORY, and so does one that creates a device through a route with no
+# card option of its own (every device in the process is then created as the stated card). A stress
+# test never gets it: it is there for the real machine.
 # A test marked STRESS, BENCH or COMPOSITOR is not registered unless its option is on; set its
 # properties through this function's arguments (or guard with `if(TEST <name>)`), because
 # set_tests_properties fails for a test that is not registered.
