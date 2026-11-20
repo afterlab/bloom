@@ -62,12 +62,15 @@ class SweepError(Exception):
 
 
 class Session:
-    def __init__(self, mcp, env, cwd):
+    def __init__(self, mcp, env):
         # stderr goes to a file, never a pipe nobody reads: when the server dies, the failure says
         # how it exited and what it last wrote.
         self.errors = tempfile.TemporaryFile()
+        # The server runs in the test's own working folder, never in the sweep's work folder: its
+        # crash handler (Crashpad) is started in the folder the server runs in and can outlive it
+        # for a moment, and Windows cannot remove a folder a process runs in (#749).
         self.process = subprocess.Popen([mcp], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=self.errors, env=env, cwd=cwd)
+                                        stderr=self.errors, env=env)
         # A thread reads the answers so a wait can time out on every platform.
         self.lines = queue.Queue()
         self.reader = threading.Thread(target=self.read, daemon=True)
@@ -434,8 +437,8 @@ class LongSession:
 
     Every use starts from a fresh untitled project, so nothing a node built can reach the next."""
 
-    def __init__(self, mcp, env, work):
-        self.mcp, self.env, self.work = mcp, env, work
+    def __init__(self, mcp, env):
+        self.mcp, self.env = mcp, env
         self.session = None
 
     def __enter__(self):
@@ -446,7 +449,7 @@ class LongSession:
 
     def fresh(self):
         if self.session is None:
-            self.session = Session(self.mcp, self.env, self.work)
+            self.session = Session(self.mcp, self.env)
         self.session.tool('project.new', {'discardChanges': True, 'stopJobs': True})
         return self.session
 
@@ -485,12 +488,14 @@ def sweep(arguments):
             baseline = json.load(file)
     failures = []
     records = []
-    with tempfile.TemporaryDirectory(prefix='bloom-node-sweep-') as work, \
-            contextlib.ExitStack() as routes:
+    # Cleanup alone never fails the sweep (docs/development/local-validation.md): a folder Windows
+    # still holds is left and named on stderr.
+    folder = tempfile.TemporaryDirectory(prefix='bloom-node-sweep-', ignore_cleanup_errors=True)
+    with folder as work, contextlib.ExitStack() as routes:
         gpu_env, cpu_env = environments(work)
         # Two long-lived sessions, one per route; each node gets a fresh project inside them.
-        gpu_route = routes.enter_context(LongSession(arguments.mcp, gpu_env, work))
-        cpu_route = routes.enter_context(LongSession(arguments.mcp, cpu_env, work))
+        gpu_route = routes.enter_context(LongSession(arguments.mcp, gpu_env))
+        cpu_route = routes.enter_context(LongSession(arguments.mcp, cpu_env))
         try:
             node_types = gpu_route.fresh().tool('query', {'kind': 'node-types'})['records']
         except SweepError:
@@ -542,6 +547,8 @@ def sweep(arguments):
             records.append(record)
             print(f'{type_id}: {record["route"]} {record.get("parity", "")} '
                   f'{record.get("reason", "")[:160]}'.rstrip(), flush=True)
+    if os.path.exists(folder.name):
+        print(f'node sweep: left its work folder {folder.name}', file=sys.stderr, flush=True)
 
     if arguments.records:
         with open(arguments.records, 'w', encoding='utf-8') as file:
