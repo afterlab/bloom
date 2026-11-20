@@ -292,6 +292,8 @@ void runGpuStartupImpl(const std::shared_ptr<PreviewDisplayServiceCore>& core, T
         static_cast<void>(std::move(completion).fail(startupDiagnostic()));
         return;
     }
+    if (core->options.startupGate)
+        core->options.startupGate();
     if (context.isCancellationRequested() ||
         core->shutdownRequested.load(std::memory_order_acquire)) {
         static_cast<void>(std::move(completion).cancel());

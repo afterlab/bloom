@@ -1,6 +1,8 @@
 #include "fixed_memory_budget.hpp"
 #include <atomic>
+#include <condition_variable>
 #include <cstdlib>
+#include <mutex>
 #include <new>
 
 namespace packed_payload_fault {
@@ -377,7 +379,9 @@ bool matrix(Expectations& checks, const TestOptions& options,
 // #542: a request made while the startup task is still pending (the first Viewer frame of a
 // project opened at launch) queues behind it and takes the GPU route once the device is up. It is
 // never rendered on the CPU reference because it arrived early. When the startup fails, the same
-// queued request takes the counted GpuUnavailable CPU path.
+// queued request takes the counted GpuUnavailable CPU path. The startup is held at its gate until
+// the request is made, so the request is made while it is pending on any machine, however fast a
+// missing loader fails (#750: it used to assume the startup task had not run yet).
 void startupQueuedRequestProof(
     Expectations& checks, const TestOptions& options,
     const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& plan,
@@ -406,6 +410,28 @@ void startupQueuedRequestProof(
     configured.processingPhasePolicy = policy;
     if (!loaderAvailable)
         configured.loaderPath = "/nonexistent/bloom-loader.so";
+    struct StartupGate final {
+        std::mutex mutex;
+        std::condition_variable changed;
+        bool released = false;
+        void release() {
+            {
+                const std::lock_guard lock(mutex);
+                released = true;
+            }
+            changed.notify_all();
+        }
+    };
+    const auto gate = std::make_shared<StartupGate>();
+    configured.startupGate = [gate] {
+        std::unique_lock lock(gate->mutex);
+        gate->changed.wait(lock, [&] { return gate->released; });
+    };
+    // Released however this proof ends, before the service it holds is destroyed.
+    struct ReleaseGate final {
+        std::shared_ptr<StartupGate> gate;
+        ~ReleaseGate() { gate->release(); }
+    };
     auto serviceOwner = std::make_unique<GpuPreviewDisplayService>(
         scheduler, packedStageFunction(plan, builder, {}, processor),
         generalCpuStageFunction(plan, processor, std::make_shared<CpuCompositionEvaluator>()),
@@ -413,11 +439,13 @@ void startupQueuedRequestProof(
     auto& service = *serviceOwner;
     const bloom::runtime::TaskOwner owner{.kind = bloom::runtime::TaskOwnerKind::Composition,
                                           .id = bloom::runtime::TaskOwnerId::fromRaw(7)};
-    // Submitted at once: the startup task (device creation and qualification) has not run yet.
+    const ReleaseGate releaseGate{gate};
+    // The startup task (device creation and qualification) waits at its gate, so it is pending.
     const bool initializing = service.status().state == GpuPreviewDisplayServiceState::Initializing;
     auto submission = service.submit(TaskRequest("packed during startup", owner), snapshot,
                                      makeIdentity(*plan, 900, {}, {}, {}), kBudget, {});
     checks.expect(initializing, variant + ": the request is made while the startup is pending");
+    gate->release();
     checks.expect(submission.accepted(), variant + ": the request made during startup is admitted");
     const auto result = submission.accepted() ? awaitResult(submission.handle) : std::nullopt;
     const auto frame = packedResult(result);

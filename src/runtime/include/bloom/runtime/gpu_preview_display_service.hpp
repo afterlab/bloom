@@ -48,6 +48,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -356,6 +357,11 @@ struct GpuPreviewDisplayServiceOptions final {
     // Tests only: model a card with this much device-local memory
     // (render::GpuDeviceCreationOptions::device_memory_limit_bytes, #682). 0 is the whole device.
     std::uint64_t deviceMemoryLimitBytes = 0;
+    // Tests only: called by the startup task before it creates the device, on the thread that runs
+    // it. A test that makes a request while the startup is pending holds it until the request is
+    // made, so the order is forced instead of assumed (#750); it must return before the service is
+    // destroyed. Empty, which is every product use, starts at once.
+    std::function<void()> startupGate = {};
     // Presentation ownership. Default Disabled keeps the compute-only device exactly as before.
     GpuPreviewDisplayServicePresentationMode presentation =
         GpuPreviewDisplayServicePresentationMode::Disabled;
