@@ -1,9 +1,15 @@
 // Real production scene -> native display -> registry refusal/recovery, without a desktop window.
+// The same checks prove two routes (#750). By default the NativeResident route, whose frames are
+// leased through the presentation registry; that presentation is Wayland's, so the case runs on
+// Linux. With --packed, the GpuPreparedPacked product with presentation disabled, which the app
+// runs on every platform: the same GPU scene, executor and processing phases, then one final
+// transfer.
 #include "fixed_memory_budget.hpp"
 #include "gpu_service_chain_fixture.hpp"
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
@@ -17,31 +23,94 @@
 #include <mutex>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 using namespace bloom;
 using namespace bloom::ui::verticalproof;
 using namespace std::chrono_literals;
 
 namespace {
+// --packed: the GpuPreparedPacked product instead of the NativeResident route.
+bool gPackedRoute = false;
+// The packed product's host pixels are retired by the composition root's worker, as in the app
+// (apps/bloom/main.cpp); the resident route allocates none and runs without it.
+std::shared_ptr<render::PackedHostRetirementOwner> gPackedRetirement;
+
+// The processing-phase root every service here shares, with the route's host retirement.
+[[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
+makePhasePolicy(const std::size_t requestCapacity) {
+    return std::make_shared<runtime::GpuProcessingPhasePolicy>(requestCapacity, gPackedRetirement);
+}
+
+// Stops and collects the retirement worker after every service and phase is gone.
+class PackedRetirementTeardown final {
+  public:
+    PackedRetirementTeardown() = default;
+    PackedRetirementTeardown(const PackedRetirementTeardown&) = delete;
+    PackedRetirementTeardown& operator=(const PackedRetirementTeardown&) = delete;
+    ~PackedRetirementTeardown() {
+        if (!gPackedRetirement)
+            return;
+        gPackedRetirement->beginShutdown();
+        (void)bloom::test_support::awaitCondition(
+            "the retirement worker acknowledges its exit",
+            [] { return gPackedRetirement->exitAcknowledged(); });
+        (void)bloom::test_support::awaitCondition("the retirement worker is collected",
+                                                  [] { return gPackedRetirement->collect(); });
+    }
+};
+
 // Every service here plans for a stated card: the driver's live budget moves with every other
 // program on the device, and admission would move with it. The host reading is injected below.
 [[nodiscard]] runtime::GpuPreviewDisplayServiceOptions
 phaseServiceOptions(const std::filesystem::path& loader) {
     auto options = serviceOptions(loader);
     options.deviceMemoryLimitBytes = test_support::kFixedDeviceMemoryBytes;
+    if (gPackedRoute) {
+        options.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
+        options.presentation = GpuPreviewDisplayServicePresentationMode::Disabled;
+    }
     return options;
+}
+
+// A frame the route's GPU scene and display produced: a resident frame, or a GPU-prepared packed
+// product with its one final transfer.
+[[nodiscard]] bool isGpuFrame(const std::shared_ptr<const runtime::PreparedPreviewFrame>& frame) {
+    if (!gPackedRoute)
+        return isResident(frame);
+    return frame != nullptr &&
+           frame->provenance().provider == runtime::PreviewDisplayProvider::GpuPreparedPacked;
+}
+
+// A frame the CPU fallback produced: CPU pixels from neither GPU route.
+[[nodiscard]] bool isCpuFrame(const std::shared_ptr<const runtime::PreparedPreviewFrame>& frame) {
+    return hasCpuPixels(frame) && !isResident(frame) &&
+           frame->provenance().provider != runtime::PreviewDisplayProvider::GpuPreparedPacked;
 }
 } // namespace
 
 #include "gpu_processing_phase_retry_native.ipp"
 
 int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
-    const auto parsed = parseOptions(argc, argv);
+    std::vector<char*> arguments;
+    for (int index = 0; index < argc; ++index) {
+        if (std::string_view(argv[index]) == "--packed")
+            gPackedRoute = true;
+        else
+            arguments.push_back(argv[index]);
+    }
+    int count = static_cast<int>(arguments.size());
+    const auto parsed = parseOptions(count, arguments.data());
     if (!parsed.valid)
         return 2;
-    // No window and no presentation: it runs on any Qt platform, offscreen included (#726).
-    QGuiApplication application(argc, argv);
+    if (gPackedRoute)
+        gPackedRetirement = render::PackedHostRetirementOwner::create();
+    // Declared first, so it runs after every service, phase and frame below is destroyed.
+    const PackedRetirementTeardown retirementTeardown;
+    // No window: it runs on any Qt platform, offscreen included (#726).
+    QGuiApplication application(count, arguments.data());
     QTemporaryDir temporary;
     Expectations checks;
     Fixture fixture(temporary.path().toStdString());
@@ -54,7 +123,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "ordinary 1080p solid is authored");
     checks.expect(session.addTextLayer(QStringLiteral("Text"), QStringLiteral("Phase recovery")),
                   "ordinary 1080p text is authored");
-    const auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    const auto policy = makePhasePolicy(1);
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
     runtime::MemoryBudgetState sample;
     sample.machine.availableBytes = 60 * gib;
@@ -116,8 +185,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         acceptedCpu.accepted() ? awaitResult(acceptedCpu.handle) : std::nullopt;
     const auto cpuFrame = acceptedCpuResult ? residentFrameOf(*acceptedCpuResult) : nullptr;
     checks.expect(
-        cpuFrame && hasCpuPixels(cpuFrame) && !isResident(cpuFrame) &&
-            cpuPreparations.load(std::memory_order_relaxed) == 1 &&
+        isCpuFrame(cpuFrame) && cpuPreparations.load(std::memory_order_relaxed) == 1 &&
             policy->snapshot().reservations.admittedPhases == 0,
         "capacity release admits genuine 1080p solid/text CPU fallback and releases phase");
     acceptedCpuResult.reset();
@@ -266,7 +334,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     };
     auto firstResult = submit(1);
     auto firstFrame = firstResult ? residentFrameOf(*firstResult) : nullptr;
-    checks.expect(isResident(firstFrame), "first solid/text frame is genuinely GPU resident");
+    checks.expect(isGpuFrame(firstFrame), "first solid/text frame is a genuine GPU frame");
     firstResult.reset();
     const auto beforeSecond = service.status().counters;
     auto secondResult = submit(2);
@@ -276,13 +344,15 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                    ? frame->residentFrame()->lease().allocationBytes()
                    : std::uint64_t{0};
     };
-    checks.expect(isResident(firstFrame) && isResident(second) && !hasCpuPixels(second) &&
-                      second != firstFrame &&
-                      &second->residentFrame()->lease() != &firstFrame->residentFrame()->lease() &&
-                      leaseBytes(firstFrame) + leaseBytes(second) >
-                          options.residentLeaseBudgets.maxBytes,
-                  "a second live frame beside the first, together over the lease ceiling, is "
-                  "published resident");
+    checks.expect(isGpuFrame(firstFrame) && isGpuFrame(second) && second != firstFrame,
+                  "a second live frame beside the first is a genuine GPU frame");
+    // Resident only: the packed product holds no resident lease once its transfer is done.
+    if (!gPackedRoute)
+        checks.expect(
+            !hasCpuPixels(second) &&
+                &second->residentFrame()->lease() != &firstFrame->residentFrame()->lease() &&
+                leaseBytes(firstFrame) + leaseBytes(second) > options.residentLeaseBudgets.maxBytes,
+            "the two live frames, together over the lease ceiling, are both published resident");
     checks.expect(service.status().counters.residentGraphJobs ==
                           beforeSecond.residentGraphJobs + 1 &&
                       service.status().counters.cpuFallbacks == beforeSecond.cpuFallbacks,
@@ -294,7 +364,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     secondResult.reset();
     auto recoveredResult = submit(3);
     const auto recovered = recoveredResult ? residentFrameOf(*recoveredResult) : nullptr;
-    checks.expect(isResident(recovered) && recovered != second,
+    checks.expect(isGpuFrame(recovered) && recovered != second,
                   "the next frame after the first is released is a genuine GPU frame");
     checks.expect(policy->snapshot().reservations.admittedPhases == 0,
                   "successful publication releases both phase quotas before terminal delivery");
@@ -307,6 +377,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                   "the native phase service retires without an unproven phase");
     if (checks.failures() != 0)
         return 1;
-    std::cout << "PASS: 1080p solid/text native phase publication beside a live frame\n";
+    std::cout << "PASS: 1080p solid/text native phase publication beside a live frame ("
+              << (gPackedRoute ? "GPU-prepared packed" : "native resident") << ")\n";
     return 0;
 }

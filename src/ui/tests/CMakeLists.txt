@@ -2716,23 +2716,6 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         COMPOSITOR
     )
 
-    add_executable(bloom_ui_gpu_processing_phase_native_test gpu_processing_phase_native_tests.cpp)
-    target_include_directories(bloom_ui_gpu_processing_phase_native_test
-        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
-    target_link_libraries(bloom_ui_gpu_processing_phase_native_test
-        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
-    bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
-    # Presentation disabled and no window, so not a compositor test but a default-suite one (#726).
-    # Like every target in this block it is built only where BLOOM_UI_VULKAN_AVAILABLE: Linux and
-    # Windows. The macOS build's Qt has no Vulkan feature, so the block is not built there, though
-    # this case and the packed Viewer cases below need only the pinned Vulkan headers (the shared
-    # gpu_service_chain_fixture.hpp includes them for its surface helper). That is why they run on
-    # two platforms; building them on macOS is open (#726).
-    bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
-        COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
-        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
-        SKIP_RETURN_CODE 77)
-
     add_executable(bloom_ui_gpu_packed_viewer_test gpu_packed_viewer_tests.cpp)
     target_include_directories(bloom_ui_gpu_packed_viewer_test
         PRIVATE "${PROJECT_SOURCE_DIR}/src/render" "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS}
@@ -2817,8 +2800,11 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                 "fills 100 frames planned from the machine's real card, beside the modelled cards")
         else()
             # The packed Viewer paints through ordinary widgets and presents through no native
-            # surface, so the Viewer cases are default-suite tests (#726), on Linux and Windows for
-            # the reason written at bloom.ui.gpu_processing_phase_native above. Their devices are
+            # surface, so the Viewer cases are default-suite tests (#726), on Linux and Windows: like
+            # every target in this block they are built only where BLOOM_UI_VULKAN_AVAILABLE. The
+            # macOS build's Qt has no Vulkan feature, though these cases need only the pinned Vulkan
+            # headers (the shared gpu_service_chain_fixture.hpp includes them for its surface
+            # helper); building them on macOS is open (#726). Their devices are
             # the fixed reading's stated card (cmake/BloomTesting.cmake), never the driver's live
             # budget.
             set(packed_kind)
@@ -3157,6 +3143,40 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     # fixtures in its own FIXTURES_REQUIRED (src/runtime/tests/CMakeLists.txt), because a test may
     # not set a property on a test that lives in another directory. CTest then runs, in order, the
     # runtime nonce setup, these writers, and the gate that reads their proofs.
+endif()
+
+# The processing phases through the real preview service (#750): admission per class, refusal
+# before any CPU callback, the counted CPU fallback of an ineligible scene, retain refusal and the
+# retry after a release, a delivering refusal retried once, the native exception phases, scene-cache
+# retention and positive retirement. One source proves two routes, with the same assertions:
+# - bloom.ui.gpu_processing_phase_native: the NativeResident route, whose frames are leased through
+#   the presentation registry. That presentation is Wayland's (VK_KHR_wayland_surface, which the
+#   Linux loader offers without a compositor), so it is registered on Linux only: Windows and macOS
+#   have no Wayland presentation, the resident route is never selectable there and every frame
+#   would be a counted CPU fallback. Its lease-ceiling check is the one resident-only behavior.
+# - bloom.ui.gpu_processing_phase_packed: the GpuPreparedPacked product with presentation disabled,
+#   which the app runs on every platform, on Linux, macOS and Windows.
+# No window and no compositor; the device is the stated card. It needs the pinned Vulkan headers
+# (the shared gpu_service_chain_fixture.hpp includes them for its surface helper), not Qt's Vulkan
+# feature, so it is built wherever the render Vulkan backend is (the probe near the top of this
+# file).
+if(TARGET Vulkan::Headers)
+    add_executable(bloom_ui_gpu_processing_phase_native_test gpu_processing_phase_native_tests.cpp)
+    target_include_directories(bloom_ui_gpu_processing_phase_native_test
+        PRIVATE "${PROJECT_SOURCE_DIR}/src/runtime" ${OpenEXR_INCLUDE_DIRS} ${Imath_INCLUDE_DIRS})
+    target_link_libraries(bloom_ui_gpu_processing_phase_native_test
+        PRIVATE bloom_ui bloom_runtime_evaluator Vulkan::Headers OpenEXR::OpenEXR)
+    bloom_enable_warnings(bloom_ui_gpu_processing_phase_native_test)
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        bloom_add_test(NAME bloom.ui.gpu_processing_phase_native
+            COMMAND bloom_ui_gpu_processing_phase_native_test LABELS ui gpu memory
+            TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            SKIP_RETURN_CODE 77)
+    endif()
+    bloom_add_test(NAME bloom.ui.gpu_processing_phase_packed
+        COMMAND bloom_ui_gpu_processing_phase_native_test --packed LABELS ui gpu memory
+        TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+        SKIP_RETURN_CODE 77)
 endif()
 
 # Device-free ViewerEditor view-coordinate oracle: fit / zoom-about-cursor / pan pinned against an

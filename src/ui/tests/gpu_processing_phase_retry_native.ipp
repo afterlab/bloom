@@ -17,7 +17,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
         sample.sampleSerial = serial;
         return sample;
     };
-    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(1);
+    auto policy = makePhasePolicy(1);
     auto sample = makeSample(1, 8 * gib);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     runtime::GpuScenePreparationPhase phase{
@@ -94,15 +94,15 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
         const auto fallbackStatus = service.status();
         const auto admittedPhases = policy->snapshot().reservations.admittedPhases;
         const bool fellBack =
-            frame && hasCpuPixels(frame) && !isResident(frame) && prepared.load() == 1 &&
-            cpu.load() == 1 && fallbackStatus.counters.residentGraphJobs == 0 &&
+            isCpuFrame(frame) && prepared.load() == 1 && cpu.load() == 1 &&
+            fallbackStatus.counters.residentGraphJobs == 0 &&
             fallbackStatus.residentDetail.find("ineligible") != std::string::npos &&
             admittedPhases == 0;
         if (!fellBack)
             std::cerr << "count-one fallback: frame=" << (frame != nullptr)
                       << " cpuPixels=" << (frame && hasCpuPixels(frame))
-                      << " resident=" << (frame && isResident(frame))
-                      << " prepared=" << prepared.load() << " cpu=" << cpu.load()
+                      << " gpuFrame=" << isGpuFrame(frame) << " prepared=" << prepared.load()
+                      << " cpu=" << cpu.load()
                       << " residentGraphJobs=" << fallbackStatus.counters.residentGraphJobs
                       << " admittedPhases=" << admittedPhases << " detail=\""
                       << fallbackStatus.residentDetail << "\" presentation="
@@ -130,7 +130,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     }
     if (checks.failures() != 0)
         return;
-    policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(2);
+    policy = makePhasePolicy(2);
     sample = makeSample(1, 8 * gib);
     policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
     phase.policy = policy;
@@ -219,7 +219,7 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     const auto failed = [&] { return controller.state().activity == ui::PreviewActivity::Failed; };
     const auto ready = [&] {
         return controller.state().activity == ui::PreviewActivity::Ready &&
-               controller.state().frame && isResident(controller.state().frame);
+               controller.state().frame && isGpuFrame(controller.state().frame);
     };
     checks.expect(awaitProof("real native retain refusal emits exact own-disposal watermark without dispatch", failed) && preparations.load() == 1 && submissions == 1 &&
                       !controller.state().diagnostics.empty() &&
@@ -238,9 +238,28 @@ void retryNativeChecks(Expectations& checks, Fixture& fixture, ui::CompositionSe
     ownerControl(held, false);
     held.reset();
     controller.notifyProcessingCapacityChanged();
-    checks.expect(awaitProof("external slot release admits genuine native recovery", ready) && preparations.load() == 2 && submissions == 2 &&
-                      service.status().counters.residentGraphJobs == 1,
-                  "external slot release admits genuine native recovery");
+    // What the controller and the service hold, said when a check below fails.
+    const auto describe = [&] {
+        const auto& state = controller.state();
+        const auto status = service.status();
+        std::cerr << "retry state: activity=" << static_cast<int>(state.activity)
+                  << " frame=" << (state.frame != nullptr) << " provider="
+                  << (state.frame ? static_cast<int>(state.frame->provenance().provider) : -1)
+                  << " preparations=" << preparations.load() << " submissions=" << submissions
+                  << " residentGraphJobs=" << status.counters.residentGraphJobs
+                  << " cpuFallbacks=" << status.counters.cpuFallbacks << " detail=\""
+                  << status.residentDetail << "\" diagnostics=";
+        for (const auto& diagnostic : state.diagnostics)
+            std::cerr << "[" << diagnostic.code << ": " << diagnostic.summary << "]";
+        std::cerr << '\n';
+    };
+    const bool recovered =
+        awaitProof("external slot release admits genuine native recovery", ready) &&
+        preparations.load() == 2 && submissions == 2 &&
+        service.status().counters.residentGraphJobs == 1;
+    if (!recovered)
+        describe();
+    checks.expect(recovered, "external slot release admits genuine native recovery");
     if (checks.failures() != 0)
         return;
     const auto goodFrame = controller.state().frame;
@@ -335,7 +354,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
     ui::CompositionSession session(document, commands, project.initialCompositionId);
     checks.expect(session.addSolidLayer("Last good", {0.125, 0.25, 0.5, 1.0}),
                   "native image retention owns an actual authored baseline");
-    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(2);
+    auto policy = makePhasePolicy(2);
     runtime::MemoryBudgetState sample;
     sample.machine.availableBytes = 60 * gib;
     sample.process.status = runtime::ProcessMemoryStatus::Finite;
@@ -427,7 +446,7 @@ void nativeImageCacheRetryChecks(Expectations& checks, Fixture& fixture, TaskSch
                                                 cache, nullptr, submitter, {}, policy);
     const auto ready = [&] {
         return controller.state().activity == ui::PreviewActivity::Ready &&
-               isResident(controller.state().frame) && controller.state().desiredIdentity &&
+               isGpuFrame(controller.state().frame) && controller.state().desiredIdentity &&
                controller.state().frame->desiredIdentity() == *controller.state().desiredIdentity;
     };
     const auto settled = [&] {
