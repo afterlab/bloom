@@ -173,6 +173,9 @@ function(bloom_add_package_rules)
         if(TARGET bloom-media-worker)
             list(APPEND programs bloom-media-worker)
         endif()
+        if(TARGET bloom-crash-handler)
+            list(APPEND programs bloom-crash-handler)
+        endif()
         set(package "${CMAKE_BINARY_DIR}/package/${BLOOM_PACKAGE_NAME}")
         add_custom_target(
             bloom-package

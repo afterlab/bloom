@@ -285,6 +285,8 @@ function(step_image)
     expect_file("the image holds the application" "${mount}/Bloom.app/Contents/MacOS/Bloom")
     expect_file("the image holds the command-line program"
                 "${mount}/Bloom.app/Contents/MacOS/bloom-cli")
+    expect_file("the image holds the crash handler"
+                "${mount}/Bloom.app/Contents/MacOS/bloom-crash-handler")
     if(EXISTS "${mount}/Bloom.app/Contents/MacOS/Bloom" AND
        EXISTS "${copy}/Contents/MacOS/Bloom")
         file(SHA256 "${mount}/Bloom.app/Contents/MacOS/Bloom" in_image)
@@ -349,6 +351,8 @@ function(step_package)
     expect_file("the package installs the application" "${payload}/Bloom.app/Contents/MacOS/Bloom")
     expect_file("the package installs the command-line program"
                 "${payload}/Bloom.app/Contents/MacOS/bloom-cli")
+    expect_file("the package installs the crash handler"
+                "${payload}/Bloom.app/Contents/MacOS/bloom-crash-handler")
 
     expect_file("the package describes itself" "${component}/PackageInfo")
     if(EXISTS "${component}/PackageInfo")

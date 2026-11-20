@@ -26,6 +26,7 @@
 #   the file type description        (Linux) share/mime/packages/id.afterlab.bloom.xml removed
 #   removed                          ("no file type description")
 #   the update helper removed        "no update helper"
+#   the crash handler removed        "no crash handler" (#736)
 #   the update helper made to load   the helper replaced by a program that loads the package's
 #   the package's libraries          libraries ("the update helper loads ..." or "has a library
 #                                    search path"): it runs from a copy outside the package
@@ -241,6 +242,16 @@ else()
                          "bloom-check-probe: library search path outside the package: /opt/outside")
     file(REMOVE "${probe}")
 endif()
+
+# 4a. The crash handler removed: the programs would start without recording a crash (#736).
+get_filename_component(worker_extension "${worker}" LAST_EXT)
+set(crash_handler "${programs}/bloom-crash-handler${worker_extension}")
+if(NOT EXISTS "${crash_handler}")
+    message(FATAL_ERROR "the package has no ${crash_handler}")
+endif()
+file(RENAME "${crash_handler}" "${WORK}/crash-handler-set-aside")
+bloom_expect_refusal("the crash handler removed" "no crash handler")
+file(RENAME "${WORK}/crash-handler-set-aside" "${crash_handler}")
 
 # 5a. The update helper removed, then replaced by a program that needs the package's libraries.
 get_filename_component(worker_directory "${worker}" DIRECTORY)

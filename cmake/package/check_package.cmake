@@ -335,6 +335,8 @@ if(COMPLETE AND "contents" IN_LIST ONLY)
         bloom_require("${programs}/cli/bloom-cli.exe" "bloom-cli launcher for the PATH option")
     endif()
     bloom_require("${programs}/bloom-mcp${suffix}" "bloom-mcp")
+    # The crash handler the three programs start beside themselves (#736).
+    bloom_require("${programs}/bloom-crash-handler${suffix}" "crash handler")
     bloom_require("${color}/bloom-color-worker${suffix}" "color worker")
     bloom_require("${color}/bloom-update-helper${suffix}" "update helper")
     bloom_require("${media}/ffmpeg-v1/bloom-media-worker${suffix}" "media worker")
