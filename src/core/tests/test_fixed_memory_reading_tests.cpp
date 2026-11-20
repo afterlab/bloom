@@ -24,9 +24,37 @@ int main() {
                reading->availableBytes == (std::uint64_t{8} << 30U) &&
                reading->deviceBytes == (std::uint64_t{2} << 30U),
            "three byte counts are the physical, available and device figures");
-    for (const std::string_view bad :
-         {"", "1", "1,1", "1,1,1,1", "1,,1", ",1,1", "1,1,", "0,0,1", "4,2,0", "2,4,1", "a,1,1",
-          "4,2,1 ", " 4,2,1", "4,2,1x", "-4,2,1", "99999999999999999999999,1,1"})
+    expect(reading.has_value() && !reading->unsampled,
+           "a reading without the unsampled form can be sampled");
+    const auto unsampled =
+        parseTestFixedMemoryReading("17179869184,8589934592,2147483648,unsampled");
+    expect(unsampled.has_value() && unsampled->unsampled &&
+               unsampled->physicalBytes == (std::uint64_t{16} << 30U) &&
+               unsampled->deviceBytes == (std::uint64_t{2} << 30U),
+           "the unsampled form keeps the three figures and says the capacity cannot be sampled");
+    for (const std::string_view bad : {"",
+                                       "1",
+                                       "1,1",
+                                       "1,1,1,1",
+                                       "unsampled",
+                                       ",unsampled",
+                                       "1,1,unsampled",
+                                       "4,2,1,unsampled,",
+                                       "4,2,1,unsampledx",
+                                       "4,2,1,Unsampled",
+                                       "4,2,1,unsampled,unsampled",
+                                       "1,,1",
+                                       ",1,1",
+                                       "1,1,",
+                                       "0,0,1",
+                                       "4,2,0",
+                                       "2,4,1",
+                                       "a,1,1",
+                                       "4,2,1 ",
+                                       " 4,2,1",
+                                       "4,2,1x",
+                                       "-4,2,1",
+                                       "99999999999999999999999,1,1"})
         expect(!parseTestFixedMemoryReading(bad).has_value(), bad);
     // This test is registered with FIXED_MEMORY, so the process itself has the reading the
     // registration hands out, and it is the one the build declares.

@@ -51,7 +51,7 @@ struct State;
 namespace bloom::render::operation_batch_detail {
 struct State;
 struct Pipelines;
-}
+} // namespace bloom::render::operation_batch_detail
 
 namespace bloom::render::ocio_program_detail {
 struct ProgramRetirementNode;
@@ -222,6 +222,9 @@ struct DeviceAllocatorState final {
     // A modelled card (GpuDeviceCreationOptions::device_memory_limit_bytes): its allocation budget
     // is this declared size less this allocator's own blocks, never a driver reading.
     bool declaredMemory = false;
+    // The test reading's unsampled form (#751, BLOOM_TEST_FIXED_MEMORY_READING) on the card it
+    // declared: the live budget query is not answered, as a driver may fail to answer it.
+    bool declaredBudgetUnanswered = false;
     // Every memory heap is DEVICE_LOCAL: device memory is system memory.
     bool unifiedMemory = false;
     // Driver-reported physical device UUID, copied into every live allocation budget.

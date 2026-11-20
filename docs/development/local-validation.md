@@ -137,7 +137,7 @@ hand it a sampler. Those programs read one test-only environment variable instea
 first memory sample:
 
 ```text
-BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>
+BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>[,unsampled]
 ```
 
 With it set, the host memory sample is that physical and available memory with no process limit,
@@ -146,7 +146,11 @@ what else is running. Without it nothing changes; nothing in the product sets it
 to it, and a value that does not parse is reported on stderr and ignored. `bloom_add_test` sets it
 (16 GiB, 8 GiB available, an 8 GiB card) for every test whose command names one of those programs
 or the built Python module, and for a test registered with `FIXED_MEMORY` because its own code
-starts one. Stress tests never get it. The declaration is
+starts one. Stress tests never get it. The `unsampled` form makes the capacity impossible to
+sample on purpose (#751): the host sample cannot read the process memory limits, as on a Linux
+host without `/sys`, and the declared card's live budget query goes unanswered.
+`bloom.cli.render-unsampled-capacity` renders through it and checks that the render completes on
+admission's stated assumption and says what it assumed. The declaration is
 `src/core/include/bloom/core/test_fixed_memory_reading.hpp`.
 
 The runner itself has a small local test suite:

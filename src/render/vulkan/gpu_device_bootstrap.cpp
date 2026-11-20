@@ -723,6 +723,8 @@ GpuDeviceCreationResult GpuDevice::create(const GpuDeviceCreationOptions& option
                                                declaredMemoryBytes)
                                     : selection->deviceMemoryBytes;
     control->declaredMemory = declaredMemoryBytes != 0;
+    control->declaredBudgetUnanswered = options.device_memory_limit_bytes == 0 && fixedReading &&
+                                        fixedReading->unsampled && declaredMemoryBytes != 0;
     control->unifiedMemory = selection->unifiedMemory;
     control->deviceUuid = selection->deviceUuid;
     control->memoryBudgetEnabled = selection->memoryBudgetSupported;

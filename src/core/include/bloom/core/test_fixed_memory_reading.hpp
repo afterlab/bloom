@@ -6,11 +6,14 @@
 // in-process test does. So the program reads one environment variable, once, at its first
 // sample:
 //
-//   BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>
+//   BLOOM_TEST_FIXED_MEMORY_READING=<physical bytes>,<available bytes>,<device bytes>[,unsampled]
 //
 // When it is set, the host memory sample is that physical and available memory with no process
 // limit, and every GPU device is created as a card of the declared device size
-// (render::GpuDeviceCreationOptions::device_memory_limit_bytes). When it is not set, which is
+// (render::GpuDeviceCreationOptions::device_memory_limit_bytes). With the `unsampled` form the
+// capacity cannot be sampled (#751): the host sample cannot read the process memory limits, as in
+// a container without /sys, and a declared card's live budget query is not answered, as a driver
+// may fail to answer it. When it is not set, which is
 // every run outside the test suite, nothing changes. A value that does not parse is reported once
 // on stderr and ignored. Test-only: nothing in the product sets it and no user setting maps to it.
 
@@ -29,13 +32,21 @@ struct TestFixedMemoryReading final {
     std::uint64_t physicalBytes = 0;
     std::uint64_t availableBytes = 0;
     std::uint64_t deviceBytes = 0;
+    // The `unsampled` form: the process memory limits and the device's live budget cannot be read.
+    bool unsampled = false;
 };
 
-// "<physical>,<available>,<device>": three positive decimal byte counts, available no larger
-// than physical.
+inline constexpr std::string_view kTestFixedMemoryUnsampledSuffix = ",unsampled";
+
+// "<physical>,<available>,<device>[,unsampled]": three positive decimal byte counts, available no
+// larger than physical, optionally followed by the word `unsampled`.
 [[nodiscard]] inline std::optional<TestFixedMemoryReading>
 parseTestFixedMemoryReading(std::string_view text) noexcept {
     TestFixedMemoryReading reading;
+    if (text.ends_with(kTestFixedMemoryUnsampledSuffix)) {
+        reading.unsampled = true;
+        text.remove_suffix(kTestFixedMemoryUnsampledSuffix.size());
+    }
     std::uint64_t* const fields[] = {&reading.physicalBytes, &reading.availableBytes,
                                      &reading.deviceBytes};
     for (std::size_t index = 0; index < 3; ++index) {
@@ -66,7 +77,8 @@ testFixedMemoryReading() noexcept {
         auto parsed = parseTestFixedMemoryReading(value);
         if (!parsed)
             std::fprintf(stderr,
-                         "%s is set but is not <physical>,<available>,<device> in bytes; ignored\n",
+                         "%s is set but is not <physical>,<available>,<device>[,unsampled] in "
+                         "bytes; ignored\n",
                          kTestFixedMemoryReadingVariable);
         return parsed;
     }();

@@ -1,9 +1,9 @@
 #include <bloom/render/gpu_device.hpp>
 
 #include "gpu_command_reuse_private.hpp"
+#include "gpu_composite_private.hpp"
 #include "gpu_device_private.hpp"
 #include "gpu_display_transfer_retirement_private.hpp"
-#include "gpu_composite_private.hpp"
 #include "gpu_image_private.hpp"
 #include "gpu_image_reclamation_private.hpp"
 #include "gpu_image_upload_retirement_private.hpp"
@@ -414,6 +414,14 @@ GpuAllocationBudget GpuDevice::availableAllocationBudget() const noexcept {
         result.allocation_sizes.reset();
     }
 
+    if (control.allocator != VK_NULL_HANDLE && control.declaredMemory &&
+        control.declaredBudgetUnanswered) {
+        // #751: the test reading's unsampled form. An unanswered query is an unavailable sample,
+        // never zero room (#709).
+        result.source = GpuAllocationBudgetSource::Unavailable;
+        result.available_bytes = 0;
+        return result;
+    }
     if (control.allocator != VK_NULL_HANDLE && control.declaredMemory) {
         // A modelled card has the room it was declared with, less what this allocator holds on
         // its device-local heaps. The driver's live figure moves with every other program on the

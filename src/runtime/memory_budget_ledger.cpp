@@ -281,11 +281,14 @@ MemoryBudgetSample memoryBudgetSample(const CancellationToken& cancellation) noe
         return result;
     result.physicalBytes = physicalMemoryBytes();
     result.machine = machineMemorySample();
-    if (core::testFixedMemoryReading()) {
+    if (const auto& fixed = core::testFixedMemoryReading()) {
         // The test reading (BLOOM_TEST_FIXED_MEMORY_READING) has no process limit, swap or stall;
-        // its time is this call, so it always counts as fresh.
-        result.process.source = ProcessMemorySource::OtherHostOnly;
-        result.process.status = ProcessMemoryStatus::Unsupported;
+        // its time is this call, so it always counts as fresh. Its unsampled form reads the
+        // process limits as a Linux host without the cgroup filesystem does (#751): unavailable.
+        result.process.source = fixed->unsampled ? ProcessMemorySource::Unavailable
+                                                 : ProcessMemorySource::OtherHostOnly;
+        result.process.status =
+            fixed->unsampled ? ProcessMemoryStatus::Unavailable : ProcessMemoryStatus::Unsupported;
         result.process.sampledAt = std::chrono::steady_clock::now();
         return result;
     }

@@ -66,6 +66,16 @@ if(BUILD_TESTING)
             COMMAND ${bloom_gpu_tools_command}
             LABELS gpu unit)
     endforeach()
+    # #751: a render whose host and device capacity cannot be sampled completes on the stated
+    # assumption and says what it assumed. It renders through the GPU export provider (device).
+    bloom_add_test(
+        NAME bloom.cli.render-unsampled-capacity
+        COMMAND "${CMAKE_COMMAND}"
+            "-DCLI=$<TARGET_FILE:bloom-cli>"
+            "-DREADING=${BLOOM_TEST_FIXED_MEMORY_READING}"
+            "-DWORK_DIR=${CMAKE_CURRENT_BINARY_DIR}/render-unsampled-capacity"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/render_unsampled_capacity.cmake"
+        LABELS integration device memory)
     bloom_add_test(
         NAME bloom.gpu.shader-tools-reconfigure
         COMMAND "${CMAKE_COMMAND}"
