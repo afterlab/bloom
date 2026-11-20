@@ -545,6 +545,8 @@ void testVerticalVideoPreset() {
 // The picture extent of the fixture's composition; a test that needs an extent a hardware encoder
 // takes sets it for the fixture it constructs.
 std::uint32_t fixtureWidth = 64, fixtureHeight = 32;
+// A test that needs an explicit service-wide export allowance sets it for the fixture it constructs.
+std::uint64_t fixtureLedgerAllowance = 0;
 
 struct Fixture {
     std::filesystem::path folder;
@@ -566,7 +568,9 @@ struct Fixture {
         return std::move(result).takeCoordinator();
     }();
     std::shared_ptr<output::ExportResourceLedgerV1> ledger =
-        std::make_shared<output::ExportResourceLedgerV1>();
+        fixtureLedgerAllowance != 0
+            ? std::make_shared<output::ExportResourceLedgerV1>(fixtureLedgerAllowance)
+            : std::make_shared<output::ExportResourceLedgerV1>();
     std::shared_ptr<host::GpuExportProvider> gpu;
     std::shared_ptr<host::SequenceExportRetirementOwnerV1> retirement =
         host::SequenceExportRetirementOwnerV1::create();
@@ -864,6 +868,110 @@ void testZeroHostCapacityRefusal() {
            "the refusal is a readable failure");
     if (view && view->failure)
         std::cerr << "  zero-capacity failure: " << view->failure->reason << '\n';
+}
+
+// #740: the export scratch folder lives in a cache folder anything outside Bloom may clear while
+// Bloom runs. A removed folder is created again for the next frame instead of failing every export
+// until Bloom restarts; one that cannot be created names the folder and the stage.
+void testScratchFolderRecreated() {
+    {
+        Fixture f("scratch-removed");
+        std::filesystem::remove_all(f.folder / "scratch");
+        const auto job =
+            f.addJob(png(), "Exports/removed.png", document::ExportOverwritePolicy::Replace,
+                     {document::ExportRangeKind::Custom, 0, 0});
+        expect(f.startable(job), "scratch removed: the job becomes startable");
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids).accepted, "scratch removed: start");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }),
+               "scratch removed: the job ends");
+        const auto* view = f.view(job);
+        if (view && view->failure)
+            std::cerr << "  scratch removed: " << view->failure->reason << '\n';
+        expect(view && (view->state == ExportJobState::Done ||
+                        view->state == ExportJobState::DoneWithWarnings),
+               "a removed export scratch folder is created again and the frame publishes");
+        expect(std::filesystem::is_directory(f.folder / "scratch"),
+               "the export scratch folder exists again");
+    }
+    {
+        Fixture f("scratch-file");
+        std::filesystem::remove_all(f.folder / "scratch");
+        std::ofstream(f.folder / "scratch") << "not a folder";
+        const auto job =
+            f.addJob(png(), "Exports/blocked.png", document::ExportOverwritePolicy::Replace,
+                     {document::ExportRangeKind::Custom, 0, 0});
+        expect(f.startable(job), "scratch file: the job becomes startable");
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids).accepted, "scratch file: start");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }),
+               "scratch file: the job ends");
+        const auto* view = f.view(job);
+        const auto* failure = view && view->failure ? &*view->failure : nullptr;
+        if (failure)
+            std::cerr << "  scratch file: " << failure->diagnosticCode << ": " << failure->reason
+                      << '\n';
+        expect(view && view->state == ExportJobState::Failed && failure &&
+                   failure->diagnosticCode == "export.publication.output-path" &&
+                   failure->reason.find("Frame 0 could not be published") == 0 &&
+                   failure->reason.find("export scratch folder could not be created") !=
+                       std::string::npos &&
+                   !failure->retryable,
+               "a scratch folder that cannot be created names the frame, the folder and why");
+        bool detailed = false;
+        for (const auto& entry : f.service->log(job, 0).entries)
+            detailed = detailed || (entry.code == "export.publication.detail" &&
+                                    entry.message.find("stage=preflight; "
+                                                       "cause=scratch-folder-unavailable") == 0);
+        expect(detailed, "the log names the stage and the cause token");
+    }
+}
+
+// #740: a lone frame whose publication is refused the memory it needs waits for it, like a frame
+// refused at evaluation, and is published once the memory is released -- never failed as "could
+// not be published". Other work holds all but 8 MiB of an explicit 1 GiB export allowance: room
+// for the 64x32 frame, not for its PNG publication's scratch.
+void testPublicationWaitsForMemory() {
+    constexpr std::uint64_t allowance = 1024ULL * 1024ULL * 1024ULL;
+    fixtureLedgerAllowance = allowance;
+    Fixture f("publication-memory");
+    fixtureLedgerAllowance = 0;
+    output::ExportResourceAdmissionStatusV1 status{};
+    auto otherWork = f.ledger->reserve(allowance - 8ULL * 1024ULL * 1024ULL, status);
+    expect(otherWork != nullptr, "publication memory: other work holds most of the allowance");
+    const auto job =
+        f.addJob(png(), "Exports/memory.png", document::ExportOverwritePolicy::Replace,
+                 {document::ExportRangeKind::Custom, 0, 0});
+    expect(f.startable(job), "publication memory: the job becomes startable");
+    const document::ExportJobId ids[] = {job};
+    expect(f.service->start(ids).accepted, "publication memory: start");
+    const auto waitingAtPublication = [&] {
+        for (const auto& entry : f.service->log(job, 0).entries)
+            if (entry.code == "export.capacity.waiting" &&
+                entry.message.find("stage=publishing; cause=memory-refused; requested=") == 0)
+                return true;
+        return false;
+    };
+    expect(f.pumpUntil(
+               [&] { return waitingAtPublication() || host::isTerminal(f.view(job)->state); }, 30),
+           "publication memory: the frame reaches its publication");
+    // It keeps waiting while the memory is held.
+    expect(!f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 1),
+           "a refused publication waits for memory instead of failing");
+    expect(waitingAtPublication(), "the wait is logged at the publishing stage with its bytes");
+    otherWork.reset();
+    expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 30),
+           "publication memory: the job ends once the memory is released");
+    const auto* view = f.view(job);
+    if (view && view->failure) {
+        std::cerr << "  publication memory: " << view->failure->diagnosticCode << ": "
+                  << view->failure->reason << '\n';
+        for (const auto& entry : f.service->log(job, 0).entries)
+            std::cerr << "    " << entry.code << ": " << entry.message << '\n';
+    }
+    expect(view && (view->state == ExportJobState::Done ||
+                    view->state == ExportJobState::DoneWithWarnings),
+           "the waiting frame is published once the memory is released");
 }
 
 void testReplaceConfirmation() {
@@ -1690,6 +1798,8 @@ int main() {
         testLifecycle();
         testSequencePublishesInFrameOrder();
         testZeroHostCapacityRefusal();
+        testScratchFolderRecreated();
+        testPublicationWaitsForMemory();
         testReplaceConfirmation();
         testPolicyHoldsAtPublication();
         testEveryPlatformExports();

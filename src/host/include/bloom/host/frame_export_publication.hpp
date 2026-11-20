@@ -19,6 +19,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <variant>
 
 // docs/architecture/frame-output.md "Approval", "Immutable Export Request", "Non-Blocking
@@ -191,9 +192,28 @@ enum class FrameExportPublicationStageV1 : std::uint8_t {
     Cancelled,
 };
 
-struct FrameExportDeadlineExceededV1 final {};
-struct FrameExportNoProgressExceededV1 final {};
-struct FrameExportResourceExhaustedV1 final {};
+// #740: each payload carries what it needs for its failure to name its cause -- the limit that was
+// met, or the memory that was asked for.
+struct FrameExportDeadlineExceededV1 final {
+    std::chrono::steady_clock::duration limit{};
+};
+struct FrameExportNoProgressExceededV1 final {
+    std::chrono::steady_clock::duration limit{};
+};
+// A refused scratch reservation (`requestedBytes` with the ledger's status), or a failed system
+// allocation (`requestedBytes == 0`, `allocationFailed`). Retryable: the memory is held by other
+// work, which releases it.
+struct FrameExportResourceExhaustedV1 final {
+    std::uint64_t requestedBytes = 0;
+    output::ExportResourceAdmissionStatusV1 status =
+        output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded;
+    bool allocationFailed = false;
+};
+// #740: Bloom's export scratch folder (a caller-owned directory, recreated before every
+// publication) could not be created or is not a folder. `systemError` is the platform error value.
+struct FrameExportScratchUnavailableV1 final {
+    int systemError = 0;
+};
 // The PNG prepared straight-RGBA8 stream this export would retain exceeds the effective
 // retained-prepared-PNG-bytes limit. Distinct from FrameExportResourceExhaustedV1 (which reports a
 // refused ledger reservation) because this one names a specific closed per-preset limit.
@@ -206,7 +226,8 @@ using FrameExportPublicationFailurePayloadV1 =
                  output::TiffExportWriteErrorCodeV1, output::DpxExportWriteErrorCodeV1,
                  PublicationGuardStatus, FrameExportDeadlineExceededV1,
                  FrameExportNoProgressExceededV1, FrameExportResourceExhaustedV1,
-                 FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1>;
+                 FrameExportPreparedBytesExceededV1, FrameExportUnexpectedFailureV1,
+                 FrameExportScratchUnavailableV1>;
 
 class FrameExportPublicationFailureV1 final {
   public:
@@ -307,5 +328,39 @@ using FrameExportPublicationGateV1 = std::function<bool(const runtime::Cancellat
     output::OutputExportClockV1 clock = output::systemOutputExportClockV1(),
     output::OutputExportProgressCallbackV1 progress = {},
     FrameExportPublicationGateV1 beforePublication = {}) noexcept;
+
+// #740: why one frame was not published, in the words an export failure and its log show.
+//
+// - `kind`: what kind of cause it is -- Timeout (a deadline or no-progress limit, named with its
+//   value), Memory (the publication's scratch memory was refused, named with its bytes), OutputPath
+//   (the destination or Bloom's export scratch folder), Writer (the format's writer or verifier),
+//   Cancelled, or Internal;
+// - `stage`: the stage token ("preflight", "staging", "color-preparing", "writing", "verifying",
+//   "artifact-copy", "guard", "cancelled");
+// - `cause`: a stable token for the payload ("no-progress-limit", "memory-refused",
+//   "scratch-folder-unavailable", "stage-write-failed", "png-write-failed", ...);
+// - `diagnosticCode`: the export failure's code, "export.publication.<kind>";
+// - `message`: one plain sentence naming the frame's stage and cause;
+// - `retryable`: whether the same request can succeed once other work releases what it holds
+//   (memory, a busy target) without anything changing in the project or on the disk.
+enum class FrameExportPublicationFailureKindV1 : std::uint8_t {
+    Timeout,
+    Memory,
+    OutputPath,
+    Writer,
+    Cancelled,
+    Internal,
+};
+struct FrameExportPublicationFailureDescriptionV1 final {
+    FrameExportPublicationFailureKindV1 kind = FrameExportPublicationFailureKindV1::Internal;
+    std::string stage;
+    std::string cause;
+    std::string diagnosticCode;
+    std::string message;
+    bool retryable = false;
+};
+[[nodiscard]] FrameExportPublicationFailureDescriptionV1
+describeFrameExportPublicationFailureV1(const FrameExportPublicationFailureV1& failure,
+                                        std::uint64_t frame);
 
 } // namespace bloom::host

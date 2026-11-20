@@ -999,7 +999,20 @@ results, on success and on failure, carry `job` (the transient job id) and `log`
 64 log entries, each `{sequence, sinceStartMs, severity, code, frame, message}` as `export.log`
 gives them), so the detail a failure points to is in the answer itself. A capture carries them
 too; a capture on `bloom-mcp` renders without a queue job and has neither. While such a job runs,
-`export.status` lists it in `jobs` with `transient: true`. The queue retires the job when the call
+`export.status` lists it in `jobs` with `transient: true`.
+
+A failed `render`, `export` or `capture` answers `bloom.mcp.export-failed` with the export's own
+failure code as `diagnostic.detail` and a message that names the frame and why. A frame that takes
+long to render is never failed for being slow: the frame publishes once it is ready, and only the
+export's own limits stop it (120 seconds without progress in a writer, 24 hours for one export),
+with `export.publication.timeout` and the limit in the message. `export.publication.memory` means
+the computer had no memory for writing the file, `export.publication.output-path` names what was
+wrong with the destination or Bloom's export scratch folder, and `export.publication.writer` names
+the format writer. A frame whose publication is refused memory that other work holds waits for it,
+and stops as `export.capacity.stalled` only when nothing released any for 30 seconds. A failure
+that can succeed unchanged once other work lets go of memory or of the output file
+(`export.capacity.stalled`, a refused memory reservation, a busy output file) carries
+`diagnostic.retryAfterMs` (5,000): send the same call again after it. The queue retires the job when the call
 returns, but Bloom keeps the newest 32 finished ones: `export.status` lists them in
 `recentTransientJobs`, and `export.log` and `export.wait` still read each one by its id. Opening or
 creating another project releases them.

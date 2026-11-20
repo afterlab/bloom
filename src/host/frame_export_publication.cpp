@@ -4,6 +4,7 @@
 #include <bloom/output/dpx_export_write.hpp>
 #include <bloom/output/flat_exr_options.hpp>
 #include <bloom/output/output_limits.hpp>
+#include <bloom/host/save_failure_description.hpp>
 
 #include <algorithm>
 #include <array>
@@ -13,6 +14,8 @@
 #include <new>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -338,7 +341,26 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     }
     if (!scratchClaim) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-            FrameExportPublicationStageV1::Preflight, FrameExportResourceExhaustedV1{}));
+            FrameExportPublicationStageV1::Preflight,
+            FrameExportResourceExhaustedV1{.requestedBytes = additional.value_or(0),
+                                           .status = scratchStatus}));
+    }
+
+    // #740: the scratch folder is the caller's, but it lives in a cache folder anything outside
+    // Bloom may clear while Bloom runs. It is created again before every publication, so a
+    // removed folder never fails every later export until Bloom restarts.
+    if (!scratchDirectory.empty()) {
+        std::error_code folderError;
+        std::filesystem::create_directories(scratchDirectory, folderError);
+        const bool isFolder =
+            !folderError && std::filesystem::is_directory(scratchDirectory, folderError);
+        if (!isFolder)
+            return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+                FrameExportPublicationStageV1::Preflight,
+                FrameExportScratchUnavailableV1{
+                    .systemError = folderError
+                                       ? folderError.value()
+                                       : static_cast<int>(std::errc::not_a_directory)}));
     }
 
     if (context.isCancellationRequested()) {
@@ -456,11 +478,13 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
     const auto afterWriteVerify = clock();
     if (deadlineExceeded(afterWriteVerify)) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-            FrameExportPublicationStageV1::Writing, FrameExportDeadlineExceededV1{}));
+            FrameExportPublicationStageV1::Writing,
+            FrameExportDeadlineExceededV1{.limit = limits.totalDeadline}));
     }
     if (noProgressExceeded(afterWriteVerify)) {
         return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-            FrameExportPublicationStageV1::Writing, FrameExportNoProgressExceededV1{}));
+            FrameExportPublicationStageV1::Writing,
+            FrameExportNoProgressExceededV1{.limit = limits.noProgressInterval}));
     }
     if (writeVerify.cancelled) {
         return cancelledResult(FrameExportPublicationStageV1::Writing);
@@ -489,12 +513,14 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
             }
             if (deadlineExceeded(now)) {
                 return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
-                    FrameExportPublicationStageV1::ArtifactCopy, FrameExportDeadlineExceededV1{}));
+                    FrameExportPublicationStageV1::ArtifactCopy,
+                    FrameExportDeadlineExceededV1{.limit = limits.totalDeadline}));
             }
             if (noProgressExceeded(now)) {
                 return FrameExportPublicationResultV1::failure(
                     FrameExportPublicationFailureV1(FrameExportPublicationStageV1::ArtifactCopy,
-                                                    FrameExportNoProgressExceededV1{}));
+                                                    FrameExportNoProgressExceededV1{
+                                                        .limit = limits.noProgressInterval}));
             }
             scratchStream.read(reinterpret_cast<char*>(buffer.data()),
                                static_cast<std::streamsize>(buffer.size()));
@@ -550,9 +576,10 @@ FrameExportPublicationResultV1 executeExportPublicationImpl(
                 return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
                     FrameExportPublicationStageV1::ArtifactCopy,
                     deadlineExceeded(now)
-                        ? FrameExportPublicationFailurePayloadV1(FrameExportDeadlineExceededV1{})
-                        : FrameExportPublicationFailurePayloadV1(
-                              FrameExportNoProgressExceededV1{})));
+                        ? FrameExportPublicationFailurePayloadV1(
+                              FrameExportDeadlineExceededV1{.limit = limits.totalDeadline})
+                        : FrameExportPublicationFailurePayloadV1(FrameExportNoProgressExceededV1{
+                              .limit = limits.noProgressInterval})));
             }
             const auto readResult = lease.readForVerification(offset, std::span(buffer));
             if (!readResult) {
@@ -631,12 +658,299 @@ FrameExportPublicationResultV1 executeExportPublication(
                                             std::move(progress), beforePublication, failureStage);
     } catch (const std::bad_alloc&) {
         // Unwinding has already destroyed the staged lease, scratch guard and scratch claim.
-        return FrameExportPublicationResultV1::failure(
-            FrameExportPublicationFailureV1(failureStage, FrameExportResourceExhaustedV1{}));
+        return FrameExportPublicationResultV1::failure(FrameExportPublicationFailureV1(
+            failureStage, FrameExportResourceExhaustedV1{.allocationFailed = true}));
     } catch (...) {
         return FrameExportPublicationResultV1::failure(
             FrameExportPublicationFailureV1(failureStage, FrameExportUnexpectedFailureV1{}));
     }
+}
+
+namespace {
+
+constexpr std::array<std::string_view, 8> kFrameStageTokens{
+    "preflight", "staging",       "color-preparing", "writing",
+    "verifying", "artifact-copy", "guard",           "cancelled",
+};
+static_assert(static_cast<std::size_t>(FrameExportPublicationStageV1::Cancelled) + 1 ==
+              kFrameStageTokens.size());
+constexpr std::array<std::string_view, 8> kFrameStagePhrases{
+    "while preparing to write it",
+    "while creating its temporary file",
+    "while converting it to the output colors",
+    "while writing it",
+    "while reading it back to verify it",
+    "while copying it into place",
+    "while publishing it",
+    "because the export was cancelled",
+};
+static_assert(kFrameStagePhrases.size() == kFrameStageTokens.size());
+constexpr std::array<std::string_view, 6> kFailureKindTokens{
+    "timeout", "memory", "output-path", "writer", "cancelled", "internal",
+};
+static_assert(static_cast<std::size_t>(FrameExportPublicationFailureKindV1::Internal) + 1 ==
+              kFailureKindTokens.size());
+constexpr std::array<std::string_view, 5> kAdmissionTokens{
+    "reserved",
+    "arithmetic-overflow",
+    "job-allowance-exceeded",
+    "service-allowance-exceeded",
+    "capacity-refresh-failed",
+};
+static_assert(static_cast<std::size_t>(output::ExportResourceAdmissionStatusV1::CapacityRefreshFailed) +
+                  1 ==
+              kAdmissionTokens.size());
+constexpr std::array<std::string_view, 5> kExrWriterTokens{
+    "none", "exr-write-failed", "exr-verify-failed", "exr-artifact-hash-failed",
+    "exr-internal-invariant",
+};
+static_assert(static_cast<std::size_t>(output::FlatExrExportWriteErrorCodeV1::InternalInvariant) +
+                  1 ==
+              kExrWriterTokens.size());
+constexpr std::array<std::string_view, 9> kPngWriterTokens{
+    "none",
+    "png-invalid-attempt",
+    "png-missing-display-products",
+    "png-prepared-bytes-limit-exceeded",
+    "png-color-prepare-failed",
+    "png-write-failed",
+    "png-verify-failed",
+    "png-artifact-hash-failed",
+    "png-internal-invariant",
+};
+static_assert(static_cast<std::size_t>(output::PngExportWriteErrorCodeV1::InternalInvariant) + 1 ==
+              kPngWriterTokens.size());
+constexpr std::array<std::string_view, 4> kTiffWriterTokens{
+    "none", "tiff-provider-missing", "tiff-provider-failed", "tiff-cancelled"};
+static_assert(static_cast<std::size_t>(output::TiffExportWriteErrorCodeV1::Cancelled) + 1 ==
+              kTiffWriterTokens.size());
+constexpr std::array<std::string_view, 5> kDpxWriterTokens{
+    "none", "dpx-provider-missing", "dpx-provider-failed", "dpx-cancelled", "dpx-tags-differ"};
+static_assert(static_cast<std::size_t>(output::DpxExportWriteErrorCodeV1::TagsDiffer) + 1 ==
+              kDpxWriterTokens.size());
+constexpr std::array<std::string_view, 5> kGuardTokens{
+    "entered", "invalid-claim", "superseded", "target-busy", "already-entered",
+};
+static_assert(static_cast<std::size_t>(PublicationGuardStatus::AlreadyEntered) + 1 ==
+              kGuardTokens.size());
+
+template <typename Enum, std::size_t N>
+[[nodiscard]] std::string_view tokenOf(const std::array<std::string_view, N>& tokens,
+                                       const Enum value) noexcept {
+    const auto index = static_cast<std::size_t>(value);
+    return index < N ? tokens[index] : std::string_view{"unrecognized"};
+}
+
+// "512 MiB", "1.5 GiB", "4096 bytes".
+[[nodiscard]] std::string bytesText(const std::uint64_t bytes) {
+    constexpr std::uint64_t mebibyte = 1024ULL * 1024ULL;
+    constexpr std::uint64_t gibibyte = 1024ULL * mebibyte;
+    if (bytes >= gibibyte) {
+        const auto tenths = (bytes * 10 + gibibyte / 2) / gibibyte;
+        return std::to_string(tenths / 10) + "." + std::to_string(tenths % 10) + " GiB";
+    }
+    if (bytes >= mebibyte)
+        return std::to_string((bytes + mebibyte / 2) / mebibyte) + " MiB";
+    return std::to_string(bytes) + " bytes";
+}
+
+// "120 s", "24 h".
+[[nodiscard]] std::string durationText(const std::chrono::steady_clock::duration duration) {
+    const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(duration).count();
+    if (seconds >= 3600 && seconds % 3600 == 0)
+        return std::to_string(seconds / 3600) + " h";
+    if (seconds > 0)
+        return std::to_string(seconds) + " s";
+    if (const auto millis = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+        millis > 0)
+        return std::to_string(millis) + " ms";
+    return std::to_string(std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count()) +
+           " ns";
+}
+
+struct FrameCause final {
+    FrameExportPublicationFailureKindV1 kind = FrameExportPublicationFailureKindV1::Internal;
+    std::string token;
+    std::string phrase;
+    bool retryable = false;
+};
+
+[[nodiscard]] FrameCause stagedCause(const platform::StagedArtifactError error) {
+    using E = platform::StagedArtifactError;
+    using K = FrameExportPublicationFailureKindV1;
+    const auto token = std::string(stagedArtifactErrorToken(error));
+    switch (error) {
+    case E::ResourceUnavailable:
+        return {K::Memory, token, "the system ran out of memory or file handles", true};
+    case E::AdmissionLimit:
+    case E::TargetRecordLimit:
+        return {K::OutputPath, token, "too many files are being written at once", true};
+    case E::InvalidTargetPath:
+        return {K::OutputPath, token, "the output path is not a valid file path", false};
+    case E::ParentResolutionFailed:
+        return {K::OutputPath, token, "the output folder could not be found", false};
+    case E::ParentNotDirectory:
+        return {K::OutputPath, token, "the output folder is not a folder", false};
+    case E::TargetLeafSymlink:
+        return {K::OutputPath, token, "the output file is a symbolic link", false};
+    case E::TargetLeafNotRegular:
+        return {K::OutputPath, token, "the output path is not a regular file", false};
+    case E::TargetInspectionFailed:
+        return {K::OutputPath, token, "the output file could not be inspected", false};
+    case E::ArtifactSizeLimit:
+        return {K::OutputPath, token, "the file is larger than the most Bloom writes in one file",
+                false};
+    case E::ExternalModificationConflict:
+        return {K::OutputPath, token, "the output file changed outside Bloom", false};
+    case E::OverwritePolicyConflict:
+        return {K::OutputPath, token, "the output file already exists", false};
+    case E::StageCreationFailed:
+        return {K::OutputPath, token,
+                "its temporary file could not be created in the output folder (check that the "
+                "folder is writable)",
+                false};
+    case E::StageWriteFailed:
+        return {K::OutputPath, token,
+                "its temporary file could not be written in the output folder (check the free "
+                "disk space)",
+                false};
+    case E::StageFlushFailed:
+        return {K::OutputPath, token, "its temporary file could not be flushed to the disk",
+                false};
+    case E::AtomicPublicationFailed:
+        return {K::OutputPath, token, "its temporary file could not replace the output file",
+                false};
+    case E::ParentDurabilityFailed:
+        return {K::OutputPath, token, "the output folder could not be flushed to the disk", false};
+    default:
+        break;
+    }
+    std::string words = token;
+    std::ranges::replace(words, '-', ' ');
+    return {K::OutputPath, token, "the output file could not be written (" + words + ")", false};
+}
+
+[[nodiscard]] FrameCause writerCause(const std::string_view token, const bool verify) {
+    using K = FrameExportPublicationFailureKindV1;
+    if (verify)
+        return {K::Writer, std::string(token),
+                "the written file did not read back as the frame Bloom rendered", false};
+    return {K::Writer, std::string(token),
+            "the file could not be written in Bloom's export scratch folder (check the free disk "
+            "space there)",
+            false};
+}
+
+[[nodiscard]] FrameCause frameCause(const FrameExportPublicationFailureV1& failure) {
+    using K = FrameExportPublicationFailureKindV1;
+    return std::visit(
+        [&](const auto& payload) -> FrameCause {
+            using P = std::decay_t<decltype(payload)>;
+            if constexpr (std::is_same_v<P, std::monostate>) {
+                if (failure.stage() == FrameExportPublicationStageV1::Cancelled)
+                    return {K::Cancelled, "cancelled", "the export was cancelled", false};
+                return {K::Internal, "unexpected-failure", "an unexpected internal error occurred",
+                        false};
+            } else if constexpr (std::is_same_v<P, platform::StagedArtifactError>) {
+                return stagedCause(payload);
+            } else if constexpr (std::is_same_v<P, output::FlatExrExportWriteErrorCodeV1>) {
+                return writerCause(tokenOf(kExrWriterTokens, payload),
+                                   payload == output::FlatExrExportWriteErrorCodeV1::VerifyFailed);
+            } else if constexpr (std::is_same_v<P, output::PngExportWriteErrorCodeV1>) {
+                using E = output::PngExportWriteErrorCodeV1;
+                const auto token = std::string(tokenOf(kPngWriterTokens, payload));
+                if (payload == E::ColorPrepareFailed)
+                    return {K::Writer, token,
+                            "the output colors could not be applied to it (a sample that is not "
+                            "a number, or the computer ran out of memory)",
+                            false};
+                if (payload == E::PreparedBytesLimitExceeded)
+                    return {K::Memory, token,
+                            "the prepared PNG would be larger than the export's limit for one "
+                            "file",
+                            false};
+                if (payload == E::WriteFailed || payload == E::VerifyFailed)
+                    return writerCause(token, payload == E::VerifyFailed);
+                return {K::Internal, token,
+                        "an unexpected internal error occurred in the PNG writer", false};
+            } else if constexpr (std::is_same_v<P, output::TiffExportWriteErrorCodeV1>) {
+                return {K::Writer, std::string(tokenOf(kTiffWriterTokens, payload)),
+                        "the TIFF writer could not write the file", false};
+            } else if constexpr (std::is_same_v<P, output::DpxExportWriteErrorCodeV1>) {
+                return writerCause(tokenOf(kDpxWriterTokens, payload),
+                                   payload == output::DpxExportWriteErrorCodeV1::TagsDiffer);
+            } else if constexpr (std::is_same_v<P, PublicationGuardStatus>) {
+                if (payload == PublicationGuardStatus::TargetBusy)
+                    return {K::OutputPath, "target-busy",
+                            "another export is writing the same output file", true};
+                return {K::Internal, std::string(tokenOf(kGuardTokens, payload)),
+                        "an unexpected internal error occurred while publishing", false};
+            } else if constexpr (std::is_same_v<P, FrameExportDeadlineExceededV1>) {
+                return {K::Timeout, "deadline-exceeded",
+                        "it took longer than the export's limit of " + durationText(payload.limit) +
+                            " for one frame's publication",
+                        false};
+            } else if constexpr (std::is_same_v<P, FrameExportNoProgressExceededV1>) {
+                return {K::Timeout, "no-progress-limit",
+                        "the writer made no progress for longer than the export's limit of " +
+                            durationText(payload.limit),
+                        false};
+            } else if constexpr (std::is_same_v<P, FrameExportResourceExhaustedV1>) {
+                using S = output::ExportResourceAdmissionStatusV1;
+                if (payload.allocationFailed)
+                    return {K::Memory, "allocation-failed",
+                            "the computer ran out of memory; close a RAM preview or other work "
+                            "and try again",
+                            true};
+                const auto amount = bytesText(payload.requestedBytes);
+                const auto token = std::string(tokenOf(kAdmissionTokens, payload.status));
+                if (payload.status == S::JobAllowanceExceeded ||
+                    payload.status == S::ArithmeticOverflow)
+                    return {K::Memory, token,
+                            "writing it needs " + amount +
+                                ", more memory than one export may hold; try a smaller resolution",
+                            false};
+                return {K::Memory,
+                        payload.status == S::CapacityRefreshFailed ? token : "memory-refused",
+                        "Bloom could not reserve the " + amount +
+                            " of memory writing it needs while other work holds memory; close a "
+                            "RAM preview or other exports and try again",
+                        true};
+            } else if constexpr (std::is_same_v<P, FrameExportPreparedBytesExceededV1>) {
+                return {K::Memory, "prepared-bytes-limit",
+                        "the prepared PNG would be larger than the export's limit for one file",
+                        false};
+            } else if constexpr (std::is_same_v<P, FrameExportScratchUnavailableV1>) {
+                return {K::OutputPath, "scratch-folder-unavailable",
+                        "Bloom's export scratch folder could not be created (" +
+                            std::system_category().message(payload.systemError) + ")",
+                        false};
+            } else {
+                static_assert(std::is_same_v<P, FrameExportUnexpectedFailureV1>);
+                return {K::Internal, "unexpected-failure", "an unexpected internal error occurred",
+                        false};
+            }
+        },
+        failure.payload());
+}
+
+} // namespace
+
+FrameExportPublicationFailureDescriptionV1
+describeFrameExportPublicationFailureV1(const FrameExportPublicationFailureV1& failure,
+                                        const std::uint64_t frame) {
+    auto cause = frameCause(failure);
+    FrameExportPublicationFailureDescriptionV1 description;
+    description.kind = cause.kind;
+    description.stage = std::string(tokenOf(kFrameStageTokens, failure.stage()));
+    description.cause = std::move(cause.token);
+    description.diagnosticCode =
+        "export.publication." + std::string(tokenOf(kFailureKindTokens, cause.kind));
+    description.message = "Frame " + std::to_string(frame) + " could not be published " +
+                          std::string(tokenOf(kFrameStagePhrases, failure.stage())) + ": " +
+                          cause.phrase + ".";
+    description.retryable = cause.retryable;
+    return description;
 }
 
 } // namespace bloom::host

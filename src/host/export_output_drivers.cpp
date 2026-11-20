@@ -502,6 +502,10 @@ class ImageDriver final : public DriverBase {
         if (!compiled_)
             return;
         if (stopRequested_) {
+            // A frame waiting to be published again is dropped: nothing of it was published.
+            if (republishPending() &&
+                std::ranges::all_of(publications_, [](const auto& item) { return item.finished; }))
+                publications_.clear();
             if (tailIdle())
                 stopNow();
             return;
@@ -562,6 +566,8 @@ class ImageDriver final : public DriverBase {
             if (runningAnalyses() != 0 ||
                 std::ranges::any_of(publications_, [](const auto& item) { return !item.finished; }))
                 return;
+            if (publicationWait_ && !publicationRetryDue())
+                return;
             auto& front = publications_.front();
             front.awaitingRepublish = false;
             front.finished = false;
@@ -615,7 +621,8 @@ class ImageDriver final : public DriverBase {
     }
     [[nodiscard]] ExportDeviceRoute route() const override { return liveRoute(route_); }
     [[nodiscard]] bool waitingOnGpuPreparation() const override {
-        return capacity_.waiting() || std::ranges::any_of(window_, [](const auto& frame) {
+        return capacity_.waiting() || publicationWait_ ||
+               std::ranges::any_of(window_, [](const auto& frame) {
                    return frame.awaitingCapacity || (frame.runner && !frame.outcome);
                });
     }
@@ -941,12 +948,15 @@ class ImageDriver final : public DriverBase {
                     " s while waiting; " + describeProcessingReservationsV1(processingPolicy()),
                 index);
             capacity_.succeeded();
-            failNow(failure(ExportFailureCode::ResourceRefused, "export.capacity.stalled",
-                         "Bloom waited for memory to export frame " + std::to_string(index) +
-                             ", but other work kept holding it, so the export stopped. "
-                             "Close a RAM preview or other exports and try again; the "
-                             "details are in the log.",
-                         index));
+            auto stalled = failure(ExportFailureCode::ResourceRefused, "export.capacity.stalled",
+                                   "Bloom waited for memory to export frame " +
+                                       std::to_string(index) +
+                                       ", but other work kept holding it, so the export stopped. "
+                                       "Close a RAM preview or other exports and try again; the "
+                                       "details are in the log.",
+                                   index);
+            stalled.retryable = true;
+            failNow(std::move(stalled));
         }
     }
 
@@ -1298,16 +1308,55 @@ class ImageDriver final : public DriverBase {
                 releaseAnalysedFrames();
                 return;
             }
+            // #740: the frame says why it was not published -- the limit it met, the memory it
+            // was refused, or what was wrong with the output path -- and the log names the stage.
+            const auto described =
+                result->failure()
+                    ? describeFrameExportPublicationFailureV1(*result->failure(), index)
+                    : FrameExportPublicationFailureDescriptionV1{
+                          .kind = FrameExportPublicationFailureKindV1::Internal,
+                          .stage = "publishing",
+                          .cause = "not-published",
+                          .diagnosticCode = "export.publication.internal",
+                          .message = "Frame " + std::to_string(index) +
+                                     " was not published, and the publication did not say why.",
+                          .retryable = false};
+            const auto* exhausted =
+                result->failure() ? result->failure()->payloadAs<FrameExportResourceExhaustedV1>()
+                                  : nullptr;
+            // A lone frame whose publication was refused memory waits for it like a frame refused
+            // at evaluation (ADR 0033 section 9): it is published again on the capacity backoff,
+            // and a wait that cannot end stops as export.capacity.stalled, retryable.
+            if (exhausted && described.retryable && front.attempt)
+                return awaitPublicationMemory(front, described, exhausted->requestedBytes);
+            log(runtime::DiagnosticSeverity::Error, "export.publication.detail",
+                "stage=" + described.stage + "; cause=" + described.cause +
+                    "; retryable=" + (described.retryable ? "1" : "0") +
+                    (exhausted ? "; " + describeProcessingReservationsV1(processingPolicy())
+                               : std::string{}),
+                index);
             auto code = ExportFailureCode::WriteFailed;
-            std::string reason = "The frame could not be published; earlier frames are unaffected";
-            if (result->failure()) {
-                if (result->failure()->payloadAs<FrameExportDeadlineExceededV1>() ||
-                    result->failure()->payloadAs<FrameExportNoProgressExceededV1>())
-                    code = ExportFailureCode::DeadlineExceeded;
-                if (result->failure()->payloadAs<FrameExportResourceExhaustedV1>())
-                    code = ExportFailureCode::ResourceRefused;
+            switch (described.kind) {
+            case FrameExportPublicationFailureKindV1::Timeout:
+                code = ExportFailureCode::DeadlineExceeded;
+                break;
+            case FrameExportPublicationFailureKindV1::Memory:
+                code = ExportFailureCode::ResourceRefused;
+                break;
+            case FrameExportPublicationFailureKindV1::Writer:
+                code = described.stage == "verifying" ? ExportFailureCode::VerificationFailed
+                                                      : ExportFailureCode::WriteFailed;
+                break;
+            case FrameExportPublicationFailureKindV1::Internal:
+                code = ExportFailureCode::Internal;
+                break;
+            case FrameExportPublicationFailureKindV1::OutputPath:
+            case FrameExportPublicationFailureKindV1::Cancelled:
+                break;
             }
-            return failNow(failure(code, "export.publication.failed", std::move(reason), index));
+            auto failed = failure(code, described.diagnosticCode, described.message, index);
+            failed.retryable = described.retryable;
+            return failNow(std::move(failed));
         }
         publications_.pop_front();
         auto& artifacts = report_.verification.artifacts;
@@ -1330,6 +1379,72 @@ class ImageDriver final : public DriverBase {
         turn_->advance(next_);
         ++releaseEpoch_;
         republishing_ = false;
+        if (publicationWait_) {
+            publicationWait_ = false;
+            capacity_.succeeded();
+        }
+    }
+
+    // #740: the front frame's publication was refused the memory it needs while nothing else of
+    // this export holds any: hold it (its analysed attempt stays) and publish it again on the
+    // capacity backoff once other work released memory.
+    void awaitPublicationMemory(Publication& front,
+                                const FrameExportPublicationFailureDescriptionV1& described,
+                                const std::uint64_t requestedBytes) {
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        if (!capacity_.waiting())
+            log(runtime::DiagnosticSeverity::Information, "export.capacity.waiting",
+                "stage=publishing; cause=" + described.cause +
+                    "; requested=" + std::to_string(requestedBytes) + "; " +
+                    describeProcessingReservationsV1(processingPolicy()),
+                front.index);
+        // The waiting frame's own attempt holds one admitted phase; it never counts as other work.
+        capacity_.refused(now, processingPolicy(), 1);
+        route_ = capacityWaitRoute();
+        publicationWait_ = true;
+        publicationWaitBytes_ = requestedBytes;
+        depthLimit_ = 1;
+        republishing_ = true;
+        turn_->stop();
+        for (auto& item : publications_)
+            item.awaitingRepublish = true;
+        front.handle = {};
+        front.result.reset();
+        releaseAnalysedFrames();
+    }
+
+    // Whether the waiting publication is due again; fails the export when the wait cannot end.
+    [[nodiscard]] bool publicationRetryDue() {
+        const auto now = OutputAnalysisCapacityWaitV1::Clock::now();
+        const auto index = publications_.front().index;
+        // Paused time never counts toward the stall; the frame is published again on resume.
+        if (pauseRequested_) {
+            capacity_.paused(now);
+            return false;
+        }
+        if (capacity_.stalled(now, processingPolicy(), 1)) {
+            log(runtime::DiagnosticSeverity::Error, "export.capacity.stalled",
+                "stage=publishing; requested=" + std::to_string(publicationWaitBytes_) +
+                    "; no processing phase was admitted for " +
+                    std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                    " s while waiting; " + describeProcessingReservationsV1(processingPolicy()),
+                index);
+            capacity_.succeeded();
+            publicationWait_ = false;
+            publications_.clear();
+            auto stalled = failure(
+                ExportFailureCode::ResourceRefused, "export.capacity.stalled",
+                "Bloom waited " +
+                    std::to_string(OutputAnalysisCapacityWaitV1::kStallAfter.count()) +
+                    " s for the memory it needs to write frame " + std::to_string(index) +
+                    ", but other work kept holding it, so the export stopped. Close a RAM "
+                    "preview or other exports and try again; the details are in the log.",
+                index);
+            stalled.retryable = true;
+            failNow(std::move(stalled));
+            return false;
+        }
+        return capacity_.retryDue(now);
     }
 
     void verify() {
@@ -1412,6 +1527,9 @@ class ImageDriver final : public DriverBase {
     std::size_t depthLimit_ = 1;
     std::uint64_t releaseEpoch_ = 0;
     bool republishing_ = false;
+    // #740: the front frame waits for the memory its publication was refused.
+    bool publicationWait_ = false;
+    std::uint64_t publicationWaitBytes_ = 0;
     // A frame failed while earlier frames were still publishing: reported once they finished.
     std::optional<ExportFailure> pendingFailure_;
     std::uint64_t pendingLimit_ = 0;

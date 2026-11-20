@@ -428,6 +428,10 @@ inline constexpr std::size_t kMcpToolErrorCodeCount = 18;
 // explicitly.
 inline constexpr std::chrono::seconds kMcpCommitDeadline{30};
 
+// #740: when a render, export or capture that failed retryably (export.capacity.stalled, a
+// publication refused memory or a busy output file) may be tried again: diagnostic.retryAfterMs.
+inline constexpr std::uint64_t kMcpExportRetryAfterMs = 5000;
+
 // #747 (D1): asynchronous transact. At most kMcpAsyncJobs jobs are queued or running at once
 // (limit asyncJobs, bloom.mcp.jobs-full); the newest kMcpRetainedJobs finished ones stay readable
 // through jobs.list and jobs.wait.

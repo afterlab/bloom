@@ -507,6 +507,20 @@ void testDeadlineExpiryViaInjectedClock(Expectations& expectations) {
     expectations.expect(
         failure != nullptr && failure->payloadAs<host::FrameExportDeadlineExceededV1>() != nullptr,
         "the injected clock jump is diagnosed as a typed deadline-exceeded resource failure");
+    if (failure != nullptr && failure->payloadAs<host::FrameExportDeadlineExceededV1>()) {
+        // #740: the failure names the limit it met.
+        const auto described = host::describeFrameExportPublicationFailureV1(*failure, 7);
+        expectations.expect(
+            failure->payloadAs<host::FrameExportDeadlineExceededV1>()->limit ==
+                    std::chrono::hours(24) &&
+                described.kind == host::FrameExportPublicationFailureKindV1::Timeout &&
+                described.diagnosticCode == "export.publication.timeout" &&
+                described.cause == "deadline-exceeded" &&
+                described.message.find("Frame 7 could not be published") == 0 &&
+                described.message.find("limit of 24 h") != std::string::npos &&
+                !described.retryable,
+            "a deadline failure names its stage and its 24 h limit");
+    }
     expectations.expect(!std::filesystem::exists(target), "deadline expiry publishes nothing");
 }
 
@@ -556,6 +570,16 @@ void testNoProgressExpiryViaInjectedClock(Expectations& expectations) {
         failure != nullptr &&
             failure->payloadAs<host::FrameExportNoProgressExceededV1>() != nullptr,
         "the injected clock jump is diagnosed as a typed no-progress resource failure");
+    if (failure != nullptr && failure->payloadAs<host::FrameExportNoProgressExceededV1>()) {
+        const auto described = host::describeFrameExportPublicationFailureV1(*failure, 3);
+        expectations.expect(
+            failure->payloadAs<host::FrameExportNoProgressExceededV1>()->limit ==
+                    std::chrono::nanoseconds(1) &&
+                described.kind == host::FrameExportPublicationFailureKindV1::Timeout &&
+                described.cause == "no-progress-limit" &&
+                described.message.find("limit of 1 ns") != std::string::npos,
+            "a no-progress failure names its limit");
+    }
     expectations.expect(!std::filesystem::exists(target), "no-progress expiry publishes nothing");
 }
 
@@ -603,7 +627,114 @@ void testAllocationFailureAfterStagingIsTyped(Expectations& expectations) {
                             failure->stage() == host::FrameExportPublicationStageV1::Writing &&
                             failure->payloadAs<host::FrameExportResourceExhaustedV1>(),
                         "a post-staging bad_alloc becomes a writing-stage resource failure");
+    if (failure && failure->payloadAs<host::FrameExportResourceExhaustedV1>()) {
+        const auto described = host::describeFrameExportPublicationFailureV1(*failure, 0);
+        expectations.expect(described.kind == host::FrameExportPublicationFailureKindV1::Memory &&
+                                described.stage == "writing" &&
+                                described.cause == "allocation-failed" &&
+                                described.diagnosticCode == "export.publication.memory" &&
+                                described.retryable,
+                            "an allocation failure is a retryable memory failure while writing");
+    }
     expectations.expect(!std::filesystem::exists(target) &&
                             std::filesystem::is_empty(fixture.path()),
                         "allocation failure unwinds the staged lease and scratch-file guard");
+}
+
+// #740: every publication failure names the frame, its stage and its cause in words, with a stable
+// stage and cause token, a diagnostic code by kind (timeout, memory, output path, writer), and
+// whether the same request can succeed once other work releases what it held.
+void testPublicationFailureDescriptions(Expectations& expectations) {
+    using Kind = host::FrameExportPublicationFailureKindV1;
+    using Stage = host::FrameExportPublicationStageV1;
+    const auto check = [&](const host::FrameExportPublicationFailureV1& failure, const Kind kind,
+                           const std::string_view stage, const std::string_view cause,
+                           const std::string_view words, const bool retryable,
+                           const std::string_view label) {
+        const auto described = host::describeFrameExportPublicationFailureV1(failure, 309);
+        const bool ok = described.kind == kind && described.stage == stage &&
+                        described.cause == cause &&
+                        described.message.find("Frame 309 could not be published ") == 0 &&
+                        described.message.find(words) != std::string::npos &&
+                        described.message.back() == '.' && described.retryable == retryable &&
+                        described.diagnosticCode.starts_with("export.publication.");
+        if (!ok)
+            std::cerr << "  " << label << ": " << described.stage << " / " << described.cause
+                      << " / " << described.diagnosticCode << " / " << described.message << '\n';
+        expectations.expect(ok, label);
+    };
+    check({Stage::Preflight,
+           host::FrameExportResourceExhaustedV1{
+               .requestedBytes = 17ULL * 1024ULL * 1024ULL,
+               .status = output::ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded}},
+          Kind::Memory, "preflight", "memory-refused", "reserve the 17 MiB of memory", true,
+          "a refused scratch reservation names its bytes and is retryable");
+    check({Stage::Preflight,
+           host::FrameExportResourceExhaustedV1{
+               .requestedBytes = 3ULL * 1024ULL * 1024ULL * 1024ULL,
+               .status = output::ExportResourceAdmissionStatusV1::JobAllowanceExceeded}},
+          Kind::Memory, "preflight", "job-allowance-exceeded",
+          "needs 3.0 GiB, more memory than one export may hold", false,
+          "a reservation over the job allowance is not retryable");
+    check({Stage::Preflight, host::FrameExportScratchUnavailableV1{
+                                 .systemError = static_cast<int>(std::errc::permission_denied)}},
+          Kind::OutputPath, "preflight", "scratch-folder-unavailable",
+          "export scratch folder could not be created", false,
+          "an unusable scratch folder is an output-path failure");
+    check({Stage::Preflight, platform::StagedArtifactError::ParentResolutionFailed},
+          Kind::OutputPath, "preflight", "parent-resolution-failed",
+          "the output folder could not be found", false,
+          "a missing output folder is an output-path failure");
+    check({Stage::ArtifactCopy, platform::StagedArtifactError::StageWriteFailed},
+          Kind::OutputPath, "artifact-copy", "stage-write-failed", "check the free disk space",
+          false, "a failed staged write names the disk");
+    check({Stage::Writing, output::PngExportWriteErrorCodeV1::WriteFailed}, Kind::Writer,
+          "writing", "png-write-failed", "export scratch folder", false,
+          "a failed PNG write names the scratch folder");
+    check({Stage::Verifying, output::FlatExrExportWriteErrorCodeV1::VerifyFailed}, Kind::Writer,
+          "verifying", "exr-verify-failed", "did not read back", false,
+          "a failed verification says the file did not read back");
+    check({Stage::Writing,
+           host::FrameExportNoProgressExceededV1{.limit = std::chrono::seconds(120)}},
+          Kind::Timeout, "writing", "no-progress-limit", "limit of 120 s", false,
+          "a no-progress failure names its 120 s limit");
+    check({Stage::Guard, host::PublicationGuardStatus::TargetBusy}, Kind::OutputPath, "guard",
+          "target-busy", "another export is writing the same output file", true,
+          "a busy output file is retryable");
+    check({Stage::Cancelled, std::monostate{}}, Kind::Cancelled, "cancelled", "cancelled",
+          "cancelled", false, "a cancellation says so");
+}
+
+// #740: the scratch folder is created again before every publication, so a cache folder cleared
+// while Bloom runs never fails every later export until Bloom restarts.
+void testScratchFolderRecreatedBeforePublication(Expectations& expectations) {
+    ExportFixture fixture;
+    if (!fixture.setUp(expectations, "scratch recreated: fixture is available"))
+        return;
+    const auto target = fixture.path() / "scratch-recreated.exr";
+    auto attempt = buildApprovableAttempt(expectations, fixture.scheduler(), fixture.artifacts(),
+                                          fixture.ledger(), target);
+    if (!attempt)
+        return;
+    auto approval = host::approveFrameExportV1(fixture.coordinator(), attempt,
+                                               requireDigest(attempt, expectations));
+    expectations.expect(static_cast<bool>(approval), "scratch recreated: approval succeeds");
+    if (!approval)
+        return;
+    const auto scratch = fixture.path() / "cleared-cache" / "export-scratch";
+    expectations.expect(!std::filesystem::exists(scratch.parent_path()),
+                        "scratch recreated: the cache folder is gone before the publication");
+    auto run = beginExportRun(fixture.scheduler(), fixture.artifacts(),
+                              std::move(approval).takeRequest(), scratch);
+    auto* runValue = require(run, expectations, "scratch recreated: the job is submitted");
+    if (!runValue)
+        return;
+    auto resultOpt = awaitExportRun(*runValue);
+    const auto* result =
+        require(resultOpt, expectations, "scratch recreated: the job reaches a terminal state");
+    if (!result)
+        return;
+    expectations.expect(static_cast<bool>(*result) && std::filesystem::exists(target) &&
+                            std::filesystem::is_directory(scratch),
+                        "a removed scratch folder is created again and the frame publishes");
 }

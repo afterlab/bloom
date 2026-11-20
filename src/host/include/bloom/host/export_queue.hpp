@@ -272,6 +272,9 @@ struct ExportFailure final {
     // A short plain headline for the failure code (exportFailureSummary(code)), for a toast,
     // notification or row title; `reason` is the detail sentence.
     std::string summary;
+    // #740: the same request can succeed once other work releases what it held (memory, a busy
+    // output file), with nothing changed in the project or on the disk. An automation may retry.
+    bool retryable = false;
 };
 
 // The headline for a failure code, e.g. "The destination ran out of space."

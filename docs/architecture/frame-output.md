@@ -1050,6 +1050,25 @@ overflow, root refusal, inability to stream within the chunk cap, artifact growt
 deadline expiry, or no-progress expiry fails with a typed resource diagnostic and publishes
 nothing.
 
+A publication failure names its cause (#740). Each payload carries what it needs: a deadline or
+no-progress failure carries the limit it met, a refused scratch reservation carries the bytes it
+asked for and the ledger's admission status, and an unusable scratch folder carries the system
+error. `describeFrameExportPublicationFailureV1` turns any failure into a kind (timeout, memory,
+output path, writer, cancelled or internal), a stage token (`preflight`, `staging`,
+`color-preparing`, `writing`, `verifying`, `artifact-copy`, `guard`), a stable cause token
+(`no-progress-limit`, `memory-refused`, `scratch-folder-unavailable`, `stage-write-failed`,
+`png-write-failed`, ...), the export failure code `export.publication.<kind>`, one sentence that
+names the frame, the stage and the cause ("Frame 309 could not be published while writing it: the
+writer made no progress for longer than the export's limit of 120 s."), and whether the same
+request can succeed once other work releases what it held (memory, a busy output file). The
+export log's `export.publication.detail` entry carries the stage and cause tokens.
+
+The export scratch folder is the caller's (the application keeps it in its per-user cache
+folder), and it is created again before every publication. A cache folder cleared while Bloom runs
+used to fail every later export and capture as "The frame could not be published" until Bloom
+restarted, because the folder was created only at startup (#740). A folder that cannot be created
+fails the frame with `export.publication.output-path` and the system's reason.
+
 Cancellation is checked between operations, scanlines/chunks, write calls, and verification chunks.
 Cancellation before publication removes the private staging artifact and leaves the destination
 unchanged. No partial image or unverified file is reported as successful.
@@ -1202,7 +1221,13 @@ the first and last paths in frame order whatever order the publications finished
 fails stops the export: the frames before it that are already publishing finish and are counted,
 and no later frame is published. A publication refused for scratch memory while other frames of
 the export hold memory releases the later frames unpublished, and the export continues one frame at
-a time, publishing the refused frame and then each later one again. Optional EXR deliverable colour
+a time, publishing the refused frame and then each later one again. A publication refused for
+memory while nothing else of the export holds any (a single frame, a capture) waits at the frame
+boundary like a frame refused at evaluation (ADR 0033 section 9): the export log records
+`export.capacity.waiting` with `stage=publishing` and the bytes asked for, the frame keeps its
+analysed attempt and is published again on the capacity backoff, and a wait in which no other
+processing phase was admitted for 30 seconds stops as `export.capacity.stalled`, which is
+retryable. Such a frame is never failed as a publication failure (#740). Optional EXR deliverable colour
 preparation still runs one frame at a time before the frame's publication. The
 window depth comes from `detail::sequenceExportFramesInFlightV1`, the seam for the measured-capacity
 model (frames that fit in measured free memory minus the headroom preference); until that model is

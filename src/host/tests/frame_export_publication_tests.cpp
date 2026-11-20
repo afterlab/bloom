@@ -47,6 +47,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -105,6 +106,8 @@ int main(const int argc, char** argv) {
         testDeadlineExpiryViaInjectedClock(expectations);
         testNoProgressExpiryViaInjectedClock(expectations);
         testAllocationFailureAfterStagingIsTyped(expectations);
+        testPublicationFailureDescriptions(expectations);
+        testScratchFolderRecreatedBeforePublication(expectations);
         testEndToEndPngExportPublished(expectations);
         testPngSemanticDigestStableAcrossTwoRuns(expectations);
         testBothPresetsExportFromTheSameFixture(expectations);

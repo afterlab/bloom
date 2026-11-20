@@ -710,10 +710,16 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             if (view->state == host::ExportJobState::Stopped || stopping)
                 throw fail(McpToolErrorCode::Cancelled,
                            "The request was cancelled; the job stopped.", {});
-            if (view->state == host::ExportJobState::Failed)
-                throw fail(McpToolErrorCode::ExportFailed,
-                           view->failure ? view->failure->reason : "The export failed.",
-                           view->failure ? view->failure->diagnosticCode : std::string{});
+            if (view->state == host::ExportJobState::Failed) {
+                auto failed = fail(McpToolErrorCode::ExportFailed,
+                                   view->failure ? view->failure->reason : "The export failed.",
+                                   view->failure ? view->failure->diagnosticCode : std::string{});
+                // #740: memory other work held, or a busy output file: the same call can succeed
+                // once it is released, so the refusal says when to try again.
+                if (view->failure && view->failure->retryable)
+                    failed.retryAfterMs = kMcpExportRetryAfterMs;
+                throw failed;
+            }
             TransientResult result;
             result.job = job.value();
             result.log = std::move(log);
