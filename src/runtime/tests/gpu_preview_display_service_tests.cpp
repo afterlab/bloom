@@ -122,8 +122,16 @@ awaitResult(const TaskHandle<Value>& handle, const std::chrono::milliseconds tim
         terminal && service.status().state == runtime::GpuPreviewDisplayServiceState::Ready;
     if (!ready) {
         expectations.expect(!requireDevice, "a device is required but unavailable");
+        return false;
     }
-    return ready;
+    // #750: admission counts a host sample as capacity for ten seconds only, and this fixture has
+    // no sampler. The sample gpuOptions() took aged while the device started (on a busy machine
+    // past those ten seconds), so the first frame waited for a sample that never came. The
+    // fixture's sample is delivered here instead, after startup and right before the frame asks.
+    const auto core = runtime::detail::GpuPreviewDisplayServiceTestAccess::coreOf(service);
+    if (core != nullptr && core->options.processingPhasePolicy != nullptr)
+        runtime::detail::samplePreviewTestPolicy(*core->options.processingPhasePolicy);
+    return true;
 }
 [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
 selectableSize(const runtime::GpuNeutralDisplayQualificationReport& report) {

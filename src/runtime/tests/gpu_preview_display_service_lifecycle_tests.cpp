@@ -460,8 +460,15 @@ runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader) {
     cpuOptions.processingPhasePolicy = sharedOptions.processingPhasePolicy;
     GpuPreviewDisplayService cpuService(scheduler, stage, fallback, cpuOptions);
 
+    // #750: admission counts a host sample as capacity for ten seconds only, and this harness has
+    // no sampler, so its sample is delivered right before each frame asks rather than once before
+    // device startup and a run of frames that together can outlast it on a busy machine.
+    const auto deliverHostSample = [&] {
+        samplePreviewTestPolicy(*sharedOptions.processingPhasePolicy);
+    };
     const auto sample = [&](GpuPreviewDisplayService& service,
                             const PreviewRequestIdentity& identity) -> std::optional<double> {
+        deliverHostSample();
         const auto start = std::chrono::steady_clock::now();
         auto submission = service.submit(TaskRequest("benchmark",
                                                      TaskOwner{.kind = TaskOwnerKind::Composition,
@@ -477,6 +484,7 @@ runGpuPreviewDisplayBenchmark(const std::filesystem::path& loader) {
             .count();
     };
     const auto usesGpu = [&](const PreviewRequestIdentity& identity) -> bool {
+        deliverHostSample();
         auto submission =
             gpuService.submit(TaskRequest("benchmark-probe",
                                           TaskOwner{.kind = TaskOwnerKind::Composition,
