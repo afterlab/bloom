@@ -10,6 +10,7 @@ target_sources(
         value_primitives.cpp
         field_program.cpp
         film_grain_noise.cpp
+        diagnostic_record.cpp
         dither_pattern.cpp
         camera_shake.cpp
         light_flicker.cpp
@@ -39,6 +40,7 @@ target_sources(
             include/bloom/core/light_flicker.hpp
             include/bloom/core/motion_values.hpp
             include/bloom/core/checked_arithmetic.hpp
+            include/bloom/core/diagnostic_record.hpp
             include/bloom/core/color.hpp
             include/bloom/core/float_chars.hpp
             include/bloom/core/floating_point.hpp
