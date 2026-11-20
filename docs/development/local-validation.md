@@ -35,12 +35,38 @@ CTest names are checked against the configured inventory before execution.
 ### Device tests
 
 A CTest case labelled `device` touches the GPU (for example the Python and embedding scripting
-tests, which render through the GPU export provider). The runner refuses to execute one unless the
-machine GPU lock is serialized: pass `--gpu-lock-file` (or set `BLOOM_LOCAL_GPU_LOCK_FILE`) and the
+tests, which render through the GPU export provider), and so does every case labelled `compositor`
+(see below). The runner refuses to execute one unless the machine GPU lock is serialized: pass `--gpu-lock-file` (or set `BLOOM_LOCAL_GPU_LOCK_FILE`) and the
 runner takes that lock before the build lock -- the same order as wrapping a native run in the GPU
 lock, so concurrent runs cannot deadlock -- or pass `--gpu-lock-held` when the caller already holds
 it (never both: a second acquisition from inside a wrapper would wait on itself). Every run already
 removes `DISPLAY` and `WAYLAND_DISPLAY` and uses the offscreen Qt platform.
+
+### Compositor tests
+
+A build tree configured with `BLOOM_ENABLE_COMPOSITOR_TESTS=ON` (pass `--compositor-tests` with a
+milestone `--configure`) registers the tests labelled `compositor`, which present through a real
+Wayland session. The runner gives them their own: on Linux it starts a private headless Weston
+(`weston --backend=headless --renderer=gl`) on its own socket in a new private folder (mode 0700,
+under the temporary folder, or under the user's runtime folder or `/tmp` when that path would be too
+long for a socket address), runs the tests inside it with `QT_QPA_PLATFORM=wayland` and that socket
+as `WAYLAND_DISPLAY`, and stops the compositor's whole process group and removes the folder when they
+finish. The user's own display is never used: `DISPLAY` and `WAYLAND_DISPLAY` are removed first.
+
+A milestone `--all` on such a tree runs the offscreen suite without the `compositor` label, then the
+whole label in the session; a focused or named run sends each named `compositor` test to the
+session and the rest to the offscreen run. The session's output is `compositor-session.log` and the
+tests' `compositor-tests.log` and `compositor-tests.xml` beside the other logs; the report's
+`compositor` entry gives their status. When no session can be started (not Linux, no `weston`, or
+Weston exits or opens no socket), the compositor tests are `NotRun` with the reason, and the run is
+`NotRun` and exits nonzero even if everything else passed. The runner has no private session on
+macOS or Windows, so a tree configured with the option there reports its compositor tests `NotRun`.
+
+```sh
+python3 tools/local/sprint_validation.py milestone \
+  --level desktop --build-dir build/sprint-desktop --configure --compositor-tests --all \
+  --jobs 2 --gpu-lock-file /path/to/gpu.lock
+```
 
 ## Explicit milestone gates
 
@@ -91,12 +117,11 @@ timeout state, build configuration and dependency provenance. The native gate's 
 per-test native statuses.
 
 The runner removes inherited `DISPLAY` and `WAYLAND_DISPLAY` and forces Qt offscreen with Fusion
-styling. It does not currently launch a private compositor. A GUI gate that needs one requires a
-separately controlled environment and an explicit runner extension; the user's desktop display is
-never selected implicitly.
+styling. Tests that need a compositor run only inside the runner's own private session (see
+"Compositor tests" above); the user's desktop display is never selected.
 
-Missing tests, missing JUnit evidence, failed commands, skipped CTest cases and native `NotRun`
-cannot produce `Passed`. A lock conflict or unavailable configured build is `NotRun` and exits
+Missing tests, missing JUnit evidence, failed commands, skipped CTest cases, native `NotRun` and
+compositor tests without a session cannot produce `Passed`. A lock conflict or unavailable configured build is `NotRun` and exits
 nonzero. Timeouts terminate the process group. The runner has no remote execution or Actions
 dispatch path: it rejects non-ccache compiler launchers and known remote compiler wrappers, and
 clears ccache remote-storage and prefix-command settings for commands it launches.
@@ -116,7 +141,7 @@ injected.
 |---|---|---|---|
 | `STRESS` | `stress` | `BLOOM_ENABLE_STRESS_TESTS` | large sizes, long fills, soaks, real-machine memory |
 | `BENCH` | `bench` | `BLOOM_ENABLE_BENCH_TESTS` | benchmark programs kept runnable at a smoke size |
-| `COMPOSITOR` | `compositor` | `BLOOM_ENABLE_COMPOSITOR_TESTS` | tests that need a private compositor session |
+| `COMPOSITOR` | `compositor` | `BLOOM_ENABLE_COMPOSITOR_TESTS` | tests that need a private compositor session (the runner starts one on Linux) |
 
 All three options are off by default and the programs still build. A `COMPOSITOR` test would only
 exit as skipped without its session, so it is not registered at all unless the session is provided:

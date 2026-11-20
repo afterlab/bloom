@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from argparse import Namespace
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -160,6 +161,133 @@ class SprintValidationTests(unittest.TestCase):
                 with self.assertRaisesRegex(runner.ValidationError, "on hardware"):
                     runner.run_milestone(args, report, {}, root, root / "build")
             self.assertEqual(report["native"]["status"], "NotRun")
+
+    def test_configure_registers_compositor_tests_on_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = Namespace(dependency_mode="developer-system", generator="Ninja",
+                             config="RelWithDebInfo", level="desktop", python_executable=None,
+                             compositor_tests=True)
+            command = runner.configure_command(args, root, root / "build", None, None)
+            self.assertIn("-DBLOOM_ENABLE_COMPOSITOR_TESTS=ON", command)
+            args.compositor_tests = False
+            command = runner.configure_command(args, root, root / "build", None, None)
+            self.assertNotIn("-DBLOOM_ENABLE_COMPOSITOR_TESTS=ON", command)
+
+    def test_compositor_label_is_split_from_the_offscreen_suite(self):
+        build = Path("build")
+        offscreen = runner.ctest_command(build, "Release", 2, Path("all.xml"), None,
+                                         exclude_label=runner.COMPOSITOR_LABEL)
+        self.assertEqual(offscreen[offscreen.index("-LE") + 1], "^compositor$")
+        session = runner.ctest_command(build, "Release", 2, Path("c.xml"), None,
+                                       label=runner.COMPOSITOR_LABEL)
+        self.assertEqual(session[session.index("-L") + 1], "^compositor$")
+        self.assertNotIn("-LE", session)
+
+    def test_compositor_tests_without_a_session_are_not_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = Namespace(config="Release", jobs=1, test_timeout_seconds=5)
+            report = {"commands": [], "tests": []}
+
+            def never(*unused_args):
+                raise AssertionError("no test may run without a compositor session")
+
+            with patch.object(runner, "execute", side_effect=never):
+                with self.assertRaises(runner.SessionUnavailable):
+                    runner.run_compositor_tests(args, report, {}, root, root / "build",
+                                                ["bloom.ui.example"],
+                                                weston=str(root / "missing-weston"))
+            self.assertEqual(report["compositor"]["status"], "NotRun")
+            self.assertTrue(report["compositor"]["reason"])
+            self.assertEqual(report["tests"], [])
+
+    def test_a_run_whose_compositor_session_is_missing_is_not_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            build = root / "build"
+            build.mkdir()
+            (build / "CMakeCache.txt").write_text(
+                f"CMAKE_HOME_DIRECTORY:INTERNAL={runner.ROOT}\nBUILD_TESTING:BOOL=ON\n"
+                "CMAKE_BUILD_TYPE:STRING=Release\nBLOOM_BUILD_DESKTOP:BOOL=ON\n"
+                "BLOOM_DEPENDENCY_MODE:STRING=developer-system\n")
+            output = root / "report.json"
+
+            def unavailable(*unused_args):
+                raise runner.SessionUnavailable("weston is not installed")
+
+            with patch.object(runner, "run_milestone", side_effect=unavailable):
+                code = runner.main(["milestone", "--level", "desktop", "--all", "--build-dir",
+                                    str(build), "--config", "Release", "--dependency-mode",
+                                    "developer-system", "--lock-file", str(root / "lock"),
+                                    "--gpu-lock-held", "--output", str(output)])
+            report = json.loads(output.read_text())
+            self.assertNotEqual(code, 0)
+            self.assertEqual(report["status"], "NotRun")
+            self.assertIn("compositor session", report["error"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the private compositor session is provided on Linux only")
+    def test_private_session_is_its_own_and_ends_with_the_run(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = root / "weston-args.json"
+            weston = root / "weston"
+            # A stand-in that opens its socket the way Weston does and then runs until stopped.
+            weston.write_text(
+                f"#!{sys.executable}\n"
+                "import json, os, pathlib, sys, time\n"
+                "socket = next(a.split('=', 1)[1] for a in sys.argv if a.startswith('--socket='))\n"
+                f"pathlib.Path({str(record)!r}).write_text(json.dumps("
+                "{'argv': sys.argv[1:], 'pid': os.getpid(), "
+                "'display': os.environ.get('DISPLAY'), "
+                "'wayland': os.environ.get('WAYLAND_DISPLAY')}))\n"
+                "(pathlib.Path(os.environ['XDG_RUNTIME_DIR']) / socket).touch()\n"
+                "time.sleep(600)\n")
+            weston.chmod(0o755)
+            inherited = {"DISPLAY": ":0", "WAYLAND_DISPLAY": "wayland-0", "PATH": os.environ["PATH"]}
+            with runner.private_compositor_session(root, inherited, str(weston)) as env:
+                runtime = Path(env["XDG_RUNTIME_DIR"])
+                self.assertEqual(runtime.stat().st_mode & 0o777, 0o700)
+                self.assertTrue((runtime / env["WAYLAND_DISPLAY"]).exists())
+                self.assertNotEqual(env["WAYLAND_DISPLAY"], "wayland-0")
+                self.assertNotIn("DISPLAY", env)
+                self.assertEqual(env["QT_QPA_PLATFORM"], "wayland")
+                started = json.loads(record.read_text())
+            self.assertIn("--backend=headless", started["argv"])
+            self.assertIsNone(started["display"])
+            self.assertIsNone(started["wayland"])
+            self.assertFalse(runtime.exists())
+            with self.assertRaises(ProcessLookupError):
+                os.kill(started["pid"], 0)
+
+    def test_session_folder_fits_a_socket_address_under_a_long_temporary_folder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            long = Path(directory) / ("x" * 120)
+            long.mkdir()
+            short = Path(directory) / "run"
+            short.mkdir()
+            socket = "bloom-123456"
+            with patch.object(runner.tempfile, "gettempdir", return_value=str(long)):
+                parent = runner.session_runtime_parent({"XDG_RUNTIME_DIR": str(short)}, socket)
+            if len(str(short)) + runner.SESSION_FOLDER_LENGTH + 1 + len(socket) <= 107:
+                self.assertEqual(parent, str(short))
+            else:
+                self.assertEqual(parent, "/tmp")
+            self.assertLessEqual(len(parent) + runner.SESSION_FOLDER_LENGTH + 1 + len(socket), 107)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "the private compositor session is provided on Linux only")
+    def test_a_compositor_that_exits_at_once_is_no_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            weston = root / "weston"
+            weston.write_text(f"#!{sys.executable}\nraise SystemExit(3)\n")
+            weston.chmod(0o755)
+            with self.assertRaisesRegex(runner.SessionUnavailable, "exited with 3"):
+                with runner.private_compositor_session(root, {"PATH": os.environ["PATH"]},
+                                                       str(weston)):
+                    pass
 
 
 if __name__ == "__main__":

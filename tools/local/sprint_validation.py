@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
@@ -29,6 +30,10 @@ FOCUSED_FORBIDDEN_TARGETS = {"all", "clean", "help", "install", "package", "test
 
 class ValidationError(Exception):
     pass
+
+
+class SessionUnavailable(ValidationError):
+    """No private compositor session could be started: its tests are NotRun, never Passed."""
 
 
 def utc_now() -> str:
@@ -174,6 +179,8 @@ def configure_command(args: argparse.Namespace, root: Path, build_dir: Path,
         command.append("-DCMAKE_BUILD_TYPE=" + args.config)
     if args.level == "native":
         command.append("-DBLOOM_RENDER_ENABLE_VULKAN=ON")
+    if getattr(args, "compositor_tests", False):
+        command.append("-DBLOOM_ENABLE_COMPOSITOR_TESTS=ON")
     if prefix:
         command += ["-DBLOOM_DEPENDENCY_PREFIX=" + str(prefix), "-DCMAKE_PREFIX_PATH=" + str(prefix)]
     if args.python_executable:
@@ -265,6 +272,10 @@ def parse_junit(path: Path, expected_names: set[str] | None) -> dict:
 
 
 DEVICE_LABEL = "device"
+# Tests that need a private compositor session (BLOOM_ENABLE_COMPOSITOR_TESTS). They present on
+# the GPU, so they are serialized like `device` tests, and run only inside the runner's own session.
+COMPOSITOR_LABEL = "compositor"
+GPU_LABELS = {DEVICE_LABEL, COMPOSITOR_LABEL}
 
 
 def test_inventory(report: dict, build_dir: Path, config: str, env: dict[str, str],
@@ -288,9 +299,10 @@ def test_inventory(report: dict, build_dir: Path, config: str, env: dict[str, st
 
 
 def require_device_serialization(args: argparse.Namespace, needs_device: bool) -> None:
-    """Tests labelled `device` touch the GPU and must never share it with another run."""
+    """Tests labelled `device` or `compositor` touch the GPU and must never share it with another
+    run."""
     if needs_device and not args.gpu_lock_file and not args.gpu_lock_held:
-        raise ValidationError("Tests labelled `device` need --gpu-lock-file (or "
+        raise ValidationError("Tests labelled `device` or `compositor` need --gpu-lock-file (or "
                               "BLOOM_LOCAL_GPU_LOCK_FILE), or --gpu-lock-held when the caller "
                               "already holds the machine GPU lock")
 
@@ -313,17 +325,117 @@ def device_tests_requested(args: argparse.Namespace, build_dir: Path) -> bool:
                                      for value in prop.get("value", [])}
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError):
         return True  # Unknown inventory: serialize conservatively.
-    return any(DEVICE_LABEL in labels.get(name, {DEVICE_LABEL}) for name in args.test)
+    return any(GPU_LABELS & labels.get(name, {DEVICE_LABEL}) for name in args.test)
 
 
 def ctest_command(build_dir: Path, config: str, jobs: int, junit: Path,
-                  exact_names: list[str] | None) -> list[str]:
+                  exact_names: list[str] | None, label: str | None = None,
+                  exclude_label: str | None = None) -> list[str]:
     command = ["ctest", "--test-dir", str(build_dir), "-C", config,
                "--output-on-failure", "--no-tests=error", "--parallel", str(jobs),
                "--output-junit", str(junit)]
     if exact_names:
         command += ["-R", "^(" + "|".join(re.escape(name) for name in exact_names) + ")$"]
+    if label:
+        command += ["-L", "^" + re.escape(label) + "$"]
+    if exclude_label:
+        command += ["-LE", "^" + re.escape(exclude_label) + "$"]
     return command
+
+
+# A Unix socket address holds 107 bytes and a terminating null; mkdtemp adds "/bloom-wl-" and
+# eight characters.
+SOCKET_PATH_LIMIT = 107
+SESSION_FOLDER_LENGTH = len("/bloom-wl-") + 8
+
+
+def session_runtime_parent(env: dict[str, str], socket: str) -> str | None:
+    """Where the session's own folder goes: the temporary folder when the socket path fits under
+    it, else the user's runtime folder, else /tmp. Only a new private folder is made there."""
+    for parent in (tempfile.gettempdir(), env.get("XDG_RUNTIME_DIR"), "/tmp"):
+        if parent and Path(parent).is_dir() and (
+                len(parent) + SESSION_FOLDER_LENGTH + 1 + len(socket) <= SOCKET_PATH_LIMIT):
+            return parent
+    raise SessionUnavailable("no temporary folder is short enough for a Wayland socket path")
+
+
+@contextmanager
+def private_compositor_session(logs: Path, env: dict[str, str], weston: str | None = None,
+                               start_timeout_seconds: float = 30.0):
+    """A private headless Weston on its own socket and runtime folder, never the user's display.
+
+    Yields the environment its clients run in and stops the compositor (its whole process group)
+    and removes its folder on exit. Raises SessionUnavailable when no session can be started.
+    """
+    if not sys.platform.startswith("linux"):
+        raise SessionUnavailable("a private compositor session is provided on Linux only")
+    executable = weston or shutil.which("weston")
+    if not executable:
+        raise SessionUnavailable("weston is not installed")
+    session_env = dict(env)
+    session_env.pop("DISPLAY", None)
+    session_env.pop("WAYLAND_DISPLAY", None)
+    socket = f"bloom-{os.getpid()}"
+    runtime = Path(tempfile.mkdtemp(prefix="bloom-wl-",
+                                    dir=session_runtime_parent(env, socket)))
+    runtime.chmod(0o700)
+    session_env["XDG_RUNTIME_DIR"] = str(runtime)
+    log_path = logs / "compositor-session.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    process = None
+    try:
+        with log_path.open("wb") as log:
+            try:
+                process = subprocess.Popen(
+                    [executable, "--backend=headless", "--renderer=gl", f"--socket={socket}",
+                     "--width=1920", "--height=1080", "--idle-time=0"],
+                    env=session_env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            except OSError as error:
+                raise SessionUnavailable(f"weston could not start: {error}") from error
+        started = time.monotonic()
+        while not (runtime / socket).exists():
+            if process.poll() is not None:
+                raise SessionUnavailable(
+                    f"weston exited with {process.returncode} before opening its socket; "
+                    f"see {log_path}")
+            if time.monotonic() - started >= start_timeout_seconds:
+                raise SessionUnavailable(f"weston opened no socket; see {log_path}")
+            time.sleep(0.05)
+        client_env = dict(session_env)
+        client_env["WAYLAND_DISPLAY"] = socket
+        client_env["QT_QPA_PLATFORM"] = "wayland"
+        yield client_env
+    finally:
+        if process is not None:
+            terminate_process_tree(process)
+        shutil.rmtree(runtime, ignore_errors=True)
+
+
+def run_compositor_tests(args: argparse.Namespace, report: dict, env: dict[str, str], logs: Path,
+                         build_dir: Path, names: list[str], whole_label: bool = False,
+                         weston: str | None = None) -> None:
+    """Runs these `compositor` tests (with `whole_label`, the label's every test) inside a private
+    session. Without a session they are NotRun."""
+    if not names:
+        return
+    report["compositor"] = {"status": "NotRun", "tests": len(names)}
+    try:
+        with private_compositor_session(logs, env, weston) as session_env:
+            junit = logs / "compositor-tests.xml"
+            command = (ctest_command(build_dir, args.config, args.jobs, junit, None,
+                                     label=COMPOSITOR_LABEL)
+                       if whole_label else
+                       ctest_command(build_dir, args.config, args.jobs, junit, names))
+            code = execute(report, command, ROOT, session_env, logs / "compositor-tests.log",
+                           args.test_timeout_seconds)
+    except SessionUnavailable as error:
+        report["compositor"]["reason"] = str(error)
+        raise
+    result = parse_junit(junit, set(names))
+    report["tests"].append({"compositor": True, **result})
+    report["compositor"]["status"] = result["status"] if not code else "Failed"
+    if code or result["status"] != "Passed":
+        raise ValidationError("Compositor tests failed or were skipped")
 
 
 def run_named(args: argparse.Namespace, report: dict, env: dict[str, str], logs: Path,
@@ -350,15 +462,19 @@ def run_named(args: argparse.Namespace, report: dict, env: dict[str, str], logs:
         if missing:
             raise ValidationError("Requested CTest name is absent: " + ", ".join(missing))
         names = list(dict.fromkeys(args.test))
-        junit = logs / "named-tests.xml"
-        command = ctest_command(build_dir, args.config, args.jobs, junit, names)
-        require_device_serialization(args, any(DEVICE_LABEL in inventory[name] for name in names))
-        code = execute(report, command, ROOT, env, logs / "named-tests.log",
-                       args.test_timeout_seconds)
-        result = parse_junit(junit, set(names))
-        report["tests"].append({"names": names, **result})
-        if code or result["status"] != "Passed":
-            raise ValidationError("Named tests failed or were skipped")
+        require_device_serialization(args, any(GPU_LABELS & inventory[name] for name in names))
+        compositor = [name for name in names if COMPOSITOR_LABEL in inventory[name]]
+        offscreen = [name for name in names if COMPOSITOR_LABEL not in inventory[name]]
+        if offscreen:
+            junit = logs / "named-tests.xml"
+            command = ctest_command(build_dir, args.config, args.jobs, junit, offscreen)
+            code = execute(report, command, ROOT, env, logs / "named-tests.log",
+                           args.test_timeout_seconds)
+            result = parse_junit(junit, set(offscreen))
+            report["tests"].append({"names": offscreen, **result})
+            if code or result["status"] != "Passed":
+                raise ValidationError("Named tests failed or were skipped")
+        run_compositor_tests(args, report, env, logs, build_dir, compositor)
 
 
 def run_milestone(args: argparse.Namespace, report: dict, env: dict[str, str], logs: Path,
@@ -392,14 +508,20 @@ def run_milestone(args: argparse.Namespace, report: dict, env: dict[str, str], l
     if execute(report, command, ROOT, env, logs / "build.log", args.build_timeout_seconds):
         raise ValidationError("Milestone build failed")
     junit = logs / "all-tests.xml"
-    command = ctest_command(build_dir, args.config, args.jobs, junit, None)
     inventory = test_inventory(report, build_dir, args.config, env, logs)
-    require_device_serialization(args, any(DEVICE_LABEL in labels for labels in inventory.values()))
+    require_device_serialization(args, any(GPU_LABELS & labels for labels in inventory.values()))
+    # A tree configured with BLOOM_ENABLE_COMPOSITOR_TESTS registers tests that only run inside a
+    # compositor session: the offscreen suite leaves them out and they run in a private session.
+    compositor = sorted(name for name, labels in inventory.items() if COMPOSITOR_LABEL in labels)
+    command = ctest_command(build_dir, args.config, args.jobs, junit, None,
+                            exclude_label=COMPOSITOR_LABEL if compositor else None)
     code = execute(report, command, ROOT, env, logs / "all-tests.log", args.test_timeout_seconds)
-    result = parse_junit(junit, None)
+    expected = set(inventory) - set(compositor)
+    result = parse_junit(junit, expected)
     report["tests"].append(result)
     if code or result["status"] != "Passed":
         raise ValidationError("Milestone CTest suite failed or contains skipped tests")
+    run_compositor_tests(args, report, env, logs, build_dir, compositor, whole_label=True)
 
 
 def atomic_json(path: Path, payload: dict) -> None:
@@ -471,6 +593,10 @@ def run(args: argparse.Namespace) -> int:
             else:
                 run_milestone(args, report, env, logs, build_dir)
             report["status"] = "Passed"
+    except SessionUnavailable as error:
+        # Everything else passed, but the compositor tests could not run: never Passed.
+        report["status"] = "NotRun"
+        report["error"] = "Compositor tests need a private compositor session: " + str(error)
     except (ValidationError, KeyboardInterrupt, OSError) as error:
         report["status"] = "Failed" if report["commands"] else "NotRun"
         report["error"] = str(error) if str(error) else type(error).__name__
@@ -532,6 +658,10 @@ def parser() -> argparse.ArgumentParser:
                            help="Interpreter matching the qualified dependency prefix ABI")
     milestone.add_argument("--ccache", default=os.environ.get("BLOOM_LOCAL_CCACHE"))
     milestone.add_argument("--no-ccache", action="store_true")
+    milestone.add_argument("--compositor-tests", action="store_true",
+                           help="With --configure: register the tests that need a compositor "
+                                "session (BLOOM_ENABLE_COMPOSITOR_TESTS=ON); every run of the "
+                                "tree then runs them inside a private headless Weston session")
     milestone.add_argument("--configure-timeout-seconds", type=int, default=600)
     return command
 
@@ -552,6 +682,8 @@ def main(argv: list[str] | None = None) -> int:
         command.error("--ccache and --no-ccache are mutually exclusive")
     if args.mode == "milestone" and args.level == "native" and (args.all or args.target or args.test):
         command.error("native milestone uses the defined fail-closed GPU gate; omit --all/--target/--test")
+    if args.mode == "milestone" and args.compositor_tests and not args.configure:
+        command.error("--compositor-tests is a configure option; pass it with --configure")
     if args.mode == "milestone" and args.all and (args.target or args.test):
         command.error("--all cannot be combined with named --target or --test")
     if (args.mode == "milestone" and args.level != "native" and not args.all and
