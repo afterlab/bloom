@@ -1056,10 +1056,25 @@ void saveAsPreset(TestContext& context) {
                 return &preset;
         return nullptr;
     };
-    context.expect(bloom::test_support::awaitQtCondition(
-                       "the reloaded catalogue lists the saved preset",
-                       [&] { return findSaved(*reloaded->snapshot()) != nullptr; }),
-                   "the reloaded catalogue lists the saved preset");
+    const bool reloadListed =
+        bloom::test_support::awaitQtCondition("the reloaded catalogue lists the saved preset", [&] {
+            return findSaved(*reloaded->snapshot()) != nullptr;
+        });
+    if (!reloadListed) {
+        // Whether the reload never finished, failed to read the store, or read it without the
+        // preset: an unknown id is refused as StoreUnavailable until the store has loaded.
+        const auto state = reloaded->renameUserPreset("user:not-a-preset", "Probe");
+        std::cerr << "reloaded catalogue: revision=" << reloaded->snapshot()->revision
+                  << " store=" << static_cast<int>(state) << " user presets:";
+        for (const auto& preset : reloaded->snapshot()->presets)
+            if (preset.origin == host::ExportPresetOrigin::User)
+                std::cerr << " \"" << preset.displayName << '"';
+        std::cerr << " files:";
+        for (const auto& entry : QDir(folder.path()).entryInfoList(QDir::Files))
+            std::cerr << ' ' << entry.fileName().toStdString() << '=' << entry.size();
+        std::cerr << '\n';
+    }
+    context.expect(reloadListed, "the reloaded catalogue lists the saved preset");
     const auto snapshot = reloaded->snapshot();
     const auto* persisted = findSaved(*snapshot);
     context.expect(persisted != nullptr && persisted->category == host::ExportPresetCategory::User &&
