@@ -91,7 +91,8 @@ or `-rc.<n>`) ends the run at its first job.
    build. The GPU rule is not run and is reported as not run. Linux is built inside the
    official Ubuntu 22.04 image by digest (`tools/ci/linux-package`). The macOS job also makes
    and inspects the disk image and the installer package, and the Windows job installs,
-   upgrades and uninstalls with the installer (`bloom.package.installers` on each).
+   upgrades and uninstalls with the installer (`bloom.package.installers` on each). Each job
+   also keeps its platform's debug symbols as an artifact (below).
 3. **Clean start** of the Linux files on bare Ubuntu 22.04, Ubuntu 24.04, Debian 12 and
    Fedora 44 images (`tools/ci/linux-package/clean-system.sh`, then `start.sh`): the tar, the
    AppImage, and the install script, which installs, runs and renders through the linked
@@ -117,6 +118,31 @@ or `-rc.<n>`) ends the run at its first job.
    signed yet. A rehearsal ends here. Before it, the macOS job has run the end-to-end update
    test on its own zip (below), and the candidate is not assembled when that failed.
 6. **Sign and publish**, after the approval (below).
+
+## Debug symbols
+
+A crash report's minidump names code addresses only (issue #736,
+[Crash reports](../user-guide/crash-reports.md)). The release builds are configured with
+`BLOOM_DEBUG_SYMBOLS=ON` (`cmake/BloomDebugSymbols.cmake`): the same optimization with debug
+information added, and on Linux a GNU build id in every program. After the package is made, the
+`bloom-debug-symbols` target writes the symbols of each shipped program (the application,
+`bloom-cli`, `bloom-mcp`, the workers, the update helper, `bloom-crash-handler` and the Python
+extension module) into the build's `symbols` folder, and the job uploads it:
+
+| Artifact | What it holds | A minidump's module is matched by |
+| --- | --- | --- |
+| `symbols-linux` | `<program>.debug`, split from the program with `objcopy --only-keep-debug` | the GNU build id |
+| `symbols-macos` | `<program>.dSYM`, made with `dsymutil` | the Mach-O UUID |
+| `symbols-windows` | `<program>.pdb`, written by the linker | the PDB signature and age |
+
+The symbols are never in a package or among the published files: the Linux package is installed
+with its programs stripped, a macOS program's debug information stays in the build's object files
+until `dsymutil` collects it, and a Windows PDB is not installed. The release builds also pass
+the tagged commit as `BLOOM_SOURCE_REVISION`, which every text report names on its `Build:` line.
+
+Workflow artifacts expire after the repository's artifact retention period. Download the three
+`symbols-*` artifacts of each published release from its run and keep them with the release's
+records for as long as testers may send reports from it.
 
 ## The end-to-end update test
 

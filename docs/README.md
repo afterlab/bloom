@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-11-15
+Updated: 2026-11-20
 
 This directory is Bloom's current source of truth. Historical notes outside this repository may
 provide research or rationale, but they are not binding until adopted here.
@@ -88,6 +88,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   importing from it on Linux, macOS and Windows.
 - [Preferences](user-guide/preferences.md) — global preferences, which changes take effect immediately,
   which need a restart, and what is project or session state instead.
+- [Crash reports](user-guide/crash-reports.md) — where Bloom keeps a crash report, what is in
+  it, the notice on the next start, and how to share a report on GitHub.
 - [Memory](user-guide/memory.md) — the RAM and VRAM headroom preferences, how work and caches use
   the rest of the machine, and what actual OS limits apply.
 - [The Toolbar](user-guide/toolbar.md) — the tools, the active tool's options, and aligning

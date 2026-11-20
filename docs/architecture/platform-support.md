@@ -8,7 +8,7 @@ acceptance or rejection, and publication blocked until acceptance. Any other sys
 explicitly as unsupported. Save and open use them with cancellation and progress. What was measured on each platform is in the macOS and Windows
 sections below.
 
-Updated: 2026-11-12
+Updated: 2026-11-20
 
 ## Objective
 
@@ -168,6 +168,94 @@ Windows Defender Firewall and the macOS application firewall from asking the art
 incoming connections. `bloom.platform.loopback-listener` and `bloom.platform.owner-only-secret`
 run on all three platforms.
 
+## Crash Reports
+
+A crash of the application, `bloom-cli` or `bloom-mcp` leaves a minidump and a short text report
+in the per-user crash folder (issue #736; the user guide is
+[Crash reports](../user-guide/crash-reports.md)). Bloom uses Crashpad, a locked dependency built
+from source on all three platforms (`dependencies/superbuild/projects/crashpad.cmake`): the
+CMake-built fork that sentry-native maintains, because upstream Crashpad builds only with GN and
+depot_tools, which no other Bloom dependency needs. `src/crash` holds Bloom's side and keeps Qt
+out; `apps/bloom-crash-handler` is Crashpad's handler entry point built as a Bloom program.
+
+**The handler.** Each program starts the crash reporter (`bloom::crash::startCrashReporter`)
+first thing in `main`, before Qt, the interpreter or the GPU exist. It starts
+`bloom-crash-handler` from beside the program as a separate process; when the program crashes,
+the handler reads the crashed process from outside and writes the minidump, so nothing in the
+crashed process has to work. The minidump holds every thread's stack, the loaded modules and
+the memory around each stack. A program whose handler cannot start (no crash folder, no handler
+beside it, a build without Crashpad) runs on and records nothing; it never fails to start
+because of crash reporting.
+
+| | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| Crash caught by | handlers for the crash signals (SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT and the others Crashpad installs) | the task's Mach exception port, so a signal (an abort) arrives as `EXC_CRASH` | the unhandled-exception filter, and a SIGABRT handler that raises `STATUS_FATAL_APP_EXIT` |
+| Stack overflow | every thread gets an alternate signal stack: Crashpad's for the main thread, and a `pthread_create` wrapper linked into each program for the rest (`thread_signal_stack_linux.cpp`) | the exception is handled out of process and needs none of the crashed thread's stack | the exception filter only hands the exception to the handler process, which writes the minidump |
+| Handler reads the process by | `ptrace`, permitted by the crashed process | the task port | `ReadProcessMemory` |
+| Module identity in the minidump | GNU build id | Mach-O UUID | PDB signature and age |
+
+A process a program starts can inherit its handler on macOS (a child keeps its parent's
+exception ports): such a crash is recognized by its process id and kept, marked as a helper's,
+but never offered as "Bloom quit unexpectedly".
+
+**Nothing leaves the machine.** The handler gets no upload address, uploads are off in the
+database's settings, and Bloom's Crashpad is built with a patch that removes its HTTP transport on
+every platform (`dependencies/patches/crashpad/`), so even a given address could not be used.
+Linux therefore needs no libcurl.
+
+**The text report.** Every running program keeps its text report ready in
+`crashes/sessions/<program>-<process>-<id>.txt`, held open and locked (`flock` on Linux and
+macOS; on Windows a share mode without delete and a lock on one byte past the content, because a
+Windows lock would otherwise keep the handler from reading the file) so that another program's collection can tell a
+running program's file from a crashed one's. It holds the program, version, build (with the
+source revision a release build is given, `BLOOM_SOURCE_REVISION`), platform, OS version, process
+id and start time, the GPU and driver line the Vulkan device bootstrap records once a device
+exists (`bloom::core::recordGpuDevice`), and the last 100 log lines: everything written to
+standard error, and the Qt messages in the application. The file is rewritten as the program
+runs, on ordinary threads. It is handed to the handler as a Crashpad attachment, so the handler
+copies it when the program crashes; nothing is written, allocated or formatted in a signal
+handler.
+
+**Collection and pruning.** The next start of any Bloom program collects on a worker thread
+(never the UI thread): each finished report in Crashpad's database becomes a folder
+`crashes/<date>_<time>_<program>_<id>/` with `minidump.dmp` and `report.txt` (the prepared report
+with the crash's time, exception and minidump name added), and leaves the database. Prepared
+reports of programs that are no longer running are removed. Then the folder is pruned to the 20
+newest crashes, none older than 30 days. A lock file keeps two programs from collecting at once.
+
+**The next-start notice.** The application waits for its own collection off the UI thread, then
+offers the newest crash not yet offered (`src/ui/crash_notice.cpp`): "Bloom quit unexpectedly",
+with Report on GitHub (a new-issue address with the text report only, shortened from the oldest
+log line to fit 8,000 characters, and the minidump shown in its folder to attach by hand), Copy
+Report, Open Crash Folder and Dismiss. It is never modal. Showing it records the offer in the
+crash's folder, so no later start offers that crash again. It is not shown, and nothing is
+recorded, while the session has no window (`QT_QPA_PLATFORM` offscreen or minimal), during the
+package check's run, or while an agent drives the session over MCP (#737); the crash then waits for
+the next interactive start.
+
+| Crash folder | Linux | macOS | Windows |
+| --- | --- | --- | --- |
+| `crashes` in | `$XDG_DATA_HOME/Afterlab/Bloom`, else `~/.local/share/Afterlab/Bloom` | `~/Library/Application Support/Afterlab/Bloom` | `%LOCALAPPDATA%\Afterlab\Bloom` |
+| `bloom-crash-handler` in a package | `bin` | `Bloom.app/Contents/MacOS` | the package folder |
+
+A test never writes into the user's crash folder: `cmake/BloomTesting.cmake` gives every test
+`BLOOM_TEST_CRASH_DIRECTORY` in the build tree, and the reporter takes an absolute value of it as
+the crash folder. Tests: `bloom.crash.reports` (minidump streams, the text report, offering once,
+pruning to 20 and 30 days, the GitHub address, held files), `bloom.crash.child-*` (a child process
+writes through a null pointer on the main thread or on a worker thread, aborts, overflows a worker
+thread's stack, or exits cleanly; the check then collects the folder as the next start does and
+requires one minidump with every thread's stack and the right exception, the text report's lines,
+that the next start offers it and the start after that does not), `bloom.crash.cli-headless`
+(`bloom-cli` crashing inside a script) and `bloom.ui.crash-notice` (the notice is offered once,
+never modal, and not shown when it may not be). They run on Linux, macOS and Windows.
+
+**Symbols.** The release workflow builds with `BLOOM_DEBUG_SYMBOLS` (`cmake/BloomDebugSymbols.cmake`):
+debug information without changing optimization, and the `bloom-debug-symbols` target, which
+writes each shipped program's split debug file (Linux), dSYM (macOS) or PDB (Windows) into the
+build's `symbols` folder. The workflow keeps that folder as an artifact of the run; packages do
+not carry it, and a Linux package is installed stripped
+([Releasing Bloom](../development/releasing.md#debug-symbols)).
+
 ## Build, Test, And Release Matrix
 
 CMake describes targets and feature discovery. Supported builds use the native production-quality
@@ -263,7 +351,7 @@ the same code; only where each part sits differs, and that is written once, in
 
 | Part | Linux | macOS, inside `Bloom.app/Contents` | Windows |
 | --- | --- | --- | --- |
-| Application, `bloom-cli`, `bloom-mcp`, shader tools | `bin` | `MacOS` | the package folder |
+| Application, `bloom-cli`, `bloom-mcp`, crash handler, shader tools | `bin` | `MacOS` | the package folder |
 | Carried libraries | `lib` | `Frameworks` | the package folder |
 | Qt libraries and plugins | `lib/qt/lib`, `lib/qt/plugins` | `Frameworks`, `PlugIns` | the package folder, `qt/plugins` |
 | Color worker | `libexec/bloom` | `MacOS` | the package folder |
@@ -309,8 +397,8 @@ signed macOS bundle stops being valid when a file appears in it.
 
 `cmake/package/check_package.cmake` is the one check for all three platforms. It fails when
 
-- the package lacks a part listed above, or a license file is missing or is not the file the
-  lock records;
+- the package lacks a part listed above (among them `bloom-crash-handler`, without which a
+  crash is not recorded), or a license file is missing or is not the file the lock records;
 - a program or library in the package loads a library that is neither inside the package,
   where the loader would look for it, nor a declared part of the operating system, or carries
   a library search path that leads outside the package;
@@ -346,8 +434,8 @@ loads the library at run time and links nothing of it, so a package without it s
 the same and only has no platform updater.
 
 The `bloom.package.check` test runs the check on the package of the build and then on a copy
-broken in each way that matters: the interpreter removed, a license file removed or changed, a
-program made to load a library from outside, a program given a search path outside the
+broken in each way that matters: the interpreter removed, a license file removed or changed, the
+crash handler removed, a program made to load a library from outside, a program given a search path outside the
 package, and on Linux one of the carried distribution libraries removed.
 
 A rule for releases, `release`, is never part of the default rules. It asks the packaged

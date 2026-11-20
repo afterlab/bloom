@@ -2,7 +2,7 @@
 
 Status: accepted
 
-Updated: 2026-11-04
+Updated: 2026-11-20
 
 Bloom's mechanical interface contract is owned here and implemented by `src/ui/kit`.
 [ADR 0021](../decisions/0021-ui-grammar.md) records its rationale and extension procedure.
@@ -2053,6 +2053,17 @@ hold is offered once, before the artist starts editing: "Bloom closed unexpected
 changes. Recover the unsaved changes from `<file>`?" with Yes/No. Yes opens that file through the
 ordinary Open flow, unsaved-change prompt included; No leaves it alone. Nothing is offered when the
 last shutdown was clean, and a recovery file older than its saved project is never offered.
+
+After a crash of the application, `bloom-cli` or `bloom-mcp`, the next start of the application
+shows one notice, `crashReportNotice` (issue #736; [Crash reports](../user-guide/crash-reports.md)):
+the heading "Bloom quit unexpectedly", a warning tone, and a detail that names the program and when
+it quit, says that nothing was sent anywhere, and counts any other crashes since the last notice.
+Its buttons are Report on GitHub (accept: opens a prefilled new issue in the browser and shows the
+minidump in its folder, then closes), Copy Report and Open Crash Folder (apply and reset: they act
+and leave the notice open), and Dismiss (reject, the default, so Return and Escape dismiss). It is
+the one prompt that is never modal, because it may appear while an agent is already working; it is
+not shown at all in a session without a window or one an agent drives, and each crash is offered
+once, whichever button closes it.
 
 ## Memory Pressure Message
 
