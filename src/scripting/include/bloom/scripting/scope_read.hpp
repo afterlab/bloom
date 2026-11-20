@@ -144,7 +144,8 @@ struct ScopeWarmHit final {
 struct ScopeReadPorts final {
     // The scheduler the read's one task runs on. It must outlive the call. Required.
     runtime::TaskScheduler* scheduler = nullptr;
-    // Polled by the calling thread while the task runs; true cancels it, inside a frame too.
+    // Polled by the calling thread before the task starts and while it runs; true cancels it,
+    // inside a frame too. A read it cancels before the task starts measures nothing.
     std::function<bool()> cancelled;
     // Called on the calling thread after each finished frame with (frames done, frames total).
     std::function<void(std::uint64_t done, std::uint64_t total)> progress;

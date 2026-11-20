@@ -196,8 +196,8 @@ reference(const Fixture& bars, const std::uint64_t frame,
             packing.displayName = prepared.color->display();
             packing.viewName = prepared.color->view();
             packing.allowRgb10A2 = true;
-            const auto packedFrame = runtime::CpuQualifiedDisplayPreparer(*processor).prepare(
-                evaluated.frame(), packing, {});
+            const auto packedFrame = runtime::CpuQualifiedDisplayPreparer(*processor)
+                                         .prepare(evaluated.frame(), packing, {});
             const bool packed =
                 packedFrame.status() == runtime::QualifiedDisplayPreparationStatus::Prepared &&
                 packedFrame.frame() != nullptr;
@@ -563,12 +563,27 @@ void rangeProgressAndCancel(const Bars& bars, Reads& reads) {
                contains(cancelled.error.message, "cancelled"),
            "a cancelled range answers the cancelled outcome");
 
-    // A read cancelled before it starts never measures.
+    // A read cancelled before it starts never measures (#750). The port answers only once the
+    // scheduler has no work: on a busy machine the read's worker can run every frame before the
+    // calling thread first asks, and this port forces that order whenever the read asks after it
+    // has submitted its task. Asked before, it answers at once.
     auto immediate = reads.ports();
-    immediate.cancelled = [] { return true; };
+    std::atomic<int> measuredAfterCancel{0};
+    immediate.cancelled = [&reads] {
+        (void)bloom::test_support::awaitCondition("the read's task has finished",
+                                                  [&] { return reads.scheduler.isQuiescent(); });
+        return true;
+    };
+    immediate.warm =
+        [&measuredAfterCancel](
+            const scripting::ScopeWarmQuery&) -> std::optional<scripting::ScopeWarmHit> {
+        measuredAfterCancel.fetch_add(1);
+        return std::nullopt;
+    };
     const auto none = scripting::readScopes(*bars.session, request, immediate);
     expect(none.error.status == scripting::ScopeReadStatus::Cancelled && none.frames.empty(),
            "a read cancelled at once answers cancelled with no frames");
+    expect(measuredAfterCancel.load() == 0, "a read cancelled at once never reaches a frame");
 }
 
 void warmSidecars(const Bars& bars, Reads& reads) {

@@ -583,9 +583,8 @@ struct Job final {
             const auto& counters = hit->frame->displayCounters();
             if (stored && counters) {
                 auto counted = runtime::measureScopeStoredFrameCpu(
-                    *stored, settings, render::ScopeTableReduction{}, color, [&cancellation] {
-                        return cancellation.isCancellationRequested();
-                    });
+                    *stored, settings, render::ScopeTableReduction{}, color,
+                    [&cancellation] { return cancellation.isCancellationRequested(); });
                 if (counted.status == runtime::ScopeFrameStatus::Cancelled)
                     return fail(ScopeReadStatus::Cancelled, {}, "The read was cancelled");
                 if (counted.status == runtime::ScopeFrameStatus::Measured ||
@@ -806,6 +805,12 @@ ScopeReadResult readScopes(const Session& session, ScopeReadRequest request,
         }
     }
     job.request = std::move(request);
+
+    // #750: a read already cancelled is never started. Asked only after the submission, the
+    // answer raced the task: on a busy machine the worker could measure every frame before this
+    // thread's first turn passed the cancel on.
+    if (ports.cancelled && ports.cancelled())
+        return refused(job.request, ScopeReadStatus::Cancelled, {}, "The read was cancelled");
 
     // One task on the caller's scheduler; this thread forwards progress and cancellation.
     const auto total = job.request.lastFrame - job.request.firstFrame + 1;

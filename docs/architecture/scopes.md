@@ -530,8 +530,9 @@ as the frame's own work and lengthen a Working frame job by their device time.
 scheduler that resolves the color configuration, chooses the display and view (the configuration's
 own defaults, never the Viewer's inspection settings), compiles the plan once and measures each
 frame through `measureScopeFrame` ("Headless reads"), at the full table size, with the same CPU/GPU
-parity as the frame pipeline. The caller's cancellation is polled while the task runs and reaches
-inside a frame. Tables are described as flat arrays (dense, or the non-zero cells as index and count
+parity as the frame pipeline. The caller's cancellation is asked before the task is submitted (a
+read already cancelled never starts and measures nothing, however soon a worker would have run it)
+and polled while the task runs, reaching inside a frame. Tables are described as flat arrays (dense, or the non-zero cells as index and count
 pairs), a summary is `summarizeScopes` of the tables, and a picture is `renderScopePicture` or
 `renderAllScopesPicture` encoded with `encodeScopePng`, so a picture equals what the panel draws.
 
