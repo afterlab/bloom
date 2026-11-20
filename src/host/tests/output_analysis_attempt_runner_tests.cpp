@@ -1,3 +1,4 @@
+#include "await.hpp"
 #include "fixed_memory_budget.hpp"
 #include "gpu_export_provider_test_access.hpp"
 #include "output_analysis_attempt_jpeg_fixture.hpp"
@@ -88,6 +89,7 @@ int main(const int argc, char** argv) {
     testCapturedFinalColorIntentLifetime(expectations);
     testProcessingAdmissionBeforeCpuFallback(expectations);
     testCancellationBeforeResolvingCompletes(expectations);
+    testCancellationAfterResolvingFinishedCompletes(expectations);
     testResourceExhaustionIsTypedWithZeroLeak(expectations);
     testGpuExportProviderDisabledFallback(expectations);
     testOwnedPoolRetentionSessions(expectations);

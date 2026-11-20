@@ -208,6 +208,48 @@ void testCancellationBeforeResolvingCompletes(Expectations& expectations) {
                         "cancel: the typed failure is marked cancelled");
 }
 
+// #750: the cancellation lands after the Resolving task has already finished, as it can on a busy
+// machine when the worker runs Resolving before the owner gets to cancel. The attempt must still
+// end cancelled, never evaluate and complete.
+void testCancellationAfterResolvingFinishedCompletes(Expectations& expectations) {
+    TempDirectory directory;
+    expectations.expect(directory.isValid(), "late cancel: temp directory is available");
+    if (!directory.isValid()) {
+        return;
+    }
+    runtime::TaskScheduler scheduler;
+    auto artifacts = platform::StagedArtifactCoordinator::create({});
+    expectations.expect(artifacts.succeeded(),
+                        "late cancel: staged-artifact coordinator is created");
+    if (!artifacts) {
+        return;
+    }
+    auto coordinator = std::move(artifacts).takeCoordinator();
+    output::ExportResourceLedgerV1 ledger;
+
+    auto begin = host::beginOutputAnalysisAttemptV1(scheduler, coordinator, ledger,
+                                                    requestFor(directory.path() / "late.exr"));
+    expectations.expect(static_cast<bool>(begin), "late cancel: begin submits the Resolving task");
+    if (!begin) {
+        return;
+    }
+    auto runner = std::move(begin).takeHandle();
+    // Only reads the scheduler's own task state; tryComplete() is not called before the cancel.
+    expectations.expect(bloom::test_support::awaitCondition("the Resolving task finishes",
+                                                            [&] { return runner.isReady(); }),
+                        "late cancel: the Resolving task finishes before the cancel");
+    runner.requestCancellation();
+    auto outcome = pumpUntilComplete(runner);
+    expectations.expect(outcome.has_value(), "late cancel: the attempt reaches a terminal outcome");
+    if (!outcome.has_value()) {
+        return;
+    }
+    expectations.expect(!*outcome, "late cancel: the attempt does not complete");
+    const auto* failure = outcome->failure();
+    expectations.expect(failure != nullptr && failure->cancelled(),
+                        "late cancel: the typed failure is marked cancelled");
+}
+
 void testResourceExhaustionIsTypedWithZeroLeak(Expectations& expectations) {
     TempDirectory directory;
     expectations.expect(directory.isValid(), "resource exhaustion: temp directory is available");

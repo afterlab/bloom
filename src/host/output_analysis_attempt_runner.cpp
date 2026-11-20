@@ -397,6 +397,9 @@ struct OutputAnalysisAttemptRunnerState final {
     // Set once Resolving succeeds and cleared when the Cpu evaluation task is submitted. While it
     // is set, the runner may be deferring on the GPU provider's lazy bootstrap.
     std::shared_ptr<const ResolvedAttemptInputsV1> resolvedInputs;
+    // Set by requestCancellation(). A Resolving task that already finished cannot be cancelled, so
+    // the request is kept and the evaluation stage is never submitted after it (#750).
+    bool cancellationRequested = false;
     bool completed = false;
 };
 
@@ -431,6 +434,7 @@ void OutputAnalysisAttemptRunnerV1::requestCancellation() noexcept {
     if (!state_) {
         return;
     }
+    state_->cancellationRequested = true;
     if (state_->buildHandle.has_value()) {
         state_->buildHandle->cancel();
     } else {
@@ -477,6 +481,16 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 return OutputAnalysisAttemptOutcomeV1::failure(
                     {OutputAnalysisAttemptStageV1::Resolving, false, std::monostate{}});
             }
+        }
+
+        // A cancellation requested after Resolving finished ends the attempt where a cancelled
+        // evaluation task would: the evaluation stage is never submitted, and the resolved target
+        // is released with it (#750).
+        if (state_->cancellationRequested) {
+            state_->resolvedInputs.reset();
+            state_->completed = true;
+            return OutputAnalysisAttemptOutcomeV1::failure(
+                {OutputAnalysisAttemptStageV1::Evaluating, true, std::monostate{}});
         }
 
         // GPU bootstrap gate: defer the evaluation stage until the provider's lazy bootstrap is

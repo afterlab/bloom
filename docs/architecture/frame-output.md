@@ -1011,7 +1011,9 @@ incremental claims remain held until the attempt/job releases the reservation. V
 encoded output also has an explicit cap. An insufficient or overflowing reservation rejects the
 stage before allocation or file creation. Cancellation before
 identity completion publishes no partial identity; cancellation before publication publishes no
-artifact.
+artifact. A cancellation is kept by the attempt, not only sent to its current task: one requested
+after the Resolving task has already finished still ends the attempt cancelled at Evaluating, and
+the evaluation stage is never submitted (#750).
 
 The export worker refreshes the host capacity sample before attempt admission and again before
 each delayed publication's scratch admission. The retained refresh callback owns its provider and
