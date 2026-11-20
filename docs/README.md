@@ -191,9 +191,12 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- v0.1.0-alpha.1, the first alpha, was released on 2026-11-17 with installers for every platform
-  and updates inside Bloom ([installing](user-guide/installing.md)). The three node groups come
-  next, then tests and performance. The [roadmap](roadmap.md) holds the order.
+- v0.1.0-alpha.2 is in preparation: large projects that always save, agent work over MCP that
+  stays quiet and keeps the window responsive at scale, and crash reports kept on the user's
+  machine ([crash reports](user-guide/crash-reports.md)). v0.1.0-alpha.1, the first alpha, was
+  released on 2026-11-17 with installers for every platform and updates inside Bloom
+  ([installing](user-guide/installing.md)). The three node groups come next, then tests and
+  performance. The [roadmap](roadmap.md) holds the order.
 - Projects save, open and round-trip through the deterministic `.bloom` container, with one
   current document schema, preserved unknown data and the File menu driving it
   ([project format](architecture/project-format.md),

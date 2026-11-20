@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-17
+Updated: 2026-11-20
 
 This roadmap records what has shipped, what is queued and in what order, and what is parked. It
 follows the backlog tracker (#384), which owns the
@@ -34,6 +34,13 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
+| Crash reports: Crashpad's out-of-process handler in every package, a text report and a minidump kept on the user's machine, a notice on the next start, debug symbols kept as release-workflow artifacts | #736 |
+| Field-test bugs: a project Bloom lets you build always saves (edits that would make it too large are refused at the edit), Save a Copy names its cause, Corner Pin edge-on streaks, Crop against its picture, capture publication after the cache folder is cleared | #748 #738 #739 #740 |
+| MCP at scale: asynchronous `transact` with idempotency keys and retry hints, subscriptions to coalesced change events, keys for many parameters in one operation | #747 |
+| MCP at scale: request cost, every request limit advertised and named in its refusal | #745 #741 |
+| MCP at scale: commits prepared off the UI thread, keyframe insertion without quadratic scans, undo charged per shared record, panels rebuilt once per frame | #744 |
+| Quiet agent work and agent sessions | #746 |
+| Save and Save As of a large project, with the stage and cause of a failed save | #737 |
 | v0.1.0-alpha.1, the first alpha (2026-11-17): installers on every platform, signed updates checked inside Bloom with the previous version kept, the release workflow, and the new application icon and installer pictures | #734 #670 |
 | Scopes counted from the frame on screen at display time; cached display frames at 10 bits per channel | #733 |
 | Disk cache headroom: a live headroom instead of a fixed budget, loop-resistant eviction, no dropped writes during a RAM Preview fill, video and audio through the cache | #732 |
@@ -61,7 +68,15 @@ and [`plans/production-workflows-release.md`](plans/production-workflows-release
 
 In the tracker's order. Everything starts when the owner gives the go-ahead.
 
-### 1. Node groups
+### 1. The v0.1.0-alpha.2 release
+
+In preparation. It releases what landed since v0.1.0-alpha.1: the save fixes for large projects,
+the MCP work at scale, quiet agent work, the field-test bugs and crash reports (#737 #746 #744
+#745 #741 #747 #748 #738 #739 #740 #736, the rows above v0.1.0-alpha.1 under
+[Recently landed](#recently-landed)). The release notes are its section of
+[`CHANGELOG.md`](../CHANGELOG.md).
+
+### 2. Node groups
 
 Each group is one coherent area with one validation and one landing.
 
@@ -76,7 +91,7 @@ The planned nodes and their delivery levels are in the [node catalogue](product/
 designed in [`architecture/instancing.md`](architecture/instancing.md) under
 [ADR 0023](decisions/0023-instances-and-per-element-data.md).
 
-### 2. Tests
+### 3. Tests
 
 | Issue | What it is |
 | --- | --- |
@@ -86,7 +101,7 @@ designed in [`architecture/instancing.md`](architecture/instancing.md) under
 | #729 | GPU admission policy overwrites the Viewer's recorded device need with another class's grant |
 | #304 | GPU validation: hosted CI, sustained memory tests, LeakSanitizer and native macOS and Windows runs |
 
-### 3. Performance
+### 4. Performance
 
 Waits for benchmarking.
 
