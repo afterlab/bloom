@@ -6,6 +6,58 @@ All notable changes to Bloom are written here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-alpha.2] - 2026-11-20
+
+This alpha makes Bloom dependable for large projects and for agents that build them, and records
+crashes so they can be fixed.
+
+### Added
+
+- Crash reports. When Bloom, `bloom-cli` or `bloom-mcp` quits unexpectedly, a short text report
+  and a minidump are written to a crash folder on your computer. Crash reports stay on your
+  machine: Bloom never sends them anywhere. The next time you start Bloom, it says that Bloom quit
+  unexpectedly and offers to open a prefilled GitHub issue, copy the report or open the crash
+  folder, so you decide what to share. Bloom keeps the 20 newest crashes, none older than 30 days.
+- Quiet agent work. Renders, exports and captures an agent starts over the MCP server play no
+  sound and post no notification one by one, and an agent's refused edit plays no warning. Bloom
+  tells you once what the agent did, while you are in another application. **Sounds and
+  notifications for agent activity** in Preferences turns this summary off.
+- Agent sessions. An agent can open a session that keeps its work quiet, refreshes the Viewer when
+  the session ends and makes the whole session one undo step. Your own edit during a session ends
+  the grouping safely.
+- For agents over MCP: a long edit can run as a job with progress and cancellation, a repeated
+  request with the same key is answered once, a busy answer says when to try again, change
+  events can be followed as a stream instead of polled, and one operation can key many
+  parameters at once, also from Python and `bloom-cli`.
+- Bloom tells an agent every limit on its requests when it connects, and a refused request names
+  the limit, its value and how far the request went past it.
+
+### Changed
+
+- The window stays responsive while an agent builds a large project. Edits are prepared away from
+  the window, adding keyframes no longer slows down as a project grows, and panels redraw at most
+  once per frame during a burst of agent edits.
+- Undo keeps many more steps in large projects, because a step stores only what it changed. When
+  older steps have to go, Bloom says so once, without a warning sound.
+- Requests over the MCP server are much faster: a small request is answered almost at once, and
+  listing the layers of a large composition takes a fraction of a second instead of tens of
+  seconds.
+
+### Fixed
+
+- Save and Save As failed on very large projects, such as one with about 274,000 keyframes. They
+  now save and reopen. Bloom refuses an edit that would make a project too large to save, at the
+  time of the edit and with the reason, so a project you can build always saves.
+- A failed save, Save As or Save a Copy now says at which step it failed and why, in the window
+  and to an agent. On Windows, a save to a path that is a folder now says so.
+- A save started by an agent no longer opens a dialog over the window or leaves Bloom busy for the
+  agent's next request.
+- Corner Pin no longer smears a long vertical streak when a layer is turned almost edge-on.
+- A Crop on an image taller or wider than its composition no longer makes every frame fail. A
+  Crop that removes the whole picture names its node, layer and parameter.
+- A capture or export no longer fails every frame with "could not be published" after the
+  system clears Bloom's cache folder, and a frame that cannot be published says why.
+
 ## [0.1.0-alpha.1] - 2026-11-17
 
 This is the first alpha. Expect rough edges, and keep copies of projects that matter to you.
@@ -53,5 +105,6 @@ This is the first alpha. Expect rough edges, and keep copies of projects that ma
   Windows installer, so `bloom-cli` works from a terminal.
 - A new application icon and new pictures for the macOS disk image and the Windows installer.
 
-[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.1...HEAD
+[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.2...HEAD
+[0.1.0-alpha.2]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.1
