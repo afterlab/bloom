@@ -22,6 +22,10 @@ std::string statusMessage(const commands::CommandResult& result) {
     case CommandStatus::HistoryLimit:
         return "The edit is larger than the undo history can hold; nothing was applied. Split it "
                "into smaller transactions.";
+    case CommandStatus::ProjectTooLarge:
+        return result.capacityRefusal ? result.capacityRefusal->message
+                                      : "The edit would make the project too large to save; "
+                                        "nothing was applied.";
     case CommandStatus::RevisionOverflow:
         return "The project's revision counter is exhausted; nothing was applied. Save and reopen "
                "the project.";
@@ -51,6 +55,8 @@ std::string statusCode(const commands::CommandStatus status) {
         return "bloom.scripting.stale-revision";
     case CommandStatus::HistoryLimit:
         return "bloom.scripting.history-limit";
+    case CommandStatus::ProjectTooLarge:
+        return "bloom.scripting.project-too-large";
     case CommandStatus::ValidationFailed:
         return "bloom.scripting.validation-failed";
     case CommandStatus::NothingToUndo:

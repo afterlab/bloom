@@ -6,10 +6,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <unordered_map>
 
 namespace bloom::document {
 
@@ -280,6 +282,69 @@ canonicalDocumentSize(const CanonicalDocumentV1& document,
 [[nodiscard]] CanonicalDocumentWriteResult
 encodeCanonicalDocument(const CanonicalDocumentV1& document, std::span<char> output,
                         CanonicalDocumentLimits limits = CanonicalDocumentLimits{}) noexcept;
+
+// The scratch one encode of `snapshot` needs (CanonicalDocumentV1's payloadScratch bytes and
+// sortScratch entries), measured from its live collection sizes. `overflow` when a size does not
+// fit in size_t.
+struct CanonicalDocumentScratchRequirements final {
+    std::size_t sortEntries = 0;
+    std::size_t payloadBytes = 0;
+    bool overflow = false;
+};
+[[nodiscard]] CanonicalDocumentScratchRequirements
+canonicalDocumentScratchRequirements(const bloom::document::Snapshot& snapshot) noexcept;
+
+// #748: remembers what each animation curve took of the canonical document, by the curve's shared
+// record, so measuring a project again after an edit walks only the curves the edit replaced.
+// Records are immutable once a snapshot holds them, so a record that is still the same allocation
+// still spells the same JSON; the memo keeps every record it remembers alive, so an address is
+// never reused while it is remembered, and forgets the ones the latest measure did not see. Not
+// used with a RoundTripState (retained members may sit inside a curve). One owner at a time.
+class CanonicalCurveSizeMemo final {
+  public:
+    using Element = CanonicalJsonWriter::CountedElement;
+
+    // For the encoder: the remembered element of `identity`, marked as seen by this measure.
+    [[nodiscard]] const Element* find(const void* identity) noexcept;
+    // For the encoder: remembers what `owner`'s curve took. Out of memory forgets it instead.
+    void remember(std::shared_ptr<const void> owner, const Element& element) noexcept;
+    // Starts a measure; finish() then forgets every curve the measure did not see.
+    void begin() noexcept { ++generation_; }
+    void finish() noexcept;
+    [[nodiscard]] std::size_t size() const noexcept { return entries_.size(); }
+
+  private:
+    struct Entry final {
+        std::shared_ptr<const void> owner;
+        Element element;
+        std::uint64_t seen = 0;
+    };
+    std::unordered_map<const void*, Entry> entries_;
+    std::uint64_t generation_ = 0;
+};
+
+// #748: what the canonical document.json of a request holds, against the reader's limits: its exact
+// bytes, its JSON values, the most entries one array or object has, and its longest string. Fails
+// as canonicalDocumentSize() does, with the same errors, when the document cannot be written within
+// `limits`. `memo` (optional) makes a repeated measure walk only the curves that changed; it is
+// ignored when the request carries a RoundTripState. Allocates its own scratch, so it may throw
+// std::bad_alloc.
+struct CanonicalDocumentMeasure final {
+    std::size_t bytes = 0;
+    std::size_t values = 0;
+    std::size_t largestContainerEntries = 0;
+    std::size_t largestStringBytes = 0;
+};
+struct CanonicalDocumentMeasureResult final {
+    CanonicalDocumentError error = CanonicalDocumentError::None;
+    CanonicalDocumentMeasure measure{};
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return error == CanonicalDocumentError::None;
+    }
+};
+[[nodiscard]] CanonicalDocumentMeasureResult
+measureCanonicalDocument(const CanonicalDocumentV1& document, CanonicalDocumentLimits limits = {},
+                         CanonicalCurveSizeMemo* memo = nullptr);
 
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentFieldPath>);
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentV1>);

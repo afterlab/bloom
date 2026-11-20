@@ -713,6 +713,25 @@ void throwLiveRefusal(const scripting::SessionCommandResult& result, const std::
                       McpLimit::CommitWork, scripting::kLiveCommitWorkLimit, work);
 }
 
+// #748: the session refused an edit that would take the project past what one project file can
+// save and reopen.
+[[noreturn]] void throwProjectTooLarge(const commands::CommandResult& result) {
+    const auto& refusal = result.capacityRefusal;
+    ToolFailure failure(McpToolErrorCode::ProjectTooLarge,
+                        refusal ? refusal->message
+                                : std::string("The edit would make the project too large to save; "
+                                              "nothing was applied."));
+    if (refusal) {
+        for (std::size_t index = 0; index < kMcpLimitCount; ++index) {
+            const auto limit = static_cast<McpLimit>(index);
+            if (describeLimit(limit).name == refusal->limit)
+                failure.limit = ToolFailure::Limit{
+                    .limit = limit, .value = refusal->value, .actual = refusal->actual};
+        }
+    }
+    throw failure;
+}
+
 // A command the session could not run at all.
 void throwUnavailable(const McpCall& call, const scripting::SessionCommandResult& result,
                       const std::size_t work = 0,
@@ -1124,6 +1143,10 @@ yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call
                          core.retryAfterMs(live != nullptr ? live->queuedCommits()
                                                            : scripting::kLiveCommitQueueCapacity));
     }
+    // #748: an edit that would make the project too large to save is refused at the edit, typed,
+    // with the limit it would pass; nothing was applied and the project still saves.
+    if (result.command->status == commands::CommandStatus::ProjectTooLarge)
+        throwProjectTooLarge(*result.command);
     call.committed = true;
     const auto command =
         std::make_shared<const commands::CommandResult>(std::move(*result.command));

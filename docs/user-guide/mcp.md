@@ -92,6 +92,10 @@ same in whole seconds, rounded up.
 | `commitWork`: work in one `transact` (desktop only) | 1,000,000 units | `bloom.mcp.commit-too-large` |
 | `transactOutputs`: created ids a `transact` lists in `outputs` | 10,000 | never refused: answered in the summary form |
 | `asyncJobs`: asynchronous `transact` jobs queued or running, all clients (desktop only) | 16 | `bloom.mcp.jobs-full`, busy |
+| `projectJsonValues`: JSON values the project's `document.json` holds | 6,000,000 | `bloom.mcp.project-too-large` |
+| `projectDocumentBytes`: bytes of the project's `document.json` | 224 MiB | `bloom.mcp.project-too-large` |
+| `projectContainerEntries`: entries in one list of the project (a curve's keyframes, for example) | 999,000 | `bloom.mcp.project-too-large` |
+| `projectStringBytes`: one text value in the project | 64 MiB less 64 KiB | `bloom.mcp.project-too-large` |
 | `retainedEvents`: events kept for `events` and every subscription (the one buffer subscribers share) | 1,024 | never refused: a cursor further behind is told `resetRequired` (reason `overflow`) |
 | `eventsPerAnswer`: events one `events` answer lists (its `limit`) | 1,024 | a larger `limit` is an invalid argument; past it, `truncated` and continue from `sequence` |
 | `eventIntervalMinMs`, `eventIntervalMaxMs`: an `events.subscribe` interval | 50 to 60,000 ms | an invalid argument outside them |
@@ -283,7 +287,9 @@ as stable tokens, for example
 with `copy.`: `copy.admission`, `copy.preflight`, `copy.registration`, `copy.staging`,
 `copy.staged-copy.<step>` (writing, finishing, sizing, reading back and verifying the temporary
 file), `copy.guard` and `copy.publish` (replacing the destination). The project and the file on
-disk are unchanged, so the call can be retried once the cause is fixed. Both servers answer it the
+disk are unchanged, so the call can be retried once the cause is fixed. A project too large for
+one file never gets this far: the edit that would have made it so is refused at the edit with
+`bloom.mcp.project-too-large` (see **Project size** under `transact`). Both servers answer it the
 same way; `bloom-mcp` on stdio copies the file itself and names `copy.staged-copy.stage-write` or
 `copy.publish` with the system's reason.
 
@@ -722,6 +728,19 @@ names where), `bloom.scripting.stale-revision`, `bloom.scripting.history-limit` 
 `bloom.scripting.invalid-argument` (the registry refused an argument). An argument of the wrong
 JSON type is a protocol error whose message starts with `operations[<index>] (<op>)` and gives a
 working example.
+
+**Project size.** A project Bloom lets you build always saves. A `transact` that would make the
+project larger than one project file can save and reopen is refused at the edit with
+`bloom.mcp.project-too-large`, and nothing is applied. Its `diagnostic.limit` names the limit the
+edit would pass (`projectJsonValues`, `projectDocumentBytes`, `projectContainerEntries` or
+`projectStringBytes`, advertised under `limits`), its value and what the project would hold
+(`actual`); when the edit would pass the file format's own limit, `actual` is that limit and the
+message says "at least". The message is the sentence the window shows, for example "The edit was not
+applied: the project would hold 6,008,881 JSON values, more than the 6,000,000 one project file can
+hold. Remove keyframes, layers or compositions you no longer need, or move part of the work into
+another project." The project as it stands still saves, and an edit that does not grow the project
+past the limit (a rename, removing keys) still applies. Bloom measures every edit with the same
+encoder a save uses, so the limit a `transact` meets is the limit the save would have met.
 
 **Compile failures.** After a successful edit, every composition whose evaluation inputs it
 changed is compiled (never rendered); the edit's own commit names them, and a change outside any

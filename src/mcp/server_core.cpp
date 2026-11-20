@@ -3,6 +3,7 @@
 #include "core_internal.hpp"
 
 #include <bloom/platform/owner_only_secret.hpp>
+#include <bloom/project/project_capacity.hpp>
 
 #include <algorithm>
 #include <array>
@@ -198,6 +199,12 @@ yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
         put(McpLimit::CommitWork, scripting::kLiveCommitWorkLimit);
     }
     put(McpLimit::TransactOutputs, kMcpTransactOutputLimit);
+    // #748: what one project file can save and reopen; an edit past one is refused at the edit.
+    constexpr project::ProjectCapacityLimits capacity;
+    put(McpLimit::ProjectJsonValues, capacity.jsonValues);
+    put(McpLimit::ProjectDocumentBytes, capacity.documentBytes);
+    put(McpLimit::ProjectContainerEntries, capacity.containerEntries);
+    put(McpLimit::ProjectStringBytes, capacity.stringBytes);
     // #747 (D1): asynchronous transact and idempotency keys (the jobs need the live session).
     if (live) {
         put(McpLimit::AsyncJobs, kMcpAsyncJobs);
@@ -307,6 +314,7 @@ void McpServerCore::State::record(const commands::CommandEvent& event) {
     kept.expectedRevision = source.expectedRevision;
     kept.label = source.label;
     kept.operationFailures = source.operationFailures;
+    kept.capacityRefusal = source.capacityRefusal;
     kept.warnings = source.warnings;
     kept.validation = source.validation;
     kept.validationOperationIndex = source.validationOperationIndex;

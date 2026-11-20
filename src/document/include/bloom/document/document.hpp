@@ -59,6 +59,7 @@ class Snapshot final {
   private:
     friend class Document;
     friend class Draft;
+    friend class PreparedCommit;
     Snapshot(Revision revision, std::shared_ptr<const detail::DocumentIdentity> identity,
              std::shared_ptr<const detail::DocumentState> state) noexcept
         : revision_(revision), identity_(std::move(identity)), state_(std::move(state)) {}
@@ -152,6 +153,10 @@ class PreparedCommit final {
     [[nodiscard]] const Project& project() const noexcept;
     [[nodiscard]] const void* stateIdentity() const noexcept { return state_.get(); }
     [[nodiscard]] std::size_t rootByteCharge() const noexcept;
+    // #748. The state publication would make current, as a snapshot at the revision after its base,
+    // for a check that reads it before it is published (the project's size against what a save
+    // can write). Shares the frozen state. Only when ready().
+    [[nodiscard]] Snapshot snapshot() const noexcept;
 
   private:
     friend class Document;

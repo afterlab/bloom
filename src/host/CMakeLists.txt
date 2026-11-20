@@ -249,6 +249,19 @@ if(BUILD_TESTING)
             LABELS unit host persistence security
         )
 
+        # #748: builds a project of about 6 million JSON values (a few hundred MiB resident), so
+        # it runs alone.
+        add_executable(bloom_host_project_capacity_test tests/project_capacity_tests.cpp)
+        target_link_libraries(bloom_host_project_capacity_test PRIVATE bloom_host)
+        bloom_enable_warnings(bloom_host_project_capacity_test)
+        bloom_add_test(
+            NAME bloom.host.project-capacity
+            COMMAND bloom_host_project_capacity_test
+            LABELS unit host persistence
+            TIMEOUT 300
+            RUN_SERIAL
+        )
+
         # Gated exactly as bloom.host.session-save is gated: openSessionArchive()'s own
         # full-cycle tests drive saveProjectSession() over the same real
         # platform::StagedArtifactCoordinator to produce a published file to reopen.

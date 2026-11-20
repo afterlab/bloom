@@ -232,6 +232,41 @@ it stays resident. A keyframe-dense project (37.6 bytes of `document.json` per J
 about 300 bytes per JSON value at the peak of its save, so it saves within the default budget up to
 about 7 million values, close to where the `document.json` size limit stops it.
 
+### Project Capacity
+
+A project Bloom lets you build always saves and reopens (#748). The session measures every edit's
+candidate snapshot with the canonical encoder's own counting pass (`measureCanonicalDocument`, the
+same validation and sizing a save runs, writing nothing) and refuses an edit that would take the
+project past `ProjectCapacityLimits` at the edit, before it is published or enters the undo
+history (`CommandStatus::ProjectTooLarge`, with the limit, its value and what the project would
+hold). Undo and redo restore snapshots that were admitted and are not measured. The limits sit
+below the reader limits above by a reserve that covers what a save adds beyond `document.json`
+(sequence digests, the manifest) and keeps a keyframe-dense save's peak (about 300 bytes per JSON
+value) inside the default 2 GiB per-operation budget:
+
+| Admission limit | Value | Reader limit |
+| --- | ---: | ---: |
+| JSON values in `document.json` (`projectJsonValues`) | `6000000` | `8000000` |
+| `document.json` bytes (`projectDocumentBytes`) | 224 MiB (`234881024`) | 256 MiB |
+| entries in one array or object (`projectContainerEntries`) | `999000` | `1000000` |
+| one string (`projectStringBytes`) | 64 MiB less 64 KiB (`67043328` bytes) | 64 MiB |
+
+`project_capacity.hpp` checks these against the reader limits and the save budget at compile time.
+The cap on Bloom's own save check is not lifted instead: the `document.json` byte limit, the reader
+limits and the memory budget would still stop a larger save, so the only refusal that never loses
+work is the one at the edit. An edit that does not grow an exceeded dimension still applies, so a
+project opened above a limit (written by another tool) can still be edited down and saved.
+
+Measuring is incremental. The measure remembers each animation curve's counted contribution by the
+identity of its immutable shared record (`CanonicalCurveSizeMemo`), so an edit re-walks only the
+curves it replaced; the memo holds a strong reference to every record it remembers and forgets the
+ones a measure no longer sees. A memoized measure equals a whole measure exactly (bytes, values,
+largest container, longest string). Building a keyframe-dense project of 4.5 million values
+through MCP took 28.8 s with the check against 28.6 s without it, and one edit of that project
+answered in about 50 ms, the request included; the first measure of a session walks the whole
+document once. A measure that
+runs out of memory admits the edit rather than refusing it.
+
 `OpenOptions` and `SaveOptions` default the per-operation resident budget to 2 GiB and may lower it.
 No operation budget may exceed the shared 4 GiB implementation ceiling. Per-operation and shared
 charges are acquired atomically or not at all, and are released when their owning allocation or

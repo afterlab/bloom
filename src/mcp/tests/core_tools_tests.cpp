@@ -3099,6 +3099,83 @@ void fileSessionsBesideALiveProject() {
     std::filesystem::remove_all(folder, ignored);
 }
 
+// #748: an edit that would make the project larger than one project file can save and reopen is
+// refused at the edit with its own code and the limit it would pass, and nothing is applied; the
+// limits are advertised up front, and the project as it stands keeps taking edits that fit.
+void projectCapacityRefusal() {
+    const auto folder =
+        std::filesystem::temp_directory_path() /
+        ("bloom-mcp-capacity-" +
+         std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    std::filesystem::create_directories(folder);
+    struct Remove final {
+        std::filesystem::path path;
+        ~Remove() {
+            std::error_code ignored;
+            std::filesystem::remove_all(path, ignored);
+        }
+    } remove{folder};
+    Headless server;
+    auto protocol = server.core->openSession();
+    const auto initialized =
+        server.core
+            ->handle(*protocol,
+                     R"({"jsonrpc":"2.0","id":1,"method":"initialize","params":{)"
+                     R"("protocolVersion":"2025-11-25","capabilities":{},)"
+                     R"("clientInfo":{"name":"capacity","version":"1"}}})",
+                     {})
+            .response.value_or("");
+    for (const auto* limit :
+         {R"("projectJsonValues":6000000)", R"("projectDocumentBytes":234881024)",
+          R"("projectContainerEntries":999000)", R"("projectStringBytes":67043328)"})
+        expect(contains(initialized, limit),
+               std::string("initialize advertises ") + limit + ": " + initialized);
+    auto result = server.call(
+        "transact", R"({"expectedRevision":0,"operations":[{"op":"bloom.layer.add-solid",)"
+                    R"("args":{"composition":1,"name":"Wash","color":[1,1,1,1]}}]})");
+    expect(contains(result, R"("isError":false)"), "the solid applies: " + result);
+    const auto writeKeys = [&](const std::string& name, const int count) {
+        std::ofstream times(folder / (name + "-times.json"));
+        std::ofstream values(folder / (name + "-values.json"));
+        times << '[';
+        values << '[';
+        for (int key = 0; key < count; ++key) {
+            times << (key ? "," : "") << key;
+            values << (key ? "," : "") << (key % 2 ? "0.25" : "0.75");
+        }
+        times << ']';
+        values << ']';
+    };
+    const auto keysCall = [&](const std::string& name) {
+        return server.call("transact",
+                           R"({"expectedRevision":)" + revisionOf(server) +
+                               R"(,"compileCheck":false,"response":"summary","operations":[)"
+                               R"({"op":"bloom.animation.set-key-columns","args":{)"
+                               R"("composition":1,"parameter":{"layer":"Wash","role":"opacity"},)"
+                               R"("replace":true,"times":{"fromFile":")" +
+                               (folder / (name + "-times.json")).generic_string() +
+                               R"("},"values":{"fromFile":")" +
+                               (folder / (name + "-values.json")).generic_string() + R"("}}}]})");
+    };
+    // About a million keyframes on one parameter: more JSON values than a project file holds.
+    writeKeys("past", 990'000);
+    const auto before = revisionOf(server);
+    const auto refused = keysCall("past");
+    expect(contains(refused, R"("isError":true)") &&
+               contains(refused, R"("code":"bloom.mcp.project-too-large")") &&
+               contains(refused, R"("limit":{"name":"projectJsonValues","value":6000000,)") &&
+               contains(refused, R"("unit":"values"})") &&
+               contains(refused, "The edit was not applied: the project would hold") &&
+               contains(refused, "one project file can hold"),
+           "an edit past the project limit is refused at the edit, typed: " +
+               refused.substr(0, 900));
+    expect(revisionOf(server) == before, "and nothing is applied");
+    writeKeys("fits", 1200);
+    result = keysCall("fits");
+    expect(contains(result, R"("isError":false)") && contains(result, R"("succeeded":true)"),
+           "an edit that fits still applies: " + result.substr(0, 600));
+}
+
 int main() {
     try {
         exportWithoutQueue();
@@ -3123,6 +3200,7 @@ int main() {
         inspectionQueries();
         stdioStopsWhileInputIdle();
         requestLimits();
+        projectCapacityRefusal();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

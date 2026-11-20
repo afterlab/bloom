@@ -1,4 +1,6 @@
 #include <bloom/host/project_session.hpp>
+#include <bloom/project/canonical_document.hpp>
+#include <bloom/project/project_capacity.hpp>
 
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
@@ -114,6 +116,7 @@ ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
       schemaMinor_(schemaMinor), retainedRequirements_(std::move(retainedRequirements)),
       document_(std::move(document)), commandStack_(std::move(commandStack)), valid_(true) {
     attachColorObserver();
+    installCapacityCheck();
 }
 
 ProjectSession::ProjectSession(const ProjectSessionId projectSessionId,
@@ -459,6 +462,7 @@ SessionInstallStatus ProjectSession::installDecodedReplacement(const OpenIntentC
     roundTrip_ = std::move(sharedRoundTrip);
     schemaMinor_ = content.schemaMinor_;
     retainedRequirements_ = std::move(content.requirements_);
+    installCapacityCheck();
     contentKind_ = ProjectSessionContentKind::DecodedDocument;
     editability_ = content.editability_;
     displayPath_ = std::move(content.displayPath_);
@@ -576,6 +580,53 @@ const document::ColorSettings* ProjectSession::currentColorSettings() const noex
 void ProjectSession::setColorSettingsChangedHandler(std::function<void()> handler) {
     if (color_ != nullptr)
         color_->changed = std::move(handler);
+}
+
+void ProjectSession::installCapacityCheck() {
+    if (commandStack_ == nullptr)
+        return;
+    // The memo is the stack's own: one owner thread, and it keeps only the curves the latest
+    // measure saw, so measuring again after an edit walks only the curves the edit replaced.
+    auto memo = std::make_shared<project::CanonicalCurveSizeMemo>();
+    commandStack_->setCapacityCheck(
+        [color = color_, roundTrip = roundTrip_, schemaMinor = schemaMinor_,
+         memo = std::move(memo)](const document::Snapshot& before, const document::Snapshot& after)
+            -> std::optional<commands::ProjectCapacityRefusal> {
+            if (color == nullptr || !color->current.has_value())
+                return std::nullopt; // a save refuses such a project on its own
+            const auto measure =
+                [&](const document::Snapshot& snapshot) -> project::CanonicalDocumentMeasureResult {
+                return project::measureCanonicalDocument({.snapshot = &snapshot,
+                                                          .colorSettings = &*color->current,
+                                                          .roundTrip = roundTrip.get(),
+                                                          .schemaMinor = schemaMinor},
+                                                         {}, memo.get());
+            };
+            try {
+                const auto measured = measure(after);
+                const auto excess = measured ? project::projectCapacityExcess(measured.measure)
+                                             : project::projectCapacityExcessOf(measured.error);
+                if (!excess)
+                    return std::nullopt;
+                // An edit that does not grow what is already past a limit (a project opened at
+                // that size, a value changed in place, a deletion) stays allowed.
+                if (!excess->atLeast) {
+                    if (const auto previous = measure(before);
+                        previous && project::projectCapacityAmount(previous.measure,
+                                                                   excess->limit) >= excess->actual)
+                        return std::nullopt;
+                }
+                return commands::ProjectCapacityRefusal{
+                    .limit = std::string(project::projectCapacityLimitName(excess->limit)),
+                    .value = excess->value,
+                    .actual = excess->actual,
+                    .unit = std::string(project::projectCapacityLimitUnit(excess->limit)),
+                    .message = project::projectCapacityMessage(*excess)};
+            } catch (const std::bad_alloc&) {
+                // Not enough memory to measure: the edit goes on and a save names any failure.
+                return std::nullopt;
+            }
+        });
 }
 
 void ProjectSession::attachColorObserver() {

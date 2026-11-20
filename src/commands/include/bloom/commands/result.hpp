@@ -187,6 +187,21 @@ enum class CommandStatus {
     HistoryLimit,
     NothingToUndo,
     NothingToRedo,
+    // #748: the edit would make a project too large for one project file to save and reopen;
+    // CommandResult::capacityRefusal names the limit. Nothing was applied.
+    ProjectTooLarge,
+};
+
+// #748: why an edit was refused for the project's size: the limit it would pass (a stable name such
+// as "projectJsonValues"), its value and unit, what the project would hold, and one plain sentence.
+struct ProjectCapacityRefusal {
+    std::string limit;
+    std::uint64_t value = 0;
+    std::uint64_t actual = 0;
+    std::string unit;
+    std::string message;
+
+    friend bool operator==(const ProjectCapacityRefusal&, const ProjectCapacityRefusal&) = default;
 };
 
 struct OperationFailure {
@@ -215,6 +230,8 @@ struct CommandResult {
     std::optional<document::Revision> expectedRevision;
     std::string label;
     std::vector<OperationFailure> operationFailures;
+    // #748: set exactly for a ProjectTooLarge result.
+    std::optional<ProjectCapacityRefusal> capacityRefusal;
     // Issues reported by operations that did NOT reject -- for example the files a partial
     // ImportAssets skipped while importing the rest. Published on Succeeded and NoChange execute
     // results so scripting, CLI and MCP callers can show them; never replayed by undo/redo.

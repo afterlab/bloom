@@ -79,6 +79,8 @@ QString toolErrorText(const mcp::McpToolErrorCode code) {
         return tr("needs the app");
     case C::UnknownJob:
         return tr("unknown job");
+    case C::ProjectTooLarge:
+        return tr("project too large to save");
     }
     return {};
 }

@@ -30,6 +30,7 @@ CommandResult makeResult(CommandAction action, CommandStatus status,
         .expectedRevision = std::nullopt,
         .label = std::move(label),
         .operationFailures = {},
+        .capacityRefusal = std::nullopt,
         .warnings = {},
         .outputs = {},
         .validation = {},
@@ -794,6 +795,17 @@ CommandResult CommandStack::publishStep(PreparedTransaction&& preparedValue) {
         return failed;
     }
     const document::PreparedCommit& candidate = *prepared.commit;
+    // #748: an edit that would make the project too large to save is refused here, at the edit,
+    // so a project Bloom lets you build always saves.
+    if (capacityCheck_) {
+        if (auto refusal = capacityCheck_(before, candidate.snapshot())) {
+            auto result =
+                makeResult(CommandAction::Execute, CommandStatus::ProjectTooLarge, before, label());
+            result.capacityRefusal = std::move(*refusal);
+            notify(result);
+            return result;
+        }
+    }
 
     // #746: a commit of the open group's origin joins the group's entry when that entry is still
     // the newest and nothing has happened since; the merged entry spans from the state before the

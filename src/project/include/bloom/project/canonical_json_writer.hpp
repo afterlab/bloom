@@ -109,6 +109,23 @@ class CanonicalJsonWriter final {
     // Completes the document with exactly one LF. A second call or any later write is invalid.
     [[nodiscard]] CanonicalJsonWriterResult finish() noexcept;
 
+    // #748, count mode only: one element of the open array whose canonical spelling this writer
+    // (or another counting writer) measured earlier at this same depth. `element` is what it took
+    // as an element that was not its array's first (its separator and indentation included); the
+    // first element of an array takes one byte less. Checks and charges the same limits a written
+    // element would. Invalid in write mode, outside an array, or after finish().
+    struct CountedElement final {
+        std::size_t bytes = 0;
+        std::size_t values = 0;
+        std::size_t largestContainerEntries = 0;
+        std::size_t largestStringBytes = 0;
+    };
+    [[nodiscard]] CanonicalJsonWriterResult
+    countedArrayElement(const CountedElement& element) noexcept;
+    // The elements the open array holds so far (0 outside an array). An element measured while
+    // this was 0 was its array's first, one byte shorter than any other element.
+    [[nodiscard]] std::size_t openArrayEntries() const noexcept;
+
     [[nodiscard]] bool isCounting() const noexcept { return mode_ == Mode::Count; }
     // Before a successful finish this is the logical byte count accepted so far, not a complete
     // document size. In write mode it equals bytesWritten(). If a write operation fails for
@@ -120,6 +137,26 @@ class CanonicalJsonWriter final {
                             : std::span<const char>{output_.data(), offset_};
     }
     [[nodiscard]] bool isFinished() const noexcept { return finished_; }
+    // #748: what the value written or counted so far holds, for measuring a project against the
+    // reader's limits: JSON values, the most entries one closed array or object had, and the
+    // longest string value in UTF-8 bytes.
+    [[nodiscard]] std::size_t valueCount() const noexcept { return valueCount_; }
+    [[nodiscard]] std::size_t largestContainerEntries() const noexcept {
+        return largestContainerEntries_;
+    }
+    [[nodiscard]] std::size_t largestStringBytes() const noexcept { return largestStringBytes_; }
+    // Replaces the two maxima above and returns what they were, so a caller can measure one
+    // element's own maxima and then restore the whole value's.
+    struct Maxima final {
+        std::size_t largestContainerEntries = 0;
+        std::size_t largestStringBytes = 0;
+    };
+    Maxima exchangeMaxima(const Maxima& replacement) noexcept {
+        const Maxima previous{largestContainerEntries_, largestStringBytes_};
+        largestContainerEntries_ = replacement.largestContainerEntries;
+        largestStringBytes_ = replacement.largestStringBytes;
+        return previous;
+    }
 
   private:
     enum class Mode : std::uint8_t {
@@ -164,6 +201,8 @@ class CanonicalJsonWriter final {
     std::size_t offset_ = 0;
     std::size_t depth_ = 0;
     std::size_t valueCount_ = 0;
+    std::size_t largestContainerEntries_ = 0;
+    std::size_t largestStringBytes_ = 0;
     bool rootWritten_ = false;
     bool finished_ = false;
     Mode mode_ = Mode::Write;

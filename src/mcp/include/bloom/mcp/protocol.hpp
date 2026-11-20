@@ -305,9 +305,16 @@ enum class McpLimit : std::uint8_t {
     TransactOutputs = 14,
     // #747 (D1): asynchronous transact jobs queued or running at once, across every client.
     AsyncJobs = 15,
+    // #748: what one project file can save and reopen (bloom::project::ProjectCapacityLimits). An
+    // edit that would take the project past one is refused at the edit
+    // (bloom.mcp.project-too-large) and nothing is applied; the project as it stands still saves.
+    ProjectJsonValues = 16,
+    ProjectDocumentBytes = 17,
+    ProjectContainerEntries = 18,
+    ProjectStringBytes = 19,
 };
 
-inline constexpr std::size_t kMcpLimitCount = 16;
+inline constexpr std::size_t kMcpLimitCount = 20;
 
 struct McpLimitDescription final {
     // The member of capabilities.experimental.bloom.limits.
@@ -351,6 +358,10 @@ struct McpLimitDescription final {
         {"commitWork", "bloom.mcp.commit-too-large", "work units", 0},
         {"transactOutputs", "bloom.mcp.outputs-summarized", "outputs", 0},
         {"asyncJobs", "bloom.mcp.jobs-full", "jobs", 0},
+        {"projectJsonValues", "bloom.mcp.project-too-large", "values", 0},
+        {"projectDocumentBytes", "bloom.mcp.project-too-large", "bytes", 0},
+        {"projectContainerEntries", "bloom.mcp.project-too-large", "entries", 0},
+        {"projectStringBytes", "bloom.mcp.project-too-large", "bytes", 0},
     }};
     // clang-format on
     return table[static_cast<std::size_t>(limit)];
@@ -401,21 +412,36 @@ enum class McpToolErrorCode : std::uint8_t {
     NotLive = 16,
     // #747: jobs.wait or jobs.cancel for a job id Bloom does not hold.
     UnknownJob = 17,
+    // #748: the edit would make the project larger than one project file can save and reopen;
+    // nothing was applied. diagnostic.limit names the limit (projectJsonValues,
+    // projectDocumentBytes, projectContainerEntries or projectStringBytes), its value and what the
+    // project would hold.
+    ProjectTooLarge = 18,
 };
 
-inline constexpr std::size_t kMcpToolErrorCodeCount = 18;
+inline constexpr std::size_t kMcpToolErrorCodeCount = 19;
 
 [[nodiscard]] constexpr std::string_view toolErrorCode(const McpToolErrorCode code) {
     constexpr std::array<std::string_view, kMcpToolErrorCodeCount> names{
-        "bloom.mcp.project-unavailable", "bloom.mcp.project-replaced",
-        "bloom.mcp.revision-conflict",   "bloom.mcp.commit-queue-full",
-        "bloom.mcp.gesture-open",        "bloom.mcp.cancelled",
-        "bloom.mcp.deadline-exceeded",   "bloom.mcp.export-unavailable",
-        "bloom.mcp.export-failed",       "bloom.mcp.capture-too-large-for-inline",
-        "bloom.mcp.read-only",           "bloom.mcp.operation-rejected",
-        "bloom.mcp.preflight-blocked",   "bloom.mcp.commit-too-large",
-        "bloom.mcp.jobs-full",           "bloom.mcp.idempotency-conflict",
-        "bloom.mcp.not-live",            "bloom.mcp.unknown-job",
+        "bloom.mcp.project-unavailable",
+        "bloom.mcp.project-replaced",
+        "bloom.mcp.revision-conflict",
+        "bloom.mcp.commit-queue-full",
+        "bloom.mcp.gesture-open",
+        "bloom.mcp.cancelled",
+        "bloom.mcp.deadline-exceeded",
+        "bloom.mcp.export-unavailable",
+        "bloom.mcp.export-failed",
+        "bloom.mcp.capture-too-large-for-inline",
+        "bloom.mcp.read-only",
+        "bloom.mcp.operation-rejected",
+        "bloom.mcp.preflight-blocked",
+        "bloom.mcp.commit-too-large",
+        "bloom.mcp.jobs-full",
+        "bloom.mcp.idempotency-conflict",
+        "bloom.mcp.not-live",
+        "bloom.mcp.unknown-job",
+        "bloom.mcp.project-too-large",
     };
     return names[static_cast<std::size_t>(code)];
 }

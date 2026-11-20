@@ -779,6 +779,10 @@ class ProjectSession final {
     makeColorState(std::optional<document::ColorSettings> settings);
     [[nodiscard]] const document::ColorSettings* currentColorSettings() const noexcept;
     void attachColorObserver();
+    // #748: makes the command stack refuse an edit that would take the project past what one
+    // project file can save (project::ProjectCapacityLimits), measured with this content's own
+    // color settings and preserved members. Called whenever a command stack is installed.
+    void installCapacityCheck();
     void followViewerDefaultExportView(const document::ColorSettings& previous,
                                        const document::ColorSettings& current,
                                        commands::Transaction& transaction);

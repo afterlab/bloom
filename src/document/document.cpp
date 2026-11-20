@@ -408,6 +408,12 @@ PreparedCommit::~PreparedCommit() = default;
 
 const Project& PreparedCommit::project() const noexcept { return state_->project; }
 std::size_t PreparedCommit::rootByteCharge() const noexcept { return state_->rootByteCharge; }
+Snapshot PreparedCommit::snapshot() const noexcept {
+    const auto next = baseRevision_.value() == std::numeric_limits<std::uint64_t>::max()
+                          ? baseRevision_
+                          : Revision::fromRaw(baseRevision_.value() + 1);
+    return Snapshot(next, identity_, state_);
+}
 
 Draft Draft::of(const Snapshot& base) {
     if (base.state_ == nullptr || base.identity_ == nullptr)

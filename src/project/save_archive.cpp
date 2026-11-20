@@ -59,15 +59,6 @@ constexpr std::uint64_t kReconstructionBytesPerJsonValue = 64;
     return {reinterpret_cast<const std::byte*>(bytes.data()), bytes.size()};
 }
 
-[[nodiscard]] bool checkedAdd(const std::size_t left, const std::size_t right,
-                              std::size_t& result) noexcept {
-    if (right > std::numeric_limits<std::size_t>::max() - left) {
-        return false;
-    }
-    result = left + right;
-    return true;
-}
-
 [[nodiscard]] std::optional<std::uint64_t>
 perValueCharge(const std::uint64_t textBytes, const std::uint64_t valueCount,
                const std::uint64_t bytesPerValue) noexcept {
@@ -96,87 +87,6 @@ reserveRepresentation(const ProjectIoOperationMemory& operation, const std::uint
                       const std::uint64_t valueCount) {
     return reserveCharge(operation,
                          perValueCharge(textBytes, valueCount, kSemanticBytesPerJsonValue));
-}
-
-struct ScratchRequirements final {
-    std::size_t sortEntries = 0;
-    std::size_t payloadBytes = 0;
-    bool overflow = false;
-};
-
-[[nodiscard]] ScratchRequirements
-measureScratch(const bloom::document::Snapshot& snapshot) noexcept {
-    ScratchRequirements requirements;
-    std::size_t firstWindow = snapshot.project().compositions().size();
-    std::size_t secondWindow = snapshot.project().extensionRecords().size();
-    std::size_t thirdWindow = 0;
-
-    for (const auto& composition : snapshot.project().compositions()) {
-        secondWindow = std::max(secondWindow, composition.parameters().records().size());
-        secondWindow = std::max(secondWindow, composition.animationCurves().records().size());
-        secondWindow = std::max(secondWindow, composition.graph().nodes().size());
-        secondWindow = std::max(secondWindow, composition.graph().edges().size());
-        secondWindow = std::max(secondWindow, composition.graph().layerOutputs().size());
-        for (const auto& node : composition.graph().nodes()) {
-            thirdWindow = std::max(thirdWindow, node.parameters.size());
-        }
-        for (const auto& layer : composition.graph().layerOutputs())
-            thirdWindow = std::max(thirdWindow, layer.parameters.size());
-        for (const auto& curve : composition.animationCurves().records()) {
-            if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&curve)) {
-                thirdWindow = std::max(thirdWindow, scalar->keyframes.size());
-            } else if (const auto* vector2 =
-                           std::get_if<bloom::document::Vec2AnimationCurve>(&curve)) {
-                for (const auto& component : vector2->components) {
-                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
-                }
-            } else if (const auto* vector3 =
-                           std::get_if<bloom::document::Vec3AnimationCurve>(&curve)) {
-                for (const auto& component : vector3->components) {
-                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
-                }
-            } else if (const auto* color =
-                           std::get_if<bloom::document::Color4AnimationCurve>(&curve)) {
-                for (const auto& component : color->components) {
-                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
-                }
-            } else if (const auto* pathCurve =
-                           std::get_if<bloom::document::PathAnimationCurve>(&curve)) {
-                thirdWindow = std::max(thirdWindow, pathCurve->keyframes.size());
-            } else if (const auto* gradientCurve =
-                           std::get_if<bloom::document::GradientAnimationCurve>(&curve)) {
-                thirdWindow = std::max(thirdWindow, gradientCurve->keyframes.size());
-            }
-        }
-    }
-
-    secondWindow = std::max(secondWindow, snapshot.project().typedDataBlocks().size());
-
-    if (!checkedAdd(firstWindow, secondWindow, requirements.sortEntries) ||
-        !checkedAdd(requirements.sortEntries, thirdWindow, requirements.sortEntries)) {
-        requirements.overflow = true;
-        return requirements;
-    }
-    for (const auto& record : snapshot.project().extensionRecords()) {
-        const auto encoded = bloom::project::canonicalBase64EncodedSize(record.payload.size());
-        if (!encoded.hasValue()) {
-            requirements.overflow = true;
-            return requirements;
-        }
-        requirements.payloadBytes = std::max(requirements.payloadBytes, *encoded.value());
-    }
-    for (const auto& block : snapshot.project().typedDataBlocks()) {
-        const auto* payload = std::get_if<bloom::document::OpaqueExtensionPayload>(&block.payload);
-        if (payload == nullptr)
-            continue;
-        const auto encoded = bloom::project::canonicalBase64EncodedSize(payload->size());
-        if (!encoded.hasValue()) {
-            requirements.overflow = true;
-            return requirements;
-        }
-        requirements.payloadBytes = std::max(requirements.payloadBytes, *encoded.value());
-    }
-    return requirements;
 }
 
 [[nodiscard]] std::optional<SaveArchiveFailure>
@@ -208,7 +118,8 @@ encodeDocument(const CanonicalDocumentV1& input,
         return SaveArchiveFailure(
             stage, SaveArchiveDocumentEncodingFailure{CanonicalDocumentError::MissingInput});
     }
-    const auto scratchRequirements = measureScratch(*input.snapshot);
+    const auto scratchRequirements =
+        bloom::project::canonicalDocumentScratchRequirements(*input.snapshot);
     if (scratchRequirements.overflow) {
         return SaveArchiveFailure(stage, SaveArchiveResourceExhausted{});
     }

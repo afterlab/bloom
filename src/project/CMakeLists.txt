@@ -30,6 +30,7 @@ target_sources(
         manifest_decode.cpp
         manifest_requirements.cpp
         open_archive.cpp
+        project_capacity.cpp
         project_io_memory.cpp
         project_io_memory_resource.cpp
         reopen_chain_internal.hpp

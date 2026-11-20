@@ -350,6 +350,11 @@ QString statusMessage(const commands::CommandResult& result) {
         return QStringLiteral("The document revision limit was reached");
     case commands::CommandStatus::HistoryLimit:
         return QStringLiteral("The edit exceeds the undo memory limit and was not applied");
+    case commands::CommandStatus::ProjectTooLarge:
+        return result.capacityRefusal
+                   ? QString::fromStdString(result.capacityRefusal->message)
+                   : QStringLiteral("The edit would make the project too large to save and was "
+                                    "not applied");
     case commands::CommandStatus::NothingToUndo:
         return QStringLiteral("There is nothing to undo");
     case commands::CommandStatus::NothingToRedo:

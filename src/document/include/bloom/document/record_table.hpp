@@ -130,6 +130,10 @@ template <typename T> class RecordView final {
     [[nodiscard]] const void* identity(const std::size_t index) const noexcept {
         return first_[index].get();
     }
+    // A share of record `index`'s allocation, to keep it (and its identity) alive.
+    [[nodiscard]] std::shared_ptr<const T> share(const std::size_t index) const noexcept {
+        return first_[index];
+    }
 
   private:
     const std::shared_ptr<T>* first_ = nullptr;

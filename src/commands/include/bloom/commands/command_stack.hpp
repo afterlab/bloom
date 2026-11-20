@@ -132,6 +132,14 @@ class CommandStack final {
     // its charge, Document::publish and the events. A base the document has moved past is refused
     // as stale (call rebaseNeeded() first to re-base instead).
     [[nodiscard]] CommandResult publish(PreparedTransaction&& prepared);
+    // #748. Owner thread. A project Bloom lets you build must save: when set, every change
+    // execute() or publish() would make is first given to `check` with the current state and the
+    // state it would publish, and a refusal answers CommandStatus::ProjectTooLarge with nothing
+    // applied. The owner of the project file format supplies it (commands does not know the
+    // format). Undo and redo are not checked: every state they restore was admitted.
+    using CapacityCheck = std::function<std::optional<ProjectCapacityRefusal>(
+        const document::Snapshot& before, const document::Snapshot& candidate)>;
+    void setCapacityCheck(CapacityCheck check) { capacityCheck_ = std::move(check); }
     [[nodiscard]] CommandResult undo(CommandOrigin origin = CommandOrigin::User);
     [[nodiscard]] CommandResult redo(CommandOrigin origin = CommandOrigin::User);
 
@@ -215,6 +223,7 @@ class CommandStack final {
     std::size_t historyChargedBytes_ = 0;
     std::unique_ptr<HistoryCharge> historyCharge_;
     Work work_;
+    CapacityCheck capacityCheck_;
     document::Revision trackedRevision_;
     CommandOrigin currentOrigin_ = CommandOrigin::User;
     std::optional<OpenGroup> group_;

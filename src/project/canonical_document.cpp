@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bloom/core/utf8.hpp>
+#include <bloom/document/animation.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/path_value.hpp>
@@ -14,6 +15,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <numeric>
 #include <span>
 #include <string>
@@ -241,6 +243,8 @@ struct EmitState final {
     // visited exactly once by construction, so a leftover entry means the caller passed state that
     // does not describe the document actually being written.
     std::size_t retainedConsumed = 0;
+    // #748: a counting walk's memo of each curve's spelling; null for a write and with roundTrip.
+    bloom::project::CanonicalCurveSizeMemo* curveMemo = nullptr;
 
     [[nodiscard]] bool ok(const CanonicalJsonWriterResult result) noexcept {
         if (result) {
@@ -1135,8 +1139,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             return false;
         }
     }
-    for (const auto recordIndex : order) {
-        const auto& record = records[recordIndex];
+    const auto emitCurve = [&](const AnimationCurveRecord& record) noexcept -> bool {
         const auto idText = bloom::project::formatCanonicalUInt64(animationCurveId(record).value());
         const PathScope curveScope(state, RoundTripCollectionKind::AnimationCurve, idText.view());
         if (!state.ok(writer.beginObject())) {
@@ -1278,9 +1281,38 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         if (!emitRetainedTrailing(state)) {
             return false;
         }
-        if (!state.ok(writer.endObject())) {
-            return false;
+        return state.ok(writer.endObject());
+    };
+    for (const auto recordIndex : order) {
+        const auto& record = records[recordIndex];
+        auto* memo = state.curveMemo;
+        if (memo == nullptr) {
+            if (!emitCurve(record))
+                return false;
+            continue;
         }
+        // #748: a curve measured before is the same JSON while it is the same record.
+        if (const auto* known = memo->find(records.identity(recordIndex))) {
+            if (!state.ok(writer.countedArrayElement(*known)))
+                return false;
+            continue;
+        }
+        const bool first = writer.openArrayEntries() == 0;
+        const auto bytesBefore = writer.bytesRequired();
+        const auto valuesBefore = writer.valueCount();
+        const auto maxima = writer.exchangeMaxima({});
+        if (!emitCurve(record))
+            return false;
+        const auto curveMaxima = writer.exchangeMaxima(
+            {.largestContainerEntries =
+                 std::max(maxima.largestContainerEntries, writer.largestContainerEntries()),
+             .largestStringBytes =
+                 std::max(maxima.largestStringBytes, writer.largestStringBytes())});
+        memo->remember(records.share(recordIndex),
+                       {.bytes = writer.bytesRequired() - bytesBefore + (first ? 1U : 0U),
+                        .values = writer.valueCount() - valuesBefore,
+                        .largestContainerEntries = curveMaxima.largestContainerEntries,
+                        .largestStringBytes = curveMaxima.largestStringBytes});
     }
     return state.ok(writer.endArray());
 }
@@ -3006,6 +3038,169 @@ encodeCanonicalDocument(const CanonicalDocumentV1& document, const std::span<cha
         std::terminate();
     }
     return CanonicalDocumentWriteResult::success(requiredSize);
+}
+
+CanonicalDocumentScratchRequirements
+canonicalDocumentScratchRequirements(const bloom::document::Snapshot& snapshot) noexcept {
+    CanonicalDocumentScratchRequirements requirements;
+    const auto checkedAdd = [](const std::size_t left, const std::size_t right,
+                               std::size_t& sum) noexcept {
+        if (left > std::numeric_limits<std::size_t>::max() - right)
+            return false;
+        sum = left + right;
+        return true;
+    };
+    std::size_t firstWindow = snapshot.project().compositions().size();
+    std::size_t secondWindow = snapshot.project().extensionRecords().size();
+    std::size_t thirdWindow = 0;
+
+    for (const auto& composition : snapshot.project().compositions()) {
+        secondWindow = std::max(secondWindow, composition.parameters().records().size());
+        secondWindow = std::max(secondWindow, composition.animationCurves().records().size());
+        secondWindow = std::max(secondWindow, composition.graph().nodes().size());
+        secondWindow = std::max(secondWindow, composition.graph().edges().size());
+        secondWindow = std::max(secondWindow, composition.graph().layerOutputs().size());
+        for (const auto& node : composition.graph().nodes()) {
+            thirdWindow = std::max(thirdWindow, node.parameters.size());
+        }
+        for (const auto& layer : composition.graph().layerOutputs())
+            thirdWindow = std::max(thirdWindow, layer.parameters.size());
+        for (const auto& curve : composition.animationCurves().records()) {
+            if (const auto* scalar = std::get_if<bloom::document::ScalarAnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, scalar->keyframes.size());
+            } else if (const auto* vector2 =
+                           std::get_if<bloom::document::Vec2AnimationCurve>(&curve)) {
+                for (const auto& component : vector2->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
+            } else if (const auto* vector3 =
+                           std::get_if<bloom::document::Vec3AnimationCurve>(&curve)) {
+                for (const auto& component : vector3->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
+            } else if (const auto* color =
+                           std::get_if<bloom::document::Color4AnimationCurve>(&curve)) {
+                for (const auto& component : color->components) {
+                    thirdWindow = std::max(thirdWindow, component.keyframes.size());
+                }
+            } else if (const auto* pathCurve =
+                           std::get_if<bloom::document::PathAnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, pathCurve->keyframes.size());
+            } else if (const auto* gradientCurve =
+                           std::get_if<bloom::document::GradientAnimationCurve>(&curve)) {
+                thirdWindow = std::max(thirdWindow, gradientCurve->keyframes.size());
+            }
+        }
+    }
+
+    secondWindow = std::max(secondWindow, snapshot.project().typedDataBlocks().size());
+
+    if (!checkedAdd(firstWindow, secondWindow, requirements.sortEntries) ||
+        !checkedAdd(requirements.sortEntries, thirdWindow, requirements.sortEntries)) {
+        requirements.overflow = true;
+        return requirements;
+    }
+    for (const auto& record : snapshot.project().extensionRecords()) {
+        const auto encoded = bloom::project::canonicalBase64EncodedSize(record.payload.size());
+        if (!encoded.hasValue()) {
+            requirements.overflow = true;
+            return requirements;
+        }
+        requirements.payloadBytes = std::max(requirements.payloadBytes, *encoded.value());
+    }
+    for (const auto& block : snapshot.project().typedDataBlocks()) {
+        const auto* payload = std::get_if<bloom::document::OpaqueExtensionPayload>(&block.payload);
+        if (payload == nullptr)
+            continue;
+        const auto encoded = bloom::project::canonicalBase64EncodedSize(payload->size());
+        if (!encoded.hasValue()) {
+            requirements.overflow = true;
+            return requirements;
+        }
+        requirements.payloadBytes = std::max(requirements.payloadBytes, *encoded.value());
+    }
+    return requirements;
+}
+
+const CanonicalCurveSizeMemo::Element* CanonicalCurveSizeMemo::find(const void* identity) noexcept {
+    const auto found = entries_.find(identity);
+    if (found == entries_.end())
+        return nullptr;
+    found->second.seen = generation_;
+    return &found->second.element;
+}
+
+void CanonicalCurveSizeMemo::remember(std::shared_ptr<const void> owner,
+                                      const Element& element) noexcept {
+    try {
+        const auto* identity = owner.get();
+        entries_.insert_or_assign(identity, Entry{std::move(owner), element, generation_});
+    } catch (...) {
+        // Out of memory: the curve is measured again next time.
+    }
+}
+
+void CanonicalCurveSizeMemo::finish() noexcept {
+    std::erase_if(entries_, [this](const auto& entry) { return entry.second.seen != generation_; });
+}
+
+CanonicalDocumentMeasureResult measureCanonicalDocument(const CanonicalDocumentV1& document,
+                                                        const CanonicalDocumentLimits limits,
+                                                        CanonicalCurveSizeMemo* memo) {
+    CanonicalDocumentMeasureResult result;
+    if (document.snapshot == nullptr || document.colorSettings == nullptr) {
+        result.error = CanonicalDocumentError::MissingInput;
+        return result;
+    }
+    const auto scratch = canonicalDocumentScratchRequirements(*document.snapshot);
+    if (scratch.overflow) {
+        result.error = CanonicalDocumentError::SortBufferTooSmall;
+        return result;
+    }
+    std::vector<char> payloadScratch(scratch.payloadBytes);
+    std::vector<std::size_t> sortScratch(scratch.sortEntries);
+    auto request = document;
+    request.payloadScratch = payloadScratch;
+    request.sortScratch = sortScratch;
+
+    SortPlan plan;
+    const auto validation = validateRequest(request, limits, plan);
+    if (validation.error != CanonicalDocumentError::None) {
+        result.error = validation.error;
+        return result;
+    }
+    const auto& snapshot = *request.snapshot;
+    auto counter =
+        CanonicalJsonWriter::counting({.maximumDepth = kCanonicalDocumentMaximumDepth,
+                                       .maximumValues = limits.maximumValues,
+                                       .maximumContainerEntries = limits.maximumContainerEntries});
+    EmitState state{counter,
+                    snapshot.project(),
+                    snapshot.ids().highWater(),
+                    *request.colorSettings,
+                    splitSortScratch(request.sortScratch, plan),
+                    request.payloadScratch,
+                    {},
+                    request.roundTrip,
+                    request.schemaMinor};
+    if (request.roundTrip == nullptr && memo != nullptr) {
+        state.curveMemo = memo;
+        memo->begin();
+    }
+    const bool emitted = emitDocumentRoot(state);
+    if (state.curveMemo != nullptr && emitted)
+        memo->finish();
+    if (!emitted) {
+        result.error = state.walk.error;
+        return result;
+    }
+    result.measure = {.bytes = counter.bytesRequired(),
+                      .values = counter.valueCount(),
+                      .largestContainerEntries = counter.largestContainerEntries(),
+                      .largestStringBytes = counter.largestStringBytes()};
+    if (result.measure.bytes > limits.maximumOutputBytes)
+        result.error = CanonicalDocumentError::DocumentSizeExceeded;
+    return result;
 }
 
 } // namespace bloom::project
