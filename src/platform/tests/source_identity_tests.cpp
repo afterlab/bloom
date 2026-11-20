@@ -1,3 +1,4 @@
+#include "settled_file.hpp"
 #include "unique_temp_dir.hpp"
 #include <bloom/platform/source_identity.hpp>
 
@@ -25,9 +26,15 @@ class Expectations final {
   private:
     int failures_ = 0;
 };
+// Every fixture this test writes is settled (settled_file.hpp): the counts below are identity-only
+// checks, which an unsettled identity never allows. The unsettled case has its own block below.
 void write(const std::filesystem::path& path, const std::string& bytes) {
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    output << bytes;
+    {
+        std::ofstream output(path, std::ios::binary | std::ios::trunc);
+        output << bytes;
+    }
+    if (!bloom::test_support::settleFileIdentity(path))
+        std::cerr << "FAILED: the fixture's change time could not be set back\n";
 }
 bloom::core::Sha256Digest digestOf(const std::string& bytes) {
     return *bloom::core::Sha256Hasher::hash(std::as_bytes(std::span(bytes.data(), bytes.size())));
@@ -87,6 +94,8 @@ int main() {
     // A pure timestamp touch rehashes once and stays verified.
     const auto touched = std::filesystem::last_write_time(source) + std::chrono::seconds(3);
     std::filesystem::last_write_time(source, touched);
+    expectations.expect(bloom::test_support::settleFileIdentity(source),
+                        "the touched fixture is settled");
     before = sourceReadWork();
     expectations.expect(verifySourceDigest(source, digestOf(rewritten)) == SourceCheck::Matches,
                         "a touched file still matches");
@@ -212,6 +221,39 @@ int main() {
                             "a lookup that arrives before the record is read waits for it");
         memo.persistTo({});
         memo.clear();
+    }
+    // #749: an identity that is not settled (observed within the settle time of its last change on
+    // a volume with no change journal) cannot tell a rewrite inside one clock tick from no change.
+    // It vouches for nothing, and nothing recorded under it is put on record for the next run.
+    {
+        auto& memo = verifiedSourceDigests();
+        memo.persistTo({});
+        memo.clear();
+        const auto racy = directory / "racy.bin";
+        write(racy, original);
+        const auto observed = observeFileIdentity(racy);
+        expectations.expect(observed && observed->settled, "a settled fixture's identity is settled");
+        if (observed) {
+            auto unsettled = *observed;
+            unsettled.settled = false;
+            expectations.expect(unsettled == *observed,
+                                "settledness is not part of what makes two identities equal");
+            const auto record = directory / "racy-cache" / "verified-sources.v1";
+            memo.persistTo(record);
+            memo.load();
+            memo.record(racy, unsettled, expected);
+            expectations.expect(!memo.find(racy, unsettled) && !memo.find(racy, *observed),
+                                "a digest recorded under an unsettled identity vouches for nothing");
+            expectations.expect(memo.persistedSize() == 0,
+                                "a digest recorded under an unsettled identity is not on record");
+            memo.record(racy, *observed, expected);
+            expectations.expect(memo.find(racy, *observed) == expected && memo.persistedSize() == 1,
+                                "the same digest under a settled identity vouches and is on record");
+            expectations.expect(!memo.find(racy, unsettled),
+                                "an unsettled observation is never vouched for");
+            memo.persistTo({});
+            memo.clear();
+        }
     }
     std::filesystem::remove_all(directory);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;

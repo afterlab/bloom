@@ -1,5 +1,6 @@
 #include "generated_jpeg.hpp"
 #include "png_test_support.hpp"
+#include "settled_file.hpp"
 #include "stb_image_adapter.hpp"
 #include <Imath/half.h>
 #include <ImfChannelList.h>
@@ -31,6 +32,12 @@
 #include <thread>
 #include <utility>
 #include <vector>
+#if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 namespace OCIOAlias = OCIO_NAMESPACE;
 
@@ -348,6 +355,8 @@ void testDeferredDigests(bloom_output_png_test_support::Expectations& check,
             png(path);
         else
             exr(path, false, Imf::HALF);
+        // Settled (settled_file.hpp): the memo's own digests below must be able to vouch.
+        check.expect(bloom::test_support::settleFileIdentity(path), "the deferred fixture is settled");
         std::vector<std::byte> bytes;
         {
             std::ifstream input(path, std::ios::binary);
@@ -444,12 +453,90 @@ void testDeferredDigests(bloom_output_png_test_support::Expectations& check,
                  "a pending stamped member is admitted by its stamp without a hash");
 }
 
+#if defined(_WIN32)
+namespace {
+// The file's change time as the file system reports it, or sets it (100 ns ticks).
+LONGLONG changeTime(const std::filesystem::path& path) {
+    const HANDLE handle = CreateFileW(path.c_str(), FILE_READ_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        return 0;
+    FILE_BASIC_INFO info{};
+    const bool read = GetFileInformationByHandleEx(handle, FileBasicInfo, &info, sizeof info) != 0;
+    CloseHandle(handle);
+    return read ? info.ChangeTime.QuadPart : 0;
+}
+bool setChangeTime(const std::filesystem::path& path, const LONGLONG ticks) {
+    const HANDLE handle = CreateFileW(path.c_str(), FILE_WRITE_ATTRIBUTES,
+                                      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                                      nullptr, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, nullptr);
+    if (handle == INVALID_HANDLE_VALUE)
+        return false;
+    FILE_BASIC_INFO info{};
+    info.ChangeTime.QuadPart = ticks;
+    const bool set = SetFileInformationByHandle(handle, FileBasicInfo, &info, sizeof info) != 0;
+    CloseHandle(handle);
+    return set;
+}
+// #749: a file rewritten in place within one clock tick of its last change, its size and written
+// time put back, keeps every identity field on a Windows volume with no change journal. Such an
+// identity is not settled, so the memo must not vouch for the digest it recorded: the capture
+// hashes and finds the replacement. Here the tick is made certain: the fixture's change time is
+// set an hour ahead (never settled for that hour) and put back after the rewrite. A volume with a
+// journal numbers the rewrite and finds it the same way.
+void testUnsettledReplacement(Expectations& check, const std::filesystem::path& path) {
+    namespace media = bloom::media;
+    png(path);
+    FILETIME now{};
+    GetSystemTimeAsFileTime(&now);
+    const auto ahead =
+        static_cast<LONGLONG>((static_cast<unsigned long long>(now.dwHighDateTime) << 32U) |
+                              now.dwLowDateTime) +
+        36'000'000'000LL;
+    check.expect(setChangeTime(path, ahead) && changeTime(path) == ahead,
+                 "unsettled: the fixture's change time is set ahead");
+    // The path decode hashes the file and records it in the process memo, as an import does.
+    const auto oracle = media::decodeImage(path);
+    const auto original = media::captureImageSourceRevision(path, media::kMaxImageStorageBytes);
+    check.expect(oracle && original, "unsettled: the original decodes and is captured");
+    if (!oracle || !original)
+        return;
+    const auto digest = (*original.value)->probe().contentDigest;
+    const auto before = bloom::platform::observeFileIdentity(path);
+    const auto timestamp = std::filesystem::last_write_time(path);
+    {
+        std::ofstream replacement(path, std::ios::binary | std::ios::trunc);
+        const std::string changed((*original.value)->bytes().size(), 'x');
+        replacement.write(changed.data(), static_cast<std::streamsize>(changed.size()));
+    }
+    std::filesystem::last_write_time(path, timestamp);
+    check.expect(setChangeTime(path, ahead), "unsettled: the change time is put back");
+    const auto after = bloom::platform::observeFileIdentity(path);
+    std::cout << "unsettled replacement: identity "
+              << (before && after && *before == *after ? "unchanged" : "changed")
+              << ", settled " << (after && after->settled ? "yes" : "no") << '\n';
+    const auto replaced =
+        media::captureImageSourceRevision(path, media::kMaxImageStorageBytes, {}, digest);
+    check.expect(!replaced && replaced.code == media::ImageDiagnosticCode::DigestMismatch,
+                 "unsettled: a replacement that keeps every identity field fails strong "
+                 "revision validation");
+    std::filesystem::remove(path);
+}
+} // namespace
+#endif
+
 int main() {
     using namespace bloom_output_png_test_support;
     namespace media = bloom::media;
     ScratchDirectory scratch("media-image");
     Expectations check;
     testFastPngMatchesStb(check);
+#if defined(_WIN32)
+    // Windows only: the change time can be set there, and only there can a volume lack the
+    // change journal that numbers each rewrite.
+    testUnsettledReplacement(check, scratch.file("unsettled.png"));
+#endif
     // Every codec reads a frozen revision after its original pathname disappears. Comparing
     // independent path decode pixels also qualifies the custom EXR/stb stream adapters.
     for (const auto* extension : {"png", "jpg", "exr", "tiled.exr"}) {
@@ -461,6 +548,8 @@ int main() {
             file.write(reinterpret_cast<const char*>(kGeneratedJpeg.data()), kGeneratedJpeg.size());
         } else
             exr(path, std::string_view(extension) == "tiled.exr", Imf::FLOAT);
+        // Settled (settled_file.hpp), so the memo may vouch for it below on every volume.
+        check.expect(bloom::test_support::settleFileIdentity(path), "the fixture is settled");
         const auto oracle = media::decodeImage(path);
         const auto captured = media::captureImageSourceRevision(path, media::kMaxImageStorageBytes);
         check.expect(oracle && captured, "capture revision for every supported in-process codec");

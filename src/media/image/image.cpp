@@ -371,7 +371,10 @@ ImageResult<std::shared_ptr<const ImageSourceRevision>> captureImageSourceRevisi
         const auto known =
             unchanged ? platform::verifiedSourceDigests().knownIdentity(path, &*observedAfter)
                       : std::nullopt;
-        const bool identityChanged = known && *known != *observedAfter;
+        // An identity the memo knew while it was not settled (FileIdentity::settled) cannot tell a
+        // rewrite inside that clock tick from no change: the same identity now proves nothing,
+        // and it is hashed like a change. (A first use has nothing earlier to trust either way.)
+        const bool identityChanged = known && (*known != *observedAfter || !known->settled);
         if (storedDigest) {
             // The mirror hashed these bytes on this read: they are verified content, and the
             // identity that found them now vouches for that digest in the process memo.

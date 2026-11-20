@@ -250,7 +250,10 @@ std::optional<FileIdentity> observeFileIdentity(const std::filesystem::path& pat
     // The change time is read from the system clock, which can stand still for several
     // milliseconds: a file rewritten in place inside one tick, with its size and written time put
     // back, keeps its change time too. A volume's change journal numbers every change to a file,
-    // so that number is folded in where the volume keeps a journal.
+    // so that number is folded in where the volume keeps a journal. Where it keeps none, an
+    // identity observed within the settle time of its last change is not settled: a rewrite after
+    // this observation could still carry the same change time (FileIdentity::settled).
+    bool journaled = false;
     {
         alignas(USN_RECORD_V2) std::array<std::byte, 1024> record{};
         DWORD returned = 0;
@@ -268,7 +271,20 @@ std::optional<FileIdentity> observeFileIdentity(const std::filesystem::path& pat
             identity.changedNanoseconds =
                 static_cast<std::int64_t>(static_cast<std::uint64_t>(identity.changedNanoseconds) ^
                                           (number * 0x9E3779B97F4A7C15ULL));
+            journaled = number != 0;
         }
+    }
+    if (!journaled) {
+        // The same clock the file system stamps with. A volume that records no change time
+        // reports zero; its written time is the only time there is.
+        FILETIME now{};
+        ::GetSystemTimeAsFileTime(&now);
+        const auto nowTicks = static_cast<LONGLONG>(
+            (static_cast<std::uint64_t>(now.dwHighDateTime) << 32U) | now.dwLowDateTime);
+        const LONGLONG changed =
+            basic.ChangeTime.QuadPart != 0 ? basic.ChangeTime.QuadPart : basic.LastWriteTime.QuadPart;
+        constexpr LONGLONG kSettleTicks = FileIdentity::kSettleNanoseconds / 100;
+        identity.settled = changed <= nowTicks && nowTicks - changed >= kSettleTicks;
     }
     FILE_ID_INFO id{};
     if (::GetFileInformationByHandleEx(handle, FileIdInfo, &id, sizeof(id))) {
@@ -364,8 +380,10 @@ std::optional<core::Sha256Digest> VerifiedSourceDigests::find(const std::filesys
     std::unique_lock lock(state.mutex);
     adoptPersistedLocked(state, lock, key, identity);
     const auto found = state.entries.find(key);
+    // An identity that is not settled, now or when the digest was recorded, could hide a rewrite:
+    // it vouches for nothing, and the caller hashes.
     if (found == state.entries.end() || found->second.identity != identity ||
-        !found->second.verified)
+        !found->second.verified || !found->second.identity.settled || !identity.settled)
         return {};
     found->second.used = ++state.clock;
     return found->second.digest;
@@ -410,9 +428,11 @@ void VerifiedSourceDigests::record(const std::filesystem::path& path, const File
     auto key = memoKey(path);
     const std::lock_guard lock(state.mutex);
     const MemoEntry entry{identity, digest, ++state.clock, true};
+    // A record read back from the file is taken as settled, so an unsettled one stays in memory.
     if (const auto kept = state.persisted.find(key);
-        kept == state.persisted.end() || kept->second.digest != digest ||
-        !sameFile(kept->second.identity, identity))
+        identity.settled &&
+        (kept == state.persisted.end() || kept->second.digest != digest ||
+         !sameFile(kept->second.identity, identity)))
         persistLocked(state, key, entry);
     state.entries.insert_or_assign(std::move(key), entry);
     if (state.entries.size() > kEntryLimit) {

@@ -118,6 +118,30 @@ beside the disk cache (`verified-sources.v1`, path and identity to digest).
   restored is the residual risk this decision already accepted, now across runs as well as
   within one.
 
+## Amendment (2026-11-21): an identity observed within a tick of its change vouches for nothing
+
+Issue #749: on a Windows volume that keeps no change journal (a second internal drive often keeps
+none), the change time is the only per-change field, and it comes from a system clock that stands
+still for up to about 16 ms. A file rewritten in place within one tick of its last change, its size
+and written time put back, kept every identity field, so the memo vouched for the old digest and the
+capture admitted the new bytes under it: stale media. Where the volume keeps a journal, its number
+is folded into the identity and tells every change apart.
+
+- An identity is *settled* when nothing changed in the file for the settle time (two seconds) before
+  it was observed (`FileIdentity::settled`). Only a Windows identity without a journal number can be
+  unsettled: POSIX change times and journaled volumes tell each change apart.
+- An unsettled identity vouches for nothing: the memo does not answer for it, now or for a digest
+  recorded under it, and a capture hashes it like a changed identity. The digest it records is not
+  put on record for the next run. Once settled, a later rewrite would carry a later change time, so
+  the identity alone answers again.
+- The cost is one hash per use of a source changed in the last two seconds on such a volume.
+- `bloom.media.image` rewrites a fixture in place with every identity field put back, its change
+  time set ahead so it stays unsettled (Windows), and must report the replacement; tests that count
+  identity-only checks date their fixtures' change time back (`tests/support/settled_file.hpp`).
+
+The residual risk above narrows to a rewrite that puts back every field, the change time included,
+of a settled identity, and to coarse-timestamp and network filesystems.
+
 ## Related
 
 - [`../architecture/media-io.md`](../architecture/media-io.md)

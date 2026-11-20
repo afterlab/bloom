@@ -18,7 +18,19 @@ struct FileIdentity final {
     std::int64_t changedNanoseconds = 0;
     std::uint64_t volume = 0;
     std::uint64_t fileIdHigh = 0, fileIdLow = 0;
-    friend bool operator==(const FileIdentity&, const FileIdentity&) = default;
+    // False when a later change could leave every field above as it is: on a Windows volume that
+    // keeps no change journal, the change time comes from a system clock that stands still for
+    // milliseconds, so a file rewritten in place within one tick of its last change, with its size
+    // and written time put back, is indistinguishable. Such an identity was observed less than
+    // kSettleNanoseconds after that change; it vouches for nothing until it is observed later. Not
+    // compared and not persisted.
+    bool settled = true;
+    static constexpr std::int64_t kSettleNanoseconds = 2'000'000'000;
+    friend bool operator==(const FileIdentity& a, const FileIdentity& b) noexcept {
+        return a.size == b.size && a.modifiedNanoseconds == b.modifiedNanoseconds &&
+               a.changedNanoseconds == b.changedNanoseconds && a.volume == b.volume &&
+               a.fileIdHigh == b.fileIdHigh && a.fileIdLow == b.fileIdLow;
+    }
 };
 // Identity of a regular file through its pathname (following links), or nullopt when the path is
 // missing, unreadable or not a regular file. Linux/macOS use stat(2); Windows uses the file
