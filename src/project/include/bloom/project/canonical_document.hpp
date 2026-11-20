@@ -9,9 +9,11 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
+#include <vector>
 
 namespace bloom::document {
 
@@ -345,6 +347,81 @@ struct CanonicalDocumentMeasureResult final {
 [[nodiscard]] CanonicalDocumentMeasureResult
 measureCanonicalDocument(const CanonicalDocumentV1& document, CanonicalDocumentLimits limits = {},
                          CanonicalCurveSizeMemo* memo = nullptr);
+
+// #748: what one snapshot's canonical document.json holds, kept by composition and by record list,
+// so the size of a later snapshot follows from the records that differ between the two
+// (advanceCanonicalDocumentIndex) rather than from a walk of the whole document. Built by the
+// encoder's own counting pass (indexCanonicalDocument), so its bytes and values equal a whole
+// measure's exactly. Immutable once built and shared between threads.
+struct CanonicalDocumentSizeIndex final {
+    using Counted = CanonicalJsonWriter::CountedElement;
+    // A composition's record lists, in the order the document writes them.
+    enum class RecordList : std::uint8_t {
+        Parameters,
+        AnimationCurves,
+        Nodes,
+        Edges,
+        LayerOutputs
+    };
+    static constexpr std::size_t kRecordLists = 5;
+    // Entries of one list (or one run of object members): how many, and what they take together,
+    // each spelled as an entry that is not its container's first.
+    struct Entries final {
+        std::size_t count = 0;
+        Counted sum{};
+    };
+    struct Composition final {
+        std::uint64_t id = 0;
+        // The composition as an element of the project's compositions list.
+        Counted element{};
+        std::array<Entries, kRecordLists> lists{};
+    };
+    // Ascending by id.
+    std::vector<Composition> compositions;
+    // The project's assets, assetFolders, dataBlocks and exportQueue members, and the document's
+    // extensions member: measured again only when the project's root record storage changed.
+    Entries projectLists;
+    Entries extensions;
+    // The whole document. bytes and values are exact. The two maxima are never less than what the
+    // document holds; after records were replaced or removed they may still count a list or string
+    // that left with them, because lowering them would mean walking what did not change. A whole
+    // measure makes them exact again.
+    CanonicalDocumentMeasure measure{};
+};
+
+struct CanonicalDocumentIndexResult final {
+    CanonicalDocumentError error = CanonicalDocumentError::None;
+    std::shared_ptr<const CanonicalDocumentSizeIndex> index{};
+    // The walk saw its stop token and ended early; there is no index.
+    bool stopped = false;
+    // What the measure counted: records (curves, parameters, nodes, edges, layers) and
+    // compositions' own members. A whole measure counts every one.
+    std::size_t recordsCounted = 0;
+    std::size_t compositionsCounted = 0;
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return error == CanonicalDocumentError::None && index != nullptr;
+    }
+};
+
+// #748: measureCanonicalDocument() that also keeps the index: one walk of the whole document. The
+// request's scratch spans are ignored (it allocates its own). `stop` is checked between records.
+// Fails as measureCanonicalDocument() does. May throw std::bad_alloc.
+[[nodiscard]] CanonicalDocumentIndexResult
+indexCanonicalDocument(const CanonicalDocumentV1& document, std::stop_token stop = {},
+                       CanonicalDocumentLimits limits = {});
+
+// #748: the index of `document`'s snapshot, from `index`, the index of `indexed` (built with the
+// same color settings, RoundTripState and schema minor). Counts only what differs between the two
+// snapshots: for each composition whose content or own settings changed, the records its lists
+// gained and lost (found by comparing the lists' shared records, as the undo charge does) and its
+// own members (settings, node layout, groups, layer stack); the project's root lists only when
+// their storage changed; and the document's own members (project name, color settings, id
+// allocation). Bytes and values equal a whole measure of `document` exactly. Fails as
+// measureCanonicalDocument() does when the result passes `limits`. The request's scratch spans are
+// ignored. May throw std::bad_alloc.
+[[nodiscard]] CanonicalDocumentIndexResult advanceCanonicalDocumentIndex(
+    const CanonicalDocumentSizeIndex& index, const bloom::document::Snapshot& indexed,
+    const CanonicalDocumentV1& document, CanonicalDocumentLimits limits = {});
 
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentFieldPath>);
 static_assert(std::is_trivially_copyable_v<CanonicalDocumentV1>);

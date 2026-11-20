@@ -316,34 +316,50 @@ CanonicalJsonWriterResult CanonicalJsonWriter::stringValue(const std::string_vie
 
 CanonicalJsonWriterResult
 CanonicalJsonWriter::countedArrayElement(const CountedElement& element) noexcept {
+    if (depth_ != 0 && frames_[depth_ - 1].kind != ContainerKind::Array) {
+        return invalidState();
+    }
+    return countedEntries(element, 1);
+}
+
+CanonicalJsonWriterResult CanonicalJsonWriter::countedEntries(const CountedElement& entries,
+                                                              const std::size_t count) noexcept {
     if (const auto limits = validateLimits(); !limits) {
         return limits;
     }
-    if (!isCounting() || finished_ || depth_ == 0 || element.bytes == 0 || element.values == 0) {
+    if (!isCounting() || finished_ || depth_ == 0 || count == 0 || entries.bytes < count) {
         return invalidState();
     }
     auto& parent = frames_[depth_ - 1];
-    if (parent.kind != ContainerKind::Array) {
+    if (parent.kind == ContainerKind::Object && (parent.awaitingValue || entries.values == 0)) {
+        return invalidState();
+    }
+    if (parent.kind == ContainerKind::Array && entries.values < count) {
         return invalidState();
     }
     if (parent.entryCount >= limits_.maximumContainerEntries ||
-        element.largestContainerEntries > limits_.maximumContainerEntries) {
+        count > limits_.maximumContainerEntries - parent.entryCount ||
+        entries.largestContainerEntries > limits_.maximumContainerEntries) {
         return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::ContainerLimitExceeded);
     }
-    if (element.values > limits_.maximumValues - std::min(valueCount_, limits_.maximumValues) ||
+    if (entries.values > limits_.maximumValues - std::min(valueCount_, limits_.maximumValues) ||
         valueCount_ >= limits_.maximumValues) {
         return CanonicalJsonWriterResult::failure(CanonicalJsonWriterError::ValueLimitExceeded);
     }
-    const auto bytes = parent.entryCount == 0 ? element.bytes - 1 : element.bytes;
+    const auto bytes = parent.entryCount == 0 ? entries.bytes - 1 : entries.bytes;
     if (const auto capacity = ensureAdditionalCapacity(bytes); !capacity) {
         return capacity;
     }
     offset_ += bytes;
-    valueCount_ += element.values;
-    largestContainerEntries_ = std::max(largestContainerEntries_, element.largestContainerEntries);
-    largestStringBytes_ = std::max(largestStringBytes_, element.largestStringBytes);
-    ++parent.entryCount;
+    valueCount_ += entries.values;
+    largestContainerEntries_ = std::max(largestContainerEntries_, entries.largestContainerEntries);
+    largestStringBytes_ = std::max(largestStringBytes_, entries.largestStringBytes);
+    parent.entryCount += count;
     return CanonicalJsonWriterResult::success();
+}
+
+std::size_t CanonicalJsonWriter::openEntries() const noexcept {
+    return depth_ == 0 ? 0 : frames_[depth_ - 1].entryCount;
 }
 
 std::size_t CanonicalJsonWriter::openArrayEntries() const noexcept {

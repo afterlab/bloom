@@ -7,6 +7,7 @@
 #include <bloom/document/document.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/persisted_text.hpp>
+#include <bloom/document/record_table.hpp>
 #include <bloom/project/canonical_base64.hpp>
 #include <bloom/project/canonical_decimal.hpp>
 #include <bloom/project/round_trip_state.hpp>
@@ -16,8 +17,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
 #include <numeric>
+#include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -222,6 +226,23 @@ struct WalkState final {
     return "Unknown";
 }
 
+// #748 (CanonicalDocumentSizeIndex). A whole walk that keeps an index records every list entry it
+// writes; a replay writes a composition's record lists, the compositions list and unchanged root
+// lists from the index instead of walking them.
+struct SizeWalk final {
+    bool replay = false;
+    bloom::project::CanonicalDocumentSizeIndex* index = nullptr;
+    // The composition being walked (its lists are summed here) or replayed (its lists come from
+    // here); null outside one.
+    bloom::project::CanonicalDocumentSizeIndex::Composition* composition = nullptr;
+    // Replay: the root lists are the index's, not walked.
+    bool reuseRootLists = false;
+    std::stop_token stop;
+    bool stopped = false;
+    std::size_t recordsCounted = 0;
+    std::size_t compositionsCounted = 0;
+};
+
 struct EmitState final {
     CanonicalJsonWriter& writer;
     const bloom::document::Project& project;
@@ -245,6 +266,8 @@ struct EmitState final {
     std::size_t retainedConsumed = 0;
     // #748: a counting walk's memo of each curve's spelling; null for a write and with roundTrip.
     bloom::project::CanonicalCurveSizeMemo* curveMemo = nullptr;
+    // #748: a walk that keeps or replays a CanonicalDocumentSizeIndex; null otherwise.
+    SizeWalk* size = nullptr;
 
     [[nodiscard]] bool ok(const CanonicalJsonWriterResult result) noexcept {
         if (result) {
@@ -359,6 +382,117 @@ class PathScope final {
 
     EmitState& state_;
 };
+
+// #748: the size index's entry arithmetic.
+using SizeIndex = bloom::project::CanonicalDocumentSizeIndex;
+using Counted = CanonicalJsonWriter::CountedElement;
+
+void addEntries(SizeIndex::Entries& into, const Counted& entries,
+                const std::size_t count = 1) noexcept {
+    into.count += count;
+    into.sum.bytes += entries.bytes;
+    into.sum.values += entries.values;
+    into.sum.largestContainerEntries =
+        std::max(into.sum.largestContainerEntries, entries.largestContainerEntries);
+    into.sum.largestStringBytes = std::max(into.sum.largestStringBytes, entries.largestStringBytes);
+}
+
+// The maxima stay: lowering them would mean walking the entries that remain.
+void removeEntry(SizeIndex::Entries& from, const Counted& entry) noexcept {
+    --from.count;
+    from.sum.bytes -= entry.bytes;
+    from.sum.values -= entry.values;
+}
+
+[[nodiscard]] constexpr std::size_t listIndex(const SizeIndex::RecordList list) noexcept {
+    return static_cast<std::size_t>(list);
+}
+
+// What `emit` adds to the innermost open container, spelled as entries that are not its first:
+// bytes, values, its own maxima and how many entries. The writer's running maxima are kept.
+template <typename Emit>
+[[nodiscard]] bool countEntries(EmitState& state, Counted& counted, std::size_t& entries,
+                                Emit&& emit) {
+    auto& writer = state.writer;
+    const auto entriesBefore = writer.openEntries();
+    const auto bytesBefore = writer.bytesRequired();
+    const auto valuesBefore = writer.valueCount();
+    const auto outer = writer.exchangeMaxima({});
+    if (!emit())
+        return false;
+    const auto own = writer.exchangeMaxima(
+        {.largestContainerEntries =
+             std::max(outer.largestContainerEntries, writer.largestContainerEntries()),
+         .largestStringBytes = std::max(outer.largestStringBytes, writer.largestStringBytes())});
+    counted = {.bytes = writer.bytesRequired() - bytesBefore + (entriesBefore == 0 ? 1U : 0U),
+               .values = writer.valueCount() - valuesBefore,
+               .largestContainerEntries = own.largestContainerEntries,
+               .largestStringBytes = own.largestStringBytes};
+    entries = writer.openEntries() - entriesBefore;
+    return true;
+}
+
+[[nodiscard]] bool sizeWalkStopped(EmitState& state) noexcept {
+    if (state.size == nullptr || !state.size->stop.stop_requested())
+        return false;
+    state.size->stopped = true;
+    state.walk.fail(CanonicalDocumentError::MissingInput);
+    return true;
+}
+
+// One element of a composition's record list: written, and in a walk that keeps an index also
+// counted into the list's entries.
+template <typename Emit>
+[[nodiscard]] bool emitListElement(EmitState& state, const SizeIndex::RecordList list,
+                                   Emit&& emit) {
+    auto* size = state.size;
+    if (size == nullptr || size->composition == nullptr)
+        return emit();
+    if (sizeWalkStopped(state))
+        return false;
+    Counted counted;
+    std::size_t entries = 0;
+    if (!countEntries(state, counted, entries, emit))
+        return false;
+    addEntries(size->composition->lists[listIndex(list)], counted, entries);
+    ++size->recordsCounted;
+    return true;
+}
+
+// In a replay, a composition's record list (just opened) is the index's entries, then closed.
+// nullopt when this walk writes the list itself.
+[[nodiscard]] std::optional<bool> replayList(EmitState& state, const SizeIndex::RecordList list) {
+    const auto* size = state.size;
+    if (size == nullptr || !size->replay || size->composition == nullptr)
+        return std::nullopt;
+    const auto& entries = size->composition->lists[listIndex(list)];
+    if (entries.count != 0 && !state.ok(state.writer.countedEntries(entries.sum, entries.count)))
+        return false;
+    return state.ok(state.writer.endArray());
+}
+
+// A run of object members the index keeps whole (the root lists): replayed when unchanged,
+// otherwise written and, when keeping an index, counted into `kept`.
+template <typename Emit>
+[[nodiscard]] bool emitMemberRun(EmitState& state, SizeIndex::Entries SizeIndex::* kept,
+                                 Emit&& emit) {
+    auto* size = state.size;
+    if (size == nullptr)
+        return emit();
+    auto& entries = (*size->index).*kept;
+    if (size->replay && size->reuseRootLists) {
+        return entries.count == 0 ||
+               state.ok(state.writer.countedEntries(entries.sum, entries.count));
+    }
+    Counted counted;
+    std::size_t count = 0;
+    if (!countEntries(state, counted, count, emit))
+        return false;
+    entries = {};
+    if (count != 0)
+        addEntries(entries, counted, count);
+    return true;
+}
 
 [[nodiscard]] bool pathsMatch(const std::span<const EmitPathSegment> current,
                               const RoundTripAttachmentPath& entryPath) noexcept {
@@ -1119,6 +1253,146 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     return true;
 }
 
+[[nodiscard]] bool emitCurveRecord(EmitState& state,
+                                   const bloom::document::AnimationCurveRecord& record,
+                                   const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto idText = bloom::project::formatCanonicalUInt64(animationCurveId(record).value());
+    const PathScope curveScope(state, RoundTripCollectionKind::AnimationCurve, idText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "id", animationCurveId(record).value())) {
+        return false;
+    }
+    if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("scalar")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
+            return false;
+        }
+        std::span<const std::size_t> keyOrder;
+        if (!makeOrder(
+                scalar->keyframes, [](const ScalarKeyframe& key) noexcept { return key.time; },
+                state.sort.window2, keyOrder, state.walk.error)) {
+            {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
+                                compositionIndex);
+                return false;
+            }
+        }
+        for (const auto keyIndex : keyOrder) {
+            if (!emitScalarKeyframe(state, scalar->keyframes[keyIndex])) {
+                {
+                    state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
+                                    compositionIndex);
+                    return false;
+                }
+            }
+        }
+    } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("vec2")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
+            return false;
+        }
+        constexpr std::array names{AnimationComponent::X, AnimationComponent::Y};
+        for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    vector->components[componentIndex].keyframes,
+                    [](const ScalarKeyframe& key) noexcept { return key.time; }, state.sort.window2,
+                    keyOrder, state.walk.error))
+                return false;
+            for (const auto keyIndex : keyOrder) {
+                if (!emitComponentKeyframe(state, names[componentIndex],
+                                           vector->components[componentIndex].keyframes[keyIndex]))
+                    return false;
+            }
+        }
+    } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("vec3")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
+            return false;
+        constexpr std::array names{AnimationComponent::X, AnimationComponent::Y,
+                                   AnimationComponent::Z};
+        for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    vector3->components[componentIndex].keyframes,
+                    [](const ScalarKeyframe& key) noexcept { return key.time; }, state.sort.window2,
+                    keyOrder, state.walk.error))
+                return false;
+            for (const auto keyIndex : keyOrder)
+                if (!emitComponentKeyframe(state, names[componentIndex],
+                                           vector3->components[componentIndex].keyframes[keyIndex]))
+                    return false;
+        }
+    } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("color4")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
+            return false;
+        }
+        constexpr std::array names{AnimationComponent::Red, AnimationComponent::Green,
+                                   AnimationComponent::Blue, AnimationComponent::Alpha};
+        for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
+            std::span<const std::size_t> keyOrder;
+            if (!makeOrder(
+                    color->components[componentIndex].keyframes,
+                    [](const ScalarKeyframe& key) noexcept { return key.time; }, state.sort.window2,
+                    keyOrder, state.walk.error))
+                return false;
+            for (const auto keyIndex : keyOrder)
+                if (!emitComponentKeyframe(state, names[componentIndex],
+                                           color->components[componentIndex].keyframes[keyIndex]))
+                    return false;
+        }
+    } else if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("path")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
+            return false;
+        std::span<const std::size_t> keyOrder;
+        if (!makeOrder(
+                path->keyframes, [](const PathKeyframe& key) noexcept { return key.time; },
+                state.sort.window2, keyOrder, state.walk.error)) {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
+        for (const auto keyIndex : keyOrder)
+            if (!emitPathKeyframe(state, path->keyframes[keyIndex])) {
+                state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
+                return false;
+            }
+    } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
+        if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("gradient")) ||
+            !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
+            return false;
+        std::span<const std::size_t> keyOrder;
+        if (!makeOrder(
+                gradient->keyframes, [](const GradientKeyframe& key) noexcept { return key.time; },
+                state.sort.window2, keyOrder, state.walk.error)) {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
+        for (const auto keyIndex : keyOrder)
+            if (!emitGradientKeyframe(state, gradient->keyframes[keyIndex])) {
+                state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
+                return false;
+            }
+    } else {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
+            return false;
+        }
+    }
+    if (!state.ok(writer.endArray())) {
+        return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
 [[nodiscard]] bool emitAnimationCurves(EmitState& state, const Composition& composition,
                                        const std::size_t compositionIndex) noexcept {
     using namespace bloom::document;
@@ -1126,6 +1400,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     if (!state.ok(writer.memberName("animationCurves")) || !state.ok(writer.beginArray())) {
         return false;
     }
+    if (const auto replayed = replayList(state, SizeIndex::RecordList::AnimationCurves))
+        return *replayed;
     const auto& records = composition.animationCurves().records();
     std::span<const std::size_t> order;
     if (!makeOrder(
@@ -1139,155 +1415,17 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
             return false;
         }
     }
-    const auto emitCurve = [&](const AnimationCurveRecord& record) noexcept -> bool {
-        const auto idText = bloom::project::formatCanonicalUInt64(animationCurveId(record).value());
-        const PathScope curveScope(state, RoundTripCollectionKind::AnimationCurve, idText.view());
-        if (!state.ok(writer.beginObject())) {
-            return false;
-        }
-        if (!emitNamedId(state, "id", animationCurveId(record).value())) {
-            return false;
-        }
-        if (const auto* scalar = std::get_if<ScalarAnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("scalar")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
-                return false;
-            }
-            std::span<const std::size_t> keyOrder;
-            if (!makeOrder(
-                    scalar->keyframes, [](const ScalarKeyframe& key) noexcept { return key.time; },
-                    state.sort.window2, keyOrder, state.walk.error)) {
-                {
-                    state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                    compositionIndex);
-                    return false;
-                }
-            }
-            for (const auto keyIndex : keyOrder) {
-                if (!emitScalarKeyframe(state, scalar->keyframes[keyIndex])) {
-                    {
-                        state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                        compositionIndex);
-                        return false;
-                    }
-                }
-            }
-        } else if (const auto* vector = std::get_if<Vec2AnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("vec2")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
-                return false;
-            }
-            constexpr std::array names{AnimationComponent::X, AnimationComponent::Y};
-            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
-                std::span<const std::size_t> keyOrder;
-                if (!makeOrder(
-                        vector->components[componentIndex].keyframes,
-                        [](const ScalarKeyframe& key) noexcept { return key.time; },
-                        state.sort.window2, keyOrder, state.walk.error))
-                    return false;
-                for (const auto keyIndex : keyOrder) {
-                    if (!emitComponentKeyframe(
-                            state, names[componentIndex],
-                            vector->components[componentIndex].keyframes[keyIndex]))
-                        return false;
-                }
-            }
-        } else if (const auto* vector3 = std::get_if<Vec3AnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("vec3")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
-                return false;
-            constexpr std::array names{AnimationComponent::X, AnimationComponent::Y,
-                                       AnimationComponent::Z};
-            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
-                std::span<const std::size_t> keyOrder;
-                if (!makeOrder(
-                        vector3->components[componentIndex].keyframes,
-                        [](const ScalarKeyframe& key) noexcept { return key.time; },
-                        state.sort.window2, keyOrder, state.walk.error))
-                    return false;
-                for (const auto keyIndex : keyOrder)
-                    if (!emitComponentKeyframe(
-                            state, names[componentIndex],
-                            vector3->components[componentIndex].keyframes[keyIndex]))
-                        return false;
-            }
-        } else if (const auto* color = std::get_if<Color4AnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("color4")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray())) {
-                return false;
-            }
-            constexpr std::array names{AnimationComponent::Red, AnimationComponent::Green,
-                                       AnimationComponent::Blue, AnimationComponent::Alpha};
-            for (std::size_t componentIndex = 0; componentIndex < names.size(); ++componentIndex) {
-                std::span<const std::size_t> keyOrder;
-                if (!makeOrder(
-                        color->components[componentIndex].keyframes,
-                        [](const ScalarKeyframe& key) noexcept { return key.time; },
-                        state.sort.window2, keyOrder, state.walk.error))
-                    return false;
-                for (const auto keyIndex : keyOrder)
-                    if (!emitComponentKeyframe(
-                            state, names[componentIndex],
-                            color->components[componentIndex].keyframes[keyIndex]))
-                        return false;
-            }
-        } else if (const auto* path = std::get_if<PathAnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) || !state.ok(writer.stringValue("path")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
-                return false;
-            std::span<const std::size_t> keyOrder;
-            if (!makeOrder(
-                    path->keyframes, [](const PathKeyframe& key) noexcept { return key.time; },
-                    state.sort.window2, keyOrder, state.walk.error)) {
-                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                compositionIndex);
-                return false;
-            }
-            for (const auto keyIndex : keyOrder)
-                if (!emitPathKeyframe(state, path->keyframes[keyIndex])) {
-                    state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                    compositionIndex);
-                    return false;
-                }
-        } else if (const auto* gradient = std::get_if<GradientAnimationCurve>(&record)) {
-            if (!state.ok(writer.memberName("kind")) ||
-                !state.ok(writer.stringValue("gradient")) ||
-                !state.ok(writer.memberName("keyframes")) || !state.ok(writer.beginArray()))
-                return false;
-            std::span<const std::size_t> keyOrder;
-            if (!makeOrder(
-                    gradient->keyframes,
-                    [](const GradientKeyframe& key) noexcept { return key.time; },
-                    state.sort.window2, keyOrder, state.walk.error)) {
-                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                compositionIndex);
-                return false;
-            }
-            for (const auto keyIndex : keyOrder)
-                if (!emitGradientKeyframe(state, gradient->keyframes[keyIndex])) {
-                    state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve,
-                                    compositionIndex);
-                    return false;
-                }
-        } else {
-            {
-                state.walk.fail(CanonicalDocumentError::InvalidAnimationCurve, compositionIndex);
-                return false;
-            }
-        }
-        if (!state.ok(writer.endArray())) {
-            return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-        return state.ok(writer.endObject());
-    };
     for (const auto recordIndex : order) {
         const auto& record = records[recordIndex];
+        if (state.size != nullptr) {
+            if (!emitListElement(state, SizeIndex::RecordList::AnimationCurves,
+                                 [&] { return emitCurveRecord(state, record, compositionIndex); }))
+                return false;
+            continue;
+        }
         auto* memo = state.curveMemo;
         if (memo == nullptr) {
-            if (!emitCurve(record))
+            if (!emitCurveRecord(state, record, compositionIndex))
                 return false;
             continue;
         }
@@ -1301,7 +1439,7 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         const auto bytesBefore = writer.bytesRequired();
         const auto valuesBefore = writer.valueCount();
         const auto maxima = writer.exchangeMaxima({});
-        if (!emitCurve(record))
+        if (!emitCurveRecord(state, record, compositionIndex))
             return false;
         const auto curveMaxima = writer.exchangeMaxima(
             {.largestContainerEntries =
@@ -1324,6 +1462,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
     if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray())) {
         return false;
     }
+    if (const auto replayed = replayList(state, SizeIndex::RecordList::Parameters))
+        return *replayed;
     const auto& records = composition.parameters().records();
     std::span<const std::size_t> order;
     if (!makeOrder(
@@ -1335,7 +1475,8 @@ componentName(const bloom::document::AnimationComponent component) noexcept {
         }
     }
     for (const auto index : order) {
-        if (!emitParameter(state, records[index], index)) {
+        if (!emitListElement(state, SizeIndex::RecordList::Parameters,
+                             [&] { return emitParameter(state, records[index], index); })) {
             return false;
         }
     }
@@ -1477,6 +1618,323 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     return true;
 }
 
+[[nodiscard]] bool emitNodeRecord(EmitState& state, const bloom::document::NodeRecord& node,
+                                  const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto nodeIdText = bloom::project::formatCanonicalUInt64(node.id.value());
+    const PathScope nodeScope(state, RoundTripCollectionKind::Node, nodeIdText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "id", node.id.value())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("typeId")) || !state.ok(writer.stringValue(node.typeId))) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("schemaVersion")) ||
+        !state.ok(writer.integerValue(node.schemaVersion))) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray())) {
+        return false;
+    }
+    std::span<const std::size_t> bindingOrder;
+    if (!makeOrder(
+            node.parameters,
+            [](const ParameterBinding& binding) noexcept
+                -> std::pair<std::string_view, std::uint64_t> {
+                return {binding.role, binding.parameterId.value()};
+            },
+            state.sort.window2, bindingOrder, state.walk.error)) {
+        {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
+    }
+    for (const auto bindingIndex : bindingOrder) {
+        const auto& binding = node.parameters[bindingIndex];
+        const PathScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
+                                     std::string_view(binding.role));
+        if (!state.ok(writer.beginObject())) {
+            return false;
+        }
+        if (!state.ok(writer.memberName("role")) || !state.ok(writer.stringValue(binding.role))) {
+            return false;
+        }
+        if (!emitNamedId(state, "parameterId", binding.parameterId.value())) {
+            return false;
+        }
+        if (!emitRetainedTrailing(state)) {
+            return false;
+        }
+        if (!state.ok(writer.endObject())) {
+            return false;
+        }
+    }
+    if (!state.ok(writer.endArray())) {
+        return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitEdgeRecord(EmitState& state, const bloom::document::EdgeRecord& edge,
+                                  const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto edgeIdText = bloom::project::formatCanonicalUInt64(edge.id.value());
+    const PathScope edgeScope(state, RoundTripCollectionKind::Edge, edgeIdText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "id", edge.id.value())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("source"))) {
+        return false;
+    }
+    {
+        const PathScope sourceScope(state, "source");
+        if (!emitOutputPortRef(state, edge.source)) {
+            return false;
+        }
+    }
+    if (!state.ok(writer.memberName("destination")) || !state.ok(writer.beginObject())) {
+        return false;
+    }
+    {
+        const PathScope destinationScope(state, "destination");
+        if (const auto* nodeInput = std::get_if<NodeInputRef>(&edge.destination)) {
+            if (!state.ok(writer.memberName("kind")) ||
+                !state.ok(writer.stringValue("node-input"))) {
+                return false;
+            }
+            if (!emitNamedId(state, "nodeId", nodeInput->nodeId.value())) {
+                return false;
+            }
+            if (!state.ok(writer.memberName("port")) ||
+                !state.ok(writer.stringValue(nodeInput->port))) {
+                return false;
+            }
+        } else if (const auto* stackInput = std::get_if<LayerStackInputRef>(&edge.destination)) {
+            if (!state.ok(writer.memberName("kind")) ||
+                !state.ok(writer.stringValue("layer-stack-input"))) {
+                return false;
+            }
+            if (!emitNamedId(state, "stackNodeId", stackInput->stackNodeId.value())) {
+                return false;
+            }
+            if (!emitNamedId(state, "slotId", stackInput->slotId.value())) {
+                return false;
+            }
+            if (!state.ok(writer.memberName("role")) ||
+                !state.ok(writer.stringValue(stackInput->role))) {
+                return false;
+            }
+        } else {
+            state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
+            return false;
+        }
+        if (!emitRetainedTrailing(state)) {
+            return false;
+        }
+    }
+    if (!state.ok(writer.endObject())) {
+        return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitLayerOutputRecord(EmitState& state,
+                                         const bloom::document::LayerOutputBoundary& boundary,
+                                         const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto layerIdText = bloom::project::formatCanonicalUInt64(boundary.layerId.value());
+    const PathScope layerOutputScope(state, RoundTripCollectionKind::LayerOutput,
+                                     layerIdText.view());
+    if (!state.ok(writer.beginObject())) {
+        return false;
+    }
+    if (!emitNamedId(state, "nodeId", boundary.nodeId.value())) {
+        return false;
+    }
+    if (!emitNamedId(state, "layerId", boundary.layerId.value())) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(boundary.name))) {
+        return false;
+    }
+    if (!state.ok(writer.memberName("outputPort")) ||
+        !state.ok(writer.stringValue(boundary.outputPort))) {
+        return false;
+    }
+    for (const auto& [key, time] :
+         {std::pair{"inPoint", boundary.inPoint}, std::pair{"outPoint", boundary.outPoint}}) {
+        if (time == bloom::core::RationalTime{})
+            continue;
+        const PathScope timeScope(state, key);
+        if (!state.ok(writer.memberName(key)) ||
+            !emitRational(state, time.numerator(), time.denominator()))
+            return false;
+    }
+    if (!boundary.enabled &&
+        (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false))))
+        return false;
+    if (boundary.solo &&
+        (!state.ok(writer.memberName("solo")) || !state.ok(writer.booleanValue(true))))
+        return false;
+    if (boundary.locked &&
+        (!state.ok(writer.memberName("locked")) || !state.ok(writer.booleanValue(true))))
+        return false;
+    if (boundary.labelColor) {
+        if (!state.ok(writer.memberName("labelColor")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto channel : *boundary.labelColor)
+            if (!state.ok(writer.integerValue(channel)))
+                return false;
+        if (!state.ok(writer.endArray()))
+            return false;
+    }
+    if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
+        return false;
+    if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
+        return false;
+    // Presentation flags, each written only when set.
+    if (boundary.shy &&
+        (!state.ok(writer.memberName("shy")) || !state.ok(writer.booleanValue(true))))
+        return false;
+    if (boundary.nameFollowsSource &&
+        (!state.ok(writer.memberName("nameFollowsSource")) || !state.ok(writer.booleanValue(true))))
+        return false;
+    // #502: a Merge entry's own layer names its slot and binds its own parameters; the Frame
+    // pivot is written only when set, so every other layer writes neither.
+    if (boundary.entrySlot && !emitNamedId(state, "slotId", boundary.entrySlot->value()))
+        return false;
+    if (boundary.pivot == bloom::document::LayerPivot::Frame &&
+        (!state.ok(writer.memberName("pivot")) || !state.ok(writer.stringValue("frame"))))
+        return false;
+    if (!boundary.parameters.empty()) {
+        const PathScope parametersScope(state, "parameters");
+        if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray()))
+            return false;
+        std::span<const std::size_t> bindingOrder;
+        if (!makeOrder(
+                boundary.parameters,
+                [](const ParameterBinding& binding) noexcept
+                    -> std::pair<std::string_view, std::uint64_t> {
+                    return {binding.role, binding.parameterId.value()};
+                },
+                state.sort.window2, bindingOrder, state.walk.error)) {
+            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+            return false;
+        }
+        for (const auto bindingIndex : bindingOrder) {
+            const auto& binding = boundary.parameters[bindingIndex];
+            const PathScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
+                                         std::string_view(binding.role));
+            if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("role")) ||
+                !state.ok(writer.stringValue(binding.role)) ||
+                !emitNamedId(state, "parameterId", binding.parameterId.value()) ||
+                !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endArray()))
+            return false;
+    }
+    if (!emitRetainedTrailing(state)) {
+        return false;
+    }
+    return state.ok(writer.endObject());
+}
+
+[[nodiscard]] bool emitNodeList(EmitState& state, const bloom::document::CanonicalGraph& graph,
+                                const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("nodes")) || !state.ok(writer.beginArray())) {
+        return false;
+    }
+    if (const auto replayed = replayList(state, SizeIndex::RecordList::Nodes))
+        return *replayed;
+    std::span<const std::size_t> nodeOrder;
+    if (!makeOrder(
+            graph.nodes(), [](const NodeRecord& node) noexcept { return node.id.value(); },
+            state.sort.window1, nodeOrder, state.walk.error)) {
+        state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+        return false;
+    }
+    for (const auto index : nodeOrder) {
+        if (!emitListElement(state, SizeIndex::RecordList::Nodes, [&] {
+                return emitNodeRecord(state, graph.nodes()[index], compositionIndex);
+            }))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
+[[nodiscard]] bool emitEdgeList(EmitState& state, const bloom::document::CanonicalGraph& graph,
+                                const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("edges")) || !state.ok(writer.beginArray())) {
+        return false;
+    }
+    if (const auto replayed = replayList(state, SizeIndex::RecordList::Edges))
+        return *replayed;
+    std::span<const std::size_t> edgeOrder;
+    if (!makeOrder(
+            graph.edges(), [](const EdgeRecord& edge) noexcept { return edge.id.value(); },
+            state.sort.window1, edgeOrder, state.walk.error)) {
+        state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+        return false;
+    }
+    for (const auto index : edgeOrder) {
+        if (!emitListElement(state, SizeIndex::RecordList::Edges, [&] {
+                return emitEdgeRecord(state, graph.edges()[index], compositionIndex);
+            }))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
+[[nodiscard]] bool emitLayerOutputList(EmitState& state,
+                                       const bloom::document::CanonicalGraph& graph,
+                                       const std::size_t compositionIndex) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    if (!state.ok(writer.memberName("layerOutputs")) || !state.ok(writer.beginArray())) {
+        return false;
+    }
+    if (const auto replayed = replayList(state, SizeIndex::RecordList::LayerOutputs))
+        return *replayed;
+    std::span<const std::size_t> boundaryOrder;
+    if (!makeOrder(
+            graph.layerOutputs(),
+            [](const LayerOutputBoundary& boundary) noexcept
+                -> std::pair<std::uint64_t, std::uint64_t> {
+                return {boundary.layerId.value(), boundary.nodeId.value()};
+            },
+            state.sort.window1, boundaryOrder, state.walk.error)) {
+        state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
+        return false;
+    }
+    for (const auto index : boundaryOrder) {
+        if (!emitListElement(state, SizeIndex::RecordList::LayerOutputs, [&] {
+                return emitLayerOutputRecord(state, graph.layerOutputs()[index], compositionIndex);
+            }))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitGraph(EmitState& state, const Composition& composition,
                              const std::size_t compositionIndex) noexcept {
     using namespace bloom::document;
@@ -1487,292 +1945,9 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     }
     const PathScope graphScope(state, "graph");
 
-    if (!state.ok(writer.memberName("nodes")) || !state.ok(writer.beginArray())) {
-        return false;
-    }
-    std::span<const std::size_t> nodeOrder;
-    if (!makeOrder(
-            graph.nodes(), [](const NodeRecord& node) noexcept { return node.id.value(); },
-            state.sort.window1, nodeOrder, state.walk.error)) {
-        {
-            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
-            return false;
-        }
-    }
-    for (const auto nodeIndex : nodeOrder) {
-        const auto& node = graph.nodes()[nodeIndex];
-        const auto nodeIdText = bloom::project::formatCanonicalUInt64(node.id.value());
-        const PathScope nodeScope(state, RoundTripCollectionKind::Node, nodeIdText.view());
-        if (!state.ok(writer.beginObject())) {
-            return false;
-        }
-        if (!emitNamedId(state, "id", node.id.value())) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("typeId")) || !state.ok(writer.stringValue(node.typeId))) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("schemaVersion")) ||
-            !state.ok(writer.integerValue(node.schemaVersion))) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray())) {
-            return false;
-        }
-        std::span<const std::size_t> bindingOrder;
-        if (!makeOrder(
-                node.parameters,
-                [](const ParameterBinding& binding) noexcept
-                    -> std::pair<std::string_view, std::uint64_t> {
-                    return {binding.role, binding.parameterId.value()};
-                },
-                state.sort.window2, bindingOrder, state.walk.error)) {
-            {
-                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                compositionIndex);
-                return false;
-            }
-        }
-        for (const auto bindingIndex : bindingOrder) {
-            const auto& binding = node.parameters[bindingIndex];
-            const PathScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
-                                         std::string_view(binding.role));
-            if (!state.ok(writer.beginObject())) {
-                return false;
-            }
-            if (!state.ok(writer.memberName("role")) ||
-                !state.ok(writer.stringValue(binding.role))) {
-                return false;
-            }
-            if (!emitNamedId(state, "parameterId", binding.parameterId.value())) {
-                return false;
-            }
-            if (!emitRetainedTrailing(state)) {
-                return false;
-            }
-            if (!state.ok(writer.endObject())) {
-                return false;
-            }
-        }
-        if (!state.ok(writer.endArray())) {
-            return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-        if (!state.ok(writer.endObject())) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endArray())) {
-        return false;
-    }
-
-    if (!state.ok(writer.memberName("edges")) || !state.ok(writer.beginArray())) {
-        return false;
-    }
-    std::span<const std::size_t> edgeOrder;
-    if (!makeOrder(
-            graph.edges(), [](const EdgeRecord& edge) noexcept { return edge.id.value(); },
-            state.sort.window1, edgeOrder, state.walk.error)) {
-        {
-            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
-            return false;
-        }
-    }
-    for (const auto edgeIndex : edgeOrder) {
-        const auto& edge = graph.edges()[edgeIndex];
-        const auto edgeIdText = bloom::project::formatCanonicalUInt64(edge.id.value());
-        const PathScope edgeScope(state, RoundTripCollectionKind::Edge, edgeIdText.view());
-        if (!state.ok(writer.beginObject())) {
-            return false;
-        }
-        if (!emitNamedId(state, "id", edge.id.value())) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("source"))) {
-            return false;
-        }
-        {
-            const PathScope sourceScope(state, "source");
-            if (!emitOutputPortRef(state, edge.source)) {
-                return false;
-            }
-        }
-        if (!state.ok(writer.memberName("destination")) || !state.ok(writer.beginObject())) {
-            return false;
-        }
-        {
-            const PathScope destinationScope(state, "destination");
-            if (const auto* nodeInput = std::get_if<NodeInputRef>(&edge.destination)) {
-                if (!state.ok(writer.memberName("kind")) ||
-                    !state.ok(writer.stringValue("node-input"))) {
-                    return false;
-                }
-                if (!emitNamedId(state, "nodeId", nodeInput->nodeId.value())) {
-                    return false;
-                }
-                if (!state.ok(writer.memberName("port")) ||
-                    !state.ok(writer.stringValue(nodeInput->port))) {
-                    return false;
-                }
-            } else if (const auto* stackInput =
-                           std::get_if<LayerStackInputRef>(&edge.destination)) {
-                if (!state.ok(writer.memberName("kind")) ||
-                    !state.ok(writer.stringValue("layer-stack-input"))) {
-                    return false;
-                }
-                if (!emitNamedId(state, "stackNodeId", stackInput->stackNodeId.value())) {
-                    return false;
-                }
-                if (!emitNamedId(state, "slotId", stackInput->slotId.value())) {
-                    return false;
-                }
-                if (!state.ok(writer.memberName("role")) ||
-                    !state.ok(writer.stringValue(stackInput->role))) {
-                    return false;
-                }
-            } else {
-                state.walk.fail(CanonicalDocumentError::InvalidGraph, compositionIndex);
-                return false;
-            }
-            if (!emitRetainedTrailing(state)) {
-                return false;
-            }
-        }
-        if (!state.ok(writer.endObject())) {
-            return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-        if (!state.ok(writer.endObject())) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endArray())) {
-        return false;
-    }
-
-    if (!state.ok(writer.memberName("layerOutputs")) || !state.ok(writer.beginArray())) {
-        return false;
-    }
-    std::span<const std::size_t> boundaryOrder;
-    if (!makeOrder(
-            graph.layerOutputs(),
-            [](const LayerOutputBoundary& boundary) noexcept
-                -> std::pair<std::uint64_t, std::uint64_t> {
-                return {boundary.layerId.value(), boundary.nodeId.value()};
-            },
-            state.sort.window1, boundaryOrder, state.walk.error)) {
-        {
-            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity, compositionIndex);
-            return false;
-        }
-    }
-    for (const auto boundaryIndex : boundaryOrder) {
-        const auto& boundary = graph.layerOutputs()[boundaryIndex];
-        const auto layerIdText = bloom::project::formatCanonicalUInt64(boundary.layerId.value());
-        const PathScope layerOutputScope(state, RoundTripCollectionKind::LayerOutput,
-                                         layerIdText.view());
-        if (!state.ok(writer.beginObject())) {
-            return false;
-        }
-        if (!emitNamedId(state, "nodeId", boundary.nodeId.value())) {
-            return false;
-        }
-        if (!emitNamedId(state, "layerId", boundary.layerId.value())) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("name")) || !state.ok(writer.stringValue(boundary.name))) {
-            return false;
-        }
-        if (!state.ok(writer.memberName("outputPort")) ||
-            !state.ok(writer.stringValue(boundary.outputPort))) {
-            return false;
-        }
-        for (const auto& [key, time] :
-             {std::pair{"inPoint", boundary.inPoint}, std::pair{"outPoint", boundary.outPoint}}) {
-            if (time == bloom::core::RationalTime{})
-                continue;
-            const PathScope timeScope(state, key);
-            if (!state.ok(writer.memberName(key)) ||
-                !emitRational(state, time.numerator(), time.denominator()))
-                return false;
-        }
-        if (!boundary.enabled &&
-            (!state.ok(writer.memberName("enabled")) || !state.ok(writer.booleanValue(false))))
-            return false;
-        if (boundary.solo &&
-            (!state.ok(writer.memberName("solo")) || !state.ok(writer.booleanValue(true))))
-            return false;
-        if (boundary.locked &&
-            (!state.ok(writer.memberName("locked")) || !state.ok(writer.booleanValue(true))))
-            return false;
-        if (boundary.labelColor) {
-            if (!state.ok(writer.memberName("labelColor")) || !state.ok(writer.beginArray()))
-                return false;
-            for (const auto channel : *boundary.labelColor)
-                if (!state.ok(writer.integerValue(channel)))
-                    return false;
-            if (!state.ok(writer.endArray()))
-                return false;
-        }
-        if (boundary.parent && !emitNamedId(state, "parent", boundary.parent->value()))
-            return false;
-        if (!emitLayerTiming(state, boundary.timing) || !emitLayerMasks(state, boundary))
-            return false;
-        // Presentation flags, each written only when set.
-        if (boundary.shy &&
-            (!state.ok(writer.memberName("shy")) || !state.ok(writer.booleanValue(true))))
-            return false;
-        if (boundary.nameFollowsSource && (!state.ok(writer.memberName("nameFollowsSource")) ||
-                                           !state.ok(writer.booleanValue(true))))
-            return false;
-        // #502: a Merge entry's own layer names its slot and binds its own parameters; the Frame
-        // pivot is written only when set, so every other layer writes neither.
-        if (boundary.entrySlot && !emitNamedId(state, "slotId", boundary.entrySlot->value()))
-            return false;
-        if (boundary.pivot == bloom::document::LayerPivot::Frame &&
-            (!state.ok(writer.memberName("pivot")) || !state.ok(writer.stringValue("frame"))))
-            return false;
-        if (!boundary.parameters.empty()) {
-            const PathScope parametersScope(state, "parameters");
-            if (!state.ok(writer.memberName("parameters")) || !state.ok(writer.beginArray()))
-                return false;
-            std::span<const std::size_t> bindingOrder;
-            if (!makeOrder(
-                    boundary.parameters,
-                    [](const ParameterBinding& binding) noexcept
-                        -> std::pair<std::string_view, std::uint64_t> {
-                        return {binding.role, binding.parameterId.value()};
-                    },
-                    state.sort.window2, bindingOrder, state.walk.error)) {
-                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity,
-                                compositionIndex);
-                return false;
-            }
-            for (const auto bindingIndex : bindingOrder) {
-                const auto& binding = boundary.parameters[bindingIndex];
-                const PathScope bindingScope(state, RoundTripCollectionKind::ParameterBinding,
-                                             std::string_view(binding.role));
-                if (!state.ok(writer.beginObject()) || !state.ok(writer.memberName("role")) ||
-                    !state.ok(writer.stringValue(binding.role)) ||
-                    !emitNamedId(state, "parameterId", binding.parameterId.value()) ||
-                    !emitRetainedTrailing(state) || !state.ok(writer.endObject()))
-                    return false;
-            }
-            if (!state.ok(writer.endArray()))
-                return false;
-        }
-        if (!emitRetainedTrailing(state)) {
-            return false;
-        }
-        if (!state.ok(writer.endObject())) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endArray())) {
+    if (!emitNodeList(state, graph, compositionIndex) ||
+        !emitEdgeList(state, graph, compositionIndex) ||
+        !emitLayerOutputList(state, graph, compositionIndex)) {
         return false;
     }
 
@@ -2716,24 +2891,51 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
         if (!state.ok(writer.memberName("compositions")) || !state.ok(writer.beginArray())) {
             return false;
         }
-        std::span<const std::size_t> compositionOrder;
-        if (!makeOrder(
-                state.project.compositions(),
-                [](const Composition& composition) noexcept { return composition.id().value(); },
-                state.sort.window0, compositionOrder, state.walk.error)) {
-            {
+        if (auto* size = state.size; size != nullptr && size->replay) {
+            // #748: every composition is its index entry (advanceCanonicalDocumentIndex counted
+            // the ones that changed).
+            SizeIndex::Entries all;
+            for (const auto& entry : size->index->compositions)
+                addEntries(all, entry.element);
+            if (all.count != 0 && !state.ok(writer.countedEntries(all.sum, all.count)))
+                return false;
+        } else {
+            std::span<const std::size_t> compositionOrder;
+            if (!makeOrder(
+                    state.project.compositions(),
+                    [](const Composition& composition) noexcept {
+                        return composition.id().value();
+                    },
+                    state.sort.window0, compositionOrder, state.walk.error)) {
                 state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity);
                 return false;
             }
-        }
-        for (const auto compositionIndex : compositionOrder) {
-            if (!emitComposition(state, state.project.compositions()[compositionIndex],
-                                 compositionIndex)) {
-                return false;
+            for (const auto compositionIndex : compositionOrder) {
+                const auto& composition = state.project.compositions()[compositionIndex];
+                if (size == nullptr) {
+                    if (!emitComposition(state, composition, compositionIndex))
+                        return false;
+                    continue;
+                }
+                // #748: a whole walk that keeps an index sums each composition's lists and
+                // remembers the composition's own element.
+                SizeIndex::Composition entry{.id = composition.id().value()};
+                size->composition = &entry;
+                std::size_t count = 0;
+                const bool emitted = countEntries(state, entry.element, count, [&] {
+                    return emitComposition(state, composition, compositionIndex);
+                });
+                size->composition = nullptr;
+                if (!emitted)
+                    return false;
+                ++size->compositionsCounted;
+                size->index->compositions.push_back(entry);
             }
         }
-        if (!state.ok(writer.endArray()) || !emitAssets(state) || !emitAssetFolders(state) ||
-            !emitDataBlocks(state) || !emitExportQueue(state)) {
+        if (!state.ok(writer.endArray()) || !emitMemberRun(state, &SizeIndex::projectLists, [&] {
+                return emitAssets(state) && emitAssetFolders(state) && emitDataBlocks(state) &&
+                       emitExportQueue(state);
+            })) {
             return false;
         }
         if (!emitRetainedTrailing(state)) {
@@ -2793,25 +2995,25 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
         return false;
     }
 
-    if (!state.ok(writer.memberName("extensions")) || !state.ok(writer.beginArray())) {
-        return false;
-    }
-    std::span<const std::size_t> recordOrder;
-    if (!makeOrder(
-            state.project.extensionRecords(),
-            [](const ExtensionRecord& record) noexcept { return record.id.value(); },
-            state.sort.window1, recordOrder, state.walk.error)) {
-        {
-            state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity);
-            return false;
-        }
-    }
-    for (const auto recordIndex : recordOrder) {
-        if (!emitExtensionRecord(state, state.project.extensionRecords()[recordIndex])) {
-            return false;
-        }
-    }
-    if (!state.ok(writer.endArray())) {
+    if (!emitMemberRun(state, &SizeIndex::extensions, [&] {
+            if (!state.ok(writer.memberName("extensions")) || !state.ok(writer.beginArray())) {
+                return false;
+            }
+            std::span<const std::size_t> recordOrder;
+            if (!makeOrder(
+                    state.project.extensionRecords(),
+                    [](const ExtensionRecord& record) noexcept { return record.id.value(); },
+                    state.sort.window1, recordOrder, state.walk.error)) {
+                state.walk.fail(CanonicalDocumentError::InvalidCollectionIdentity);
+                return false;
+            }
+            for (const auto recordIndex : recordOrder) {
+                if (!emitExtensionRecord(state, state.project.extensionRecords()[recordIndex])) {
+                    return false;
+                }
+            }
+            return state.ok(writer.endArray());
+        })) {
         return false;
     }
     if (!emitRetainedTrailing(state)) {
@@ -2827,7 +3029,9 @@ dataBlockWireKind(const bloom::document::DataBlockKind kind) noexcept {
     // this walk (see docs/architecture/project-format.md, "Versions And
     // Preservation"). A leftover entry is state captured against a different document (or a stale
     // edit of this one), never silently dropped.
-    if (state.roundTrip != nullptr && state.retainedConsumed != state.roundTrip->entries().size()) {
+    // A replay (#748) visits only what changed, so it consumes only those entries.
+    if (state.roundTrip != nullptr && (state.size == nullptr || !state.size->replay) &&
+        state.retainedConsumed != state.roundTrip->entries().size()) {
         state.walk.fail(CanonicalDocumentError::RoundTripStateMismatch);
         return false;
     }
@@ -2964,6 +3168,184 @@ locatorPortability(const bloom::document::OcioConfigLocator& locator) noexcept {
     }
     return walk;
 }
+
+// #748: the second sort window one record needs on its own (curve keys, node and layer bindings).
+[[nodiscard]] std::size_t nestedEntries(const bloom::document::ParameterRecord&) noexcept {
+    return 0;
+}
+[[nodiscard]] std::size_t nestedEntries(const bloom::document::EdgeRecord&) noexcept { return 0; }
+[[nodiscard]] std::size_t nestedEntries(const bloom::document::NodeRecord& node) noexcept {
+    return node.parameters.size();
+}
+[[nodiscard]] std::size_t
+nestedEntries(const bloom::document::LayerOutputBoundary& boundary) noexcept {
+    return boundary.parameters.size();
+}
+[[nodiscard]] std::size_t
+nestedEntries(const bloom::document::AnimationCurveRecord& record) noexcept {
+    using namespace bloom::document;
+    std::size_t entries = 0;
+    std::visit(
+        [&](const auto& curve) {
+            using Curve = std::decay_t<decltype(curve)>;
+            if constexpr (requires { curve.keyframes; }) {
+                entries = curve.keyframes.size();
+            } else if constexpr (requires { curve.components; }) {
+                for (const auto& component : curve.components)
+                    entries = std::max(entries, component.keyframes.size());
+            } else {
+                static_assert(sizeof(Curve) == 0, "an animation curve without keyframes");
+            }
+        },
+        record);
+    return entries;
+}
+
+[[nodiscard]] bool emitRecord(EmitState& state, const bloom::document::ParameterRecord& record) {
+    return emitParameter(state, record, kCanonicalDocumentNoIndex);
+}
+[[nodiscard]] bool emitRecord(EmitState& state,
+                              const bloom::document::AnimationCurveRecord& record) {
+    return emitCurveRecord(state, record, kCanonicalDocumentNoIndex);
+}
+[[nodiscard]] bool emitRecord(EmitState& state, const bloom::document::NodeRecord& record) {
+    return emitNodeRecord(state, record, kCanonicalDocumentNoIndex);
+}
+[[nodiscard]] bool emitRecord(EmitState& state, const bloom::document::EdgeRecord& record) {
+    return emitEdgeRecord(state, record, kCanonicalDocumentNoIndex);
+}
+[[nodiscard]] bool emitRecord(EmitState& state,
+                              const bloom::document::LayerOutputBoundary& record) {
+    return emitLayerOutputRecord(state, record, kCanonicalDocumentNoIndex);
+}
+
+// #748: the inputs every partial count of one request shares.
+struct PartialCount final {
+    const bloom::project::CanonicalDocumentV1& request;
+    bloom::project::CanonicalJsonWriterLimits limits;
+    CanonicalDocumentError error = CanonicalDocumentError::None;
+    std::size_t recordsCounted = 0;
+    std::size_t compositionsCounted = 0;
+
+    [[nodiscard]] bool fail(const EmitState& state) noexcept {
+        error = state.walk.error == CanonicalDocumentError::None
+                    ? CanonicalDocumentError::MissingInput
+                    : state.walk.error;
+        return false;
+    }
+
+    // Opens the writer to the depth of the project's compositions list, as the document does.
+    [[nodiscard]] static bool openCompositions(EmitState& state) noexcept {
+        auto& writer = state.writer;
+        return state.ok(writer.beginObject()) && state.ok(writer.memberName("project")) &&
+               state.ok(writer.beginObject()) && state.ok(writer.memberName("compositions")) &&
+               state.ok(writer.beginArray());
+    }
+
+    // One record of `composition`'s list, spelled where the document spells it.
+    template <typename Record>
+    [[nodiscard]] bool countRecord(const bloom::document::Project& project,
+                                   const Composition& composition, const SizeIndex::RecordList list,
+                                   const Record& record, Counted& counted) {
+        static constexpr std::array<std::string_view, SizeIndex::kRecordLists> names{
+            "parameters", "animationCurves", "nodes", "edges", "layerOutputs"};
+        std::vector<std::size_t> nested(nestedEntries(record));
+        auto writer = CanonicalJsonWriter::counting(limits);
+        EmitState state{writer,
+                        project,
+                        request.snapshot->ids().highWater(),
+                        *request.colorSettings,
+                        SortWindows{{}, {}, nested},
+                        {},
+                        {},
+                        request.roundTrip,
+                        request.schemaMinor};
+        const auto idText = bloom::project::formatCanonicalUInt64(composition.id().value());
+        const PathScope projectScope(state, "project");
+        const PathScope compositionScope(state, RoundTripCollectionKind::Composition,
+                                         idText.view());
+        if (!openCompositions(state) || !state.ok(writer.beginObject()))
+            return fail(state);
+        std::optional<PathScope> graphScope;
+        if (list >= SizeIndex::RecordList::Nodes) {
+            if (!state.ok(writer.memberName("graph")) || !state.ok(writer.beginObject()))
+                return fail(state);
+            graphScope.emplace(state, "graph");
+        }
+        if (!state.ok(writer.memberName(names[listIndex(list)])) || !state.ok(writer.beginArray()))
+            return fail(state);
+        std::size_t entries = 0;
+        if (!countEntries(state, counted, entries, [&] { return emitRecord(state, record); }))
+            return fail(state);
+        ++recordsCounted;
+        return true;
+    }
+
+    // `composition` as an element of the compositions list, its record lists taken from `entry`.
+    [[nodiscard]] bool countComposition(const bloom::document::Project& project,
+                                        const Composition& composition,
+                                        SizeIndex::Composition& entry) {
+        auto writer = CanonicalJsonWriter::counting(limits);
+        EmitState state{writer,
+                        project,
+                        request.snapshot->ids().highWater(),
+                        *request.colorSettings,
+                        {},
+                        {},
+                        {},
+                        request.roundTrip,
+                        request.schemaMinor};
+        SizeWalk walk{.replay = true, .composition = &entry, .stop = {}};
+        state.size = &walk;
+        const PathScope projectScope(state, "project");
+        if (!openCompositions(state))
+            return fail(state);
+        std::size_t entries = 0;
+        if (!countEntries(state, entry.element, entries, [&] {
+                return emitComposition(state, composition, kCanonicalDocumentNoIndex);
+            }))
+            return fail(state);
+        ++compositionsCounted;
+        return true;
+    }
+
+    // Every record of one of `composition`'s lists, into `entries`.
+    template <typename View>
+    [[nodiscard]] bool countAll(const bloom::document::Project& project,
+                                const Composition& composition, const SizeIndex::RecordList list,
+                                const View& records, SizeIndex::Entries& entries) {
+        for (std::size_t index = 0; index < records.size(); ++index) {
+            Counted counted;
+            if (!countRecord(project, composition, list, records[index], counted))
+                return false;
+            addEntries(entries, counted);
+        }
+        return true;
+    }
+
+    // The records a list gained and lost between two contents of one composition.
+    template <typename View>
+    [[nodiscard]] bool
+    countChanges(const bloom::document::Project& beforeProject, const Composition& before,
+                 const bloom::document::Project& afterProject, const Composition& after,
+                 const SizeIndex::RecordList list, const View& earlier, const View& later,
+                 SizeIndex::Entries& entries) {
+        const auto diff = bloom::document::diffRecords(earlier, later);
+        for (const auto* record : diff.removed) {
+            Counted counted;
+            if (!countRecord(beforeProject, before, list, *record, counted))
+                return false;
+            removeEntry(entries, counted);
+        }
+        for (const auto* record : diff.added) {
+            Counted counted;
+            if (!countRecord(afterProject, after, list, *record, counted))
+                return false;
+            addEntries(entries, counted);
+        }
+        return true;
+    }
+};
 
 } // namespace
 
@@ -3201,6 +3583,219 @@ CanonicalDocumentMeasureResult measureCanonicalDocument(const CanonicalDocumentV
     if (result.measure.bytes > limits.maximumOutputBytes)
         result.error = CanonicalDocumentError::DocumentSizeExceeded;
     return result;
+}
+
+CanonicalDocumentIndexResult indexCanonicalDocument(const CanonicalDocumentV1& document,
+                                                    std::stop_token stop,
+                                                    const CanonicalDocumentLimits limits) {
+    CanonicalDocumentIndexResult result;
+    if (document.snapshot == nullptr || document.colorSettings == nullptr) {
+        result.error = CanonicalDocumentError::MissingInput;
+        return result;
+    }
+    const auto scratch = canonicalDocumentScratchRequirements(*document.snapshot);
+    if (scratch.overflow) {
+        result.error = CanonicalDocumentError::SortBufferTooSmall;
+        return result;
+    }
+    std::vector<char> payloadScratch(scratch.payloadBytes);
+    std::vector<std::size_t> sortScratch(scratch.sortEntries);
+    auto request = document;
+    request.payloadScratch = payloadScratch;
+    request.sortScratch = sortScratch;
+    SortPlan plan;
+    if (const auto validation = validateRequest(request, limits, plan);
+        validation.error != CanonicalDocumentError::None) {
+        result.error = validation.error;
+        return result;
+    }
+    auto index = std::make_shared<CanonicalDocumentSizeIndex>();
+    index->compositions.reserve(request.snapshot->project().compositions().size());
+    SizeWalk walk{.index = index.get(), .composition = nullptr, .stop = std::move(stop)};
+    const auto& snapshot = *request.snapshot;
+    auto counter =
+        CanonicalJsonWriter::counting({.maximumDepth = kCanonicalDocumentMaximumDepth,
+                                       .maximumValues = limits.maximumValues,
+                                       .maximumContainerEntries = limits.maximumContainerEntries});
+    EmitState state{counter,
+                    snapshot.project(),
+                    snapshot.ids().highWater(),
+                    *request.colorSettings,
+                    splitSortScratch(request.sortScratch, plan),
+                    request.payloadScratch,
+                    {},
+                    request.roundTrip,
+                    request.schemaMinor};
+    state.size = &walk;
+    const bool emitted = emitDocumentRoot(state);
+    result.recordsCounted = walk.recordsCounted;
+    result.compositionsCounted = walk.compositionsCounted;
+    if (walk.stopped) {
+        result.stopped = true;
+        result.error = CanonicalDocumentError::MissingInput;
+        return result;
+    }
+    if (!emitted) {
+        result.error = state.walk.error;
+        return result;
+    }
+    index->measure = {.bytes = counter.bytesRequired(),
+                      .values = counter.valueCount(),
+                      .largestContainerEntries = counter.largestContainerEntries(),
+                      .largestStringBytes = counter.largestStringBytes()};
+    if (index->measure.bytes > limits.maximumOutputBytes) {
+        result.error = CanonicalDocumentError::DocumentSizeExceeded;
+        return result;
+    }
+    result.index = std::move(index);
+    return result;
+}
+
+CanonicalDocumentIndexResult advanceCanonicalDocumentIndex(const CanonicalDocumentSizeIndex& index,
+                                                           const bloom::document::Snapshot& indexed,
+                                                           const CanonicalDocumentV1& document,
+                                                           const CanonicalDocumentLimits limits) {
+    using namespace bloom::document;
+    using List = CanonicalDocumentSizeIndex::RecordList;
+    CanonicalDocumentIndexResult result;
+    if (document.snapshot == nullptr || document.colorSettings == nullptr) {
+        result.error = CanonicalDocumentError::MissingInput;
+        return result;
+    }
+    if (limits.maximumValues > kCanonicalJsonMaximumValues ||
+        limits.maximumContainerEntries > kCanonicalJsonMaximumContainerEntries ||
+        limits.maximumOutputBytes > kCanonicalDocumentMaximumBytes) {
+        result.error = CanonicalDocumentError::InvalidLimits;
+        return result;
+    }
+    const auto& before = indexed.project();
+    const auto& after = document.snapshot->project();
+    PartialCount count{.request = document,
+                       .limits = {.maximumDepth = kCanonicalDocumentMaximumDepth,
+                                  .maximumValues = limits.maximumValues,
+                                  .maximumContainerEntries = limits.maximumContainerEntries}};
+    const auto finish = [&](CanonicalDocumentIndexResult& done) {
+        done.recordsCounted = count.recordsCounted;
+        done.compositionsCounted = count.compositionsCounted;
+        done.error = count.error;
+        return done;
+    };
+    auto next = std::make_shared<CanonicalDocumentSizeIndex>();
+    next->projectLists = index.projectLists;
+    next->extensions = index.extensions;
+    next->compositions.reserve(after.compositions().size());
+    const auto knownEntry =
+        [&](const std::uint64_t id) -> const CanonicalDocumentSizeIndex::Composition* {
+        const auto found = std::ranges::lower_bound(index.compositions, id, {},
+                                                    &CanonicalDocumentSizeIndex::Composition::id);
+        return found != index.compositions.end() && found->id == id ? &*found : nullptr;
+    };
+    for (const auto& composition : after.compositions()) {
+        const auto* previous = before.findComposition(composition.id());
+        const auto* known = previous != nullptr ? knownEntry(composition.id().value()) : nullptr;
+        if (known != nullptr && previous->contentIdentity() == composition.contentIdentity() &&
+            previous->sameShell(composition)) {
+            next->compositions.push_back(*known);
+            continue;
+        }
+        CanonicalDocumentSizeIndex::Composition entry{.id = composition.id().value()};
+        bool counted = true;
+        if (known != nullptr) {
+            entry.lists = known->lists;
+            if (previous->contentIdentity() != composition.contentIdentity()) {
+                auto& lists = entry.lists;
+                counted =
+                    count.countChanges(before, *previous, after, composition, List::Parameters,
+                                       previous->parameters().records(),
+                                       composition.parameters().records(),
+                                       lists[listIndex(List::Parameters)]) &&
+                    count.countChanges(before, *previous, after, composition, List::AnimationCurves,
+                                       previous->animationCurves().records(),
+                                       composition.animationCurves().records(),
+                                       lists[listIndex(List::AnimationCurves)]) &&
+                    count.countChanges(before, *previous, after, composition, List::Nodes,
+                                       previous->graph().nodes(), composition.graph().nodes(),
+                                       lists[listIndex(List::Nodes)]) &&
+                    count.countChanges(before, *previous, after, composition, List::Edges,
+                                       previous->graph().edges(), composition.graph().edges(),
+                                       lists[listIndex(List::Edges)]) &&
+                    count.countChanges(before, *previous, after, composition, List::LayerOutputs,
+                                       previous->graph().layerOutputs(),
+                                       composition.graph().layerOutputs(),
+                                       lists[listIndex(List::LayerOutputs)]);
+            }
+        } else {
+            auto& lists = entry.lists;
+            counted = count.countAll(after, composition, List::Parameters,
+                                     composition.parameters().records(),
+                                     lists[listIndex(List::Parameters)]) &&
+                      count.countAll(after, composition, List::AnimationCurves,
+                                     composition.animationCurves().records(),
+                                     lists[listIndex(List::AnimationCurves)]) &&
+                      count.countAll(after, composition, List::Nodes, composition.graph().nodes(),
+                                     lists[listIndex(List::Nodes)]) &&
+                      count.countAll(after, composition, List::Edges, composition.graph().edges(),
+                                     lists[listIndex(List::Edges)]) &&
+                      count.countAll(after, composition, List::LayerOutputs,
+                                     composition.graph().layerOutputs(),
+                                     lists[listIndex(List::LayerOutputs)]);
+        }
+        if (!counted || !count.countComposition(after, composition, entry))
+            return finish(result);
+        next->compositions.push_back(entry);
+    }
+    std::ranges::sort(next->compositions, {}, &CanonicalDocumentSizeIndex::Composition::id);
+
+    // The document's own members around them; the root lists only when their storage changed.
+    SizeWalk walk{.replay = true,
+                  .index = next.get(),
+                  .composition = nullptr,
+                  .reuseRootLists = after.sameRootRecordStorage(before),
+                  .stop = {}};
+    std::vector<std::size_t> rootOrder;
+    std::vector<char> payloadScratch;
+    if (!walk.reuseRootLists) {
+        rootOrder.resize(std::max(after.extensionRecords().size(), after.typedDataBlocks().size()));
+        std::size_t payloadBytes = 0;
+        const auto need = [&](const std::size_t bytes) {
+            const auto encoded = canonicalBase64EncodedSize(bytes);
+            if (encoded.hasValue())
+                payloadBytes = std::max(payloadBytes, *encoded.value());
+        };
+        for (const auto& record : after.extensionRecords())
+            need(record.payload.size());
+        for (const auto& block : after.typedDataBlocks())
+            if (const auto* payload = std::get_if<OpaqueExtensionPayload>(&block.payload))
+                need(payload->size());
+        payloadScratch.resize(payloadBytes);
+    }
+    auto counter = CanonicalJsonWriter::counting(count.limits);
+    EmitState state{counter,
+                    after,
+                    document.snapshot->ids().highWater(),
+                    *document.colorSettings,
+                    SortWindows{{}, rootOrder, {}},
+                    payloadScratch,
+                    {},
+                    document.roundTrip,
+                    document.schemaMinor};
+    state.size = &walk;
+    if (!emitDocumentRoot(state)) {
+        count.error = state.walk.error == CanonicalDocumentError::None
+                          ? CanonicalDocumentError::MissingInput
+                          : state.walk.error;
+        return finish(result);
+    }
+    next->measure = {.bytes = counter.bytesRequired(),
+                     .values = counter.valueCount(),
+                     .largestContainerEntries = counter.largestContainerEntries(),
+                     .largestStringBytes = counter.largestStringBytes()};
+    if (next->measure.bytes > limits.maximumOutputBytes) {
+        count.error = CanonicalDocumentError::DocumentSizeExceeded;
+        return finish(result);
+    }
+    result.index = std::move(next);
+    return finish(result);
 }
 
 } // namespace bloom::project

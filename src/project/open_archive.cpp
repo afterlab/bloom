@@ -3,6 +3,7 @@
 #include "reopen_chain_internal.hpp"
 
 #include <exception>
+#include <new>
 #include <optional>
 #include <utility>
 
@@ -92,7 +93,23 @@ OpenArchiveResult openProjectArchive(const std::span<const std::byte> archive,
             .manifestReservation = std::move(success.manifestReservation),
             .decodeReservation = std::move(success.decodeReservation),
             .reconstructionReservation = std::move(success.reconstructionReservation),
+            .sizeIndex = nullptr,
         };
+        // #748: measured on this (the opening) thread, never by the first edit.
+        if (opened.document != nullptr) {
+            try {
+                const auto snapshot = opened.document->snapshot();
+                auto measured = indexCanonicalDocument(
+                    {.snapshot = &snapshot,
+                     .colorSettings = &opened.colorSettings,
+                     .roundTrip = opened.roundTrip.has_value() ? &*opened.roundTrip : nullptr,
+                     .schemaMinor = opened.schemaMinor});
+                if (measured)
+                    opened.sizeIndex = std::move(measured.index);
+            } catch (const std::bad_alloc&) {
+                // Unmeasured: the session measures it in the background instead.
+            }
+        }
         return OpenArchiveResult::opened(std::move(opened));
     }
     }

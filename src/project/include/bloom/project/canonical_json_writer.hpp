@@ -122,6 +122,17 @@ class CanonicalJsonWriter final {
     };
     [[nodiscard]] CanonicalJsonWriterResult
     countedArrayElement(const CountedElement& element) noexcept;
+    // #748, count mode only: `count` entries of the open array, or `count` complete members of the
+    // open object, that a counting writer measured earlier at this same depth, `entries` holding
+    // what they took together, each spelled as an entry that is not its container's first (so a
+    // run that starts the container takes one byte less). Checks and charges the limits the
+    // written entries would. Invalid in write mode, between a member name and its value, or after
+    // finish().
+    [[nodiscard]] CanonicalJsonWriterResult countedEntries(const CountedElement& entries,
+                                                           std::size_t count) noexcept;
+    // The entries (array elements or object members) the innermost open container holds so far;
+    // 0 outside any container.
+    [[nodiscard]] std::size_t openEntries() const noexcept;
     // The elements the open array holds so far (0 outside an array). An element measured while
     // this was 0 was its array's first, one byte shorter than any other element.
     [[nodiscard]] std::size_t openArrayEntries() const noexcept;

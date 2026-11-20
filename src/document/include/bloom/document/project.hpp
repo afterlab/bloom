@@ -113,6 +113,10 @@ class Composition final {
     // The identity/charge of the immutable authored collections, for deterministic undo
     // accounting. Draft-local mutable content has its own identity until publication freezes it.
     [[nodiscard]] const void* contentIdentity() const noexcept { return &content(); }
+    // The composition's own settings (id, name, duration, format, work area, working color space,
+    // safe areas, background, timecode, folder) equal `other`'s. With the same contentIdentity(),
+    // two compositions are the same composition.
+    [[nodiscard]] bool sameShell(const Composition& other) const noexcept;
     // The content's whole charge: contentShellByteCharge() plus every record's charge.
     [[nodiscard]] std::size_t contentByteCharge() const;
     // #744. The charge of the content's own allocation (layout, groups, Merges), without the
@@ -214,7 +218,6 @@ class Composition final {
     [[nodiscard]] static std::vector<CompositionId> buildNestedReferences(const Content& authored);
     [[nodiscard]] const DeclaredIdIndex* frozenDeclaredIds() const noexcept;
     [[nodiscard]] std::vector<CompositionId> nestedReferences() const;
-    [[nodiscard]] bool sameShell(const Composition& other) const noexcept;
     // The sections of validate(): the shell's own settings, the layer ranges against the
     // duration, and every rule that reads the graph's records, the layout and the groups.
     void validateShell(ValidationResult& result) const;

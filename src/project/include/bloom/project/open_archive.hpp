@@ -3,6 +3,7 @@
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/schema_version.hpp>
+#include <bloom/project/canonical_document.hpp>
 #include <bloom/project/manifest_decode.hpp>
 #include <bloom/project/manifest_requirements.hpp>
 #include <bloom/project/project_io_memory.hpp>
@@ -75,6 +76,10 @@ struct OpenedArchive final {
     ProjectIoMemoryReservation manifestReservation;
     ProjectIoMemoryReservation decodeReservation;
     ProjectIoMemoryReservation reconstructionReservation;
+    // #748: the size of the opened document as a save would write it, measured here, on the
+    // opening thread, so an edit never walks the whole document to learn it. Null when it could
+    // not be measured (out of memory, or a document a save would refuse anyway).
+    std::shared_ptr<const CanonicalDocumentSizeIndex> sizeIndex;
 };
 
 // Diagnostics for a PreservedReadOnlyRequired outcome. Per the format contract the application
