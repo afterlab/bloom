@@ -222,6 +222,10 @@ struct McpTransactJob final {
     std::shared_ptr<const McpStoredAnswer> result;
     // Advances with every change, so a waiter forwards each one once.
     std::uint64_t serial = 0;
+    // The newest serial whose event has been published: the job lines and every jobEvents
+    // listener have it. jobs.wait acts on a step only once it is published, so an agent that waits
+    // and then reads events sees the step it waited for, the finished event among them (#750).
+    std::uint64_t publishedSerial = 0;
 };
 
 struct McpTransactJobs final {

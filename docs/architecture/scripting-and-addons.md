@@ -278,7 +278,9 @@ cancellation reaches the commit until it starts publishing. Every step is an `Mc
 request's progress token, revision and, when finished, its outcome, compile failures and activity
 summary. The service records a finished job as an activity line of its client, as it records a
 request; the core also keeps each job's newest step for event subscriptions (below). `jobs.wait` waits on the job and
-streams its progress; `jobs.list` and `jobs.cancel` list and stop transact jobs beside the Jobs
+streams its progress. It answers a step only once that step is published, the job's subscription
+line and every `jobEvents` listener having it, so an agent that waits and then reads events sees
+the finished event (#750; before, the waiter could return first). `jobs.list` and `jobs.cancel` list and stop transact jobs beside the Jobs
 panel's rows. An `idempotencyKey` maps to an `McpIdempotency` entry: the arguments' SHA-256 and the
 remembered answer (or the job), for ten minutes and at most 1,024 keys; an answer where the
 transaction never reached the command stack is forgotten so a retry runs. Asynchronous jobs need

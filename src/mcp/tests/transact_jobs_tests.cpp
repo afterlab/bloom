@@ -18,6 +18,7 @@
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/scripting/session.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <filesystem>
@@ -105,6 +106,9 @@ struct Live final {
     std::atomic<bool> running{true};
     std::mutex eventsMutex;
     std::vector<mcp::McpJobEvent> jobEvents;
+    // Called by the jobEvents listener with each event it receives, before it returns. Set before
+    // the first job is submitted.
+    std::function<void(const mcp::McpJobEvent&)> onJobEvent;
     std::thread owner;
 
     scripting::LiveSessionState mirror() const {
@@ -162,11 +166,14 @@ struct Live final {
             .gpuProvider = nullptr,
             .captureDirectory = {},
             .serverVersion = "test",
-            .jobEvents =
-                [this](const mcp::McpJobEvent& event) {
+            .jobEvents = [this](const mcp::McpJobEvent& event) {
+                {
                     const std::lock_guard lock(eventsMutex);
                     jobEvents.push_back(event);
-                }});
+                }
+                if (onJobEvent)
+                    onJobEvent(event);
+            }});
         protocol = core->openSession();
         static_cast<void>(send(R"({"jsonrpc":"2.0","id":0,"method":"initialize","params":{)"
                                R"("protocolVersion":"2025-11-25","capabilities":{},)"
@@ -312,6 +319,41 @@ void asyncAnswersAtOnceAndReportsProgress() {
            "a stale job fails without applying: " + refused);
     const auto unknown = server.call("jobs.wait", R"({"job":"transact-999"})");
     expect(contains(unknown, "bloom.mcp.unknown-job"), "an unknown job is named: " + unknown);
+}
+
+// #750: a job's listeners have each of its events before jobs.wait answers that step. The
+// listener asks jobs.wait about the job while it still holds the finished event, the interleaving
+// that let a waiter return first: that wait must not see the job finished (it times out at once),
+// and the wait made before the job ran returns only once the finished event is listed.
+void waitAnswersAfterTheListeners() {
+    Live server;
+    server.draining = false;
+    std::string duringDelivery;
+    server.onJobEvent = [&](const mcp::McpJobEvent& event) {
+        if (event.job == "transact-1" && event.finished)
+            duringDelivery =
+                plain(server.call("jobs.wait", R"({"job":"transact-1","timeoutMs":1})"));
+    };
+    const auto job = jobOf(server.call("transact", rename(0, "Listened", R"(,"async":true)")));
+    expect(job == "transact-1", "the job is submitted: " + job);
+    auto waited = std::async(std::launch::async, [&] {
+        const auto result =
+            plain(server.call("jobs.wait", R"({"job":"transact-1","timeoutMs":20000})"));
+        const std::lock_guard lock(server.eventsMutex);
+        const bool listed = std::ranges::any_of(server.jobEvents, [](const auto& event) {
+            return event.job == "transact-1" && event.finished &&
+                   event.state == mcp::McpJobState::Succeeded;
+        });
+        return std::pair{result, listed};
+    });
+    server.draining = true;
+    const auto [result, listed] = waited.get();
+    expect(contains(result, R"("state":"succeeded")") && contains(result, R"("timedOut":false)"),
+           "jobs.wait returns the finished job: " + result);
+    expect(listed, "the finished event is listed when jobs.wait returns");
+    expect(contains(duringDelivery, R"("timedOut":true)"),
+           "while the listener holds the finished event, jobs.wait does not answer it: " +
+               duringDelivery);
 }
 
 void cancelRacesPublication() {
@@ -709,6 +751,7 @@ int main() {
     std::filesystem::remove_all(folder, ignored);
     try {
         asyncAnswersAtOnceAndReportsProgress();
+        waitAnswersAfterTheListeners();
         cancelRacesPublication();
         duplicateKeys();
         replacedWhilePending();

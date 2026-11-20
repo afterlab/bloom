@@ -322,6 +322,18 @@ McpJobEvent finishLocked(McpTransactJobs& jobs, McpTransactJob& job,
     return event;
 }
 
+// Publishes `event`, the job's step `serial`, to the job lines and every jobEvents listener, and
+// only then lets jobs.wait see that step (#750). Called without the jobs mutex.
+void publishJobStep(McpServerCore::State& core, McpTransactJob& job, const McpJobEvent& event,
+                    const std::uint64_t serial) {
+    core.publishJob(event);
+    {
+        const std::lock_guard lock(core.jobs.mutex);
+        job.publishedSerial = std::max(job.publishedSerial, serial);
+    }
+    core.jobs.changed.notify_all();
+}
+
 void runJob(McpServerCore::State& core, const std::shared_ptr<McpTransactJob>& job) {
     Json out;
     yyjson_mut_val* value = nullptr;
@@ -333,6 +345,7 @@ void runJob(McpServerCore::State& core, const std::shared_ptr<McpTransactJob>& j
     control.stop = job->stop.get_token();
     control.progress = [&core, job](const McpProgress& progress) {
         McpJobEvent event;
+        std::uint64_t serial = 0;
         {
             const std::lock_guard lock(core.jobs.mutex);
             if (finished(job->state))
@@ -340,11 +353,10 @@ void runJob(McpServerCore::State& core, const std::shared_ptr<McpTransactJob>& j
             job->progress = progress;
             if (!progress.phase.empty())
                 job->phase = progress.phase;
-            ++job->serial;
+            serial = ++job->serial;
             event = eventOf(*job);
         }
-        core.jobs.changed.notify_all();
-        core.publishJob(event);
+        publishJobStep(core, *job, event, serial);
     };
     try {
         auto* live = core.liveHost();
@@ -409,14 +421,16 @@ void runJob(McpServerCore::State& core, const std::shared_ptr<McpTransactJob>& j
         answer = failureAnswer(uiRefusalCode(McpUiRefusal::Failed), error.what());
     }
     McpJobEvent event;
+    std::uint64_t serial = 0;
     {
         const std::lock_guard lock(core.jobs.mutex);
         event = finishLocked(core.jobs, *job, answer, committed);
+        serial = job->serial;
     }
     settleJobKey(core, *job, committed, answer);
     event.summary = "transact " + job->id + (summary.empty() ? "" : " " + summary);
     event.compileFailures = std::move(compileFailures);
-    core.publishJob(event);
+    publishJobStep(core, *job, event, serial);
 }
 
 void runJobs(McpServerCore::State& core) {
@@ -424,6 +438,7 @@ void runJobs(McpServerCore::State& core) {
     while (true) {
         std::shared_ptr<McpTransactJob> job;
         McpJobEvent event;
+        std::uint64_t serial = 0;
         {
             std::unique_lock lock(jobs.mutex);
             jobs.changed.wait(lock, [&] { return jobs.stopping || !jobs.queue.empty(); });
@@ -433,11 +448,10 @@ void runJobs(McpServerCore::State& core) {
             jobs.queue.pop_front();
             job->state = McpJobState::Running;
             job->phase = "building";
-            ++job->serial;
+            serial = ++job->serial;
             event = eventOf(*job);
         }
-        jobs.changed.notify_all();
-        core.publishJob(event);
+        publishJobStep(core, *job, event, serial);
         runJob(core, job);
     }
 }
@@ -536,7 +550,12 @@ void McpServerCore::State::publishJob(const McpJobEvent& event) {
 }
 
 void McpServerCore::State::revokeJobs(const std::uint64_t generation) {
-    std::vector<std::pair<std::shared_ptr<McpTransactJob>, McpJobEvent>> ended;
+    struct Ended final {
+        std::shared_ptr<McpTransactJob> job;
+        McpJobEvent event;
+        std::uint64_t serial = 0;
+    };
+    std::vector<Ended> ended;
     const auto answer = failureAnswer(toolErrorCode(McpToolErrorCode::ProjectReplaced),
                                       "The project was replaced before the job ran; nothing was "
                                       "applied.");
@@ -546,13 +565,14 @@ void McpServerCore::State::revokeJobs(const std::uint64_t generation) {
         for (const auto& job : queued)
             if (job->generation != generation) {
                 job->stop.request_stop();
-                ended.emplace_back(job, finishLocked(jobs, *job, answer, false));
+                auto event = finishLocked(jobs, *job, answer, false);
+                ended.push_back({job, std::move(event), job->serial});
             }
     }
-    for (auto& [job, event] : ended) {
+    for (auto& [job, event, serial] : ended) {
         settleJobKey(*this, *job, false, nullptr);
         event.summary = "transact " + job->id;
-        publishJob(event);
+        publishJobStep(*this, *job, event, serial);
     }
 }
 
@@ -678,6 +698,7 @@ yyjson_mut_val* submitTransactJob(McpServerCore::State& core, Json& out, McpCall
     }
     std::size_t ahead = 0;
     McpJobEvent event;
+    std::uint64_t serial = 0;
     {
         const std::lock_guard lock(core.jobs.mutex);
         if (core.jobs.stopping)
@@ -707,9 +728,9 @@ yyjson_mut_val* submitTransactJob(McpServerCore::State& core, Json& out, McpCall
         if (!core.jobs.runner)
             core.jobs.runner.emplace([raw = &core] { runJobs(*raw); });
         event = eventOf(*job);
+        serial = job->serial;
     }
-    core.jobs.changed.notify_all();
-    core.publishJob(event);
+    publishJobStep(core, *job, event, serial);
     call.summary = "async " + job->id + " \"" + job->label.substr(0, 64) + "\"";
     auto* value = submissionValue(core, out, *job, false);
     out.set(value, "queuedAhead", out.number(ahead));
@@ -747,9 +768,14 @@ yyjson_mut_val* jobsWaitTool(McpServerCore::State& core, Json& out, yyjson_val* 
     std::uint64_t told = 0;
     bool timedOut = false;
     std::unique_lock lock(jobs.mutex);
-    while (!finished(job->state)) {
-        if (control.progress && job->serial != told) {
-            told = job->serial;
+    // A step counts once it is published (#750): the finished state is answered only after every
+    // listener has the finished event, and progress is forwarded for published steps.
+    const auto finishedAndPublished = [&] {
+        return finished(job->state) && job->publishedSerial == job->serial;
+    };
+    while (!finishedAndPublished()) {
+        if (control.progress && job->publishedSerial != told) {
+            told = job->publishedSerial;
             const auto progress = job->progress;
             lock.unlock();
             control.progress(progress);
@@ -757,7 +783,7 @@ yyjson_mut_val* jobsWaitTool(McpServerCore::State& core, Json& out, yyjson_val* 
             continue;
         }
         const bool changed = jobs.changed.wait_until(lock, control.stop, deadline, [&] {
-            return finished(job->state) || (control.progress && job->serial != told);
+            return finishedAndPublished() || (control.progress && job->publishedSerial != told);
         });
         if (control.stop.stop_requested())
             throw ToolFailure(McpToolErrorCode::Cancelled,
@@ -783,6 +809,7 @@ void appendTransactJobRows(McpServerCore::State& core, Json& out, yyjson_mut_val
 yyjson_mut_val* cancelTransactJob(McpServerCore::State& core, Json& out, const std::string& id) {
     auto& jobs = core.jobs;
     std::optional<McpJobEvent> event;
+    std::uint64_t serial = 0;
     std::shared_ptr<McpTransactJob> job;
     std::string message;
     {
@@ -807,9 +834,10 @@ yyjson_mut_val* cancelTransactJob(McpServerCore::State& core, Json& out, const s
                                                "The job was cancelled before it started; nothing "
                                                "was applied."),
                                  false);
+            serial = job->serial;
             message = "Job " + id + " was cancelled before it started; nothing was applied.";
         } else {
-            ++job->serial;
+            serial = ++job->serial;
             event = eventOf(*job);
             message = job->phase == "publishing" || job->phase == "checking"
                           ? "Cancellation of job " + id +
@@ -820,13 +848,12 @@ yyjson_mut_val* cancelTransactJob(McpServerCore::State& core, Json& out, const s
                                 "is applied. jobs.wait tells when it has stopped.";
         }
     }
-    jobs.changed.notify_all();
     if (event && event->finished) {
         settleJobKey(core, *job, false, nullptr);
         event->summary = "transact " + job->id;
     }
     if (event)
-        core.publishJob(*event);
+        publishJobStep(core, *job, *event, serial);
     auto* value = out.object();
     out.set(value, "succeeded", out.boolean(true));
     out.set(value, "message", out.text(message));
