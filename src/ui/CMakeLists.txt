@@ -504,6 +504,7 @@ target_sources(
         editor_registry.cpp
         live_session_adapter.cpp
         agent_session_controller.cpp
+        crash_notice.cpp
         script_panel.cpp
         script_panel.hpp
         acceleration_status.cpp
@@ -871,6 +872,7 @@ target_sources(
             include/bloom/ui/project_host.hpp
             include/bloom/ui/live_session_adapter.hpp
             include/bloom/ui/agent_session_controller.hpp
+            include/bloom/ui/crash_notice.hpp
             include/bloom/ui/ram_preview_controller.hpp
             include/bloom/ui/properties_editor.hpp
             include/bloom/ui/memory_budget_controller.hpp
@@ -930,6 +932,8 @@ target_link_libraries(
         Qt6::Network
 )
 target_link_libraries(bloom_ui PUBLIC bloom_mcp)
+# #736: the next-start crash notice reads the crash folder.
+target_link_libraries(bloom_ui PUBLIC bloom_crash)
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache
                                         bloom_media_vector)
 # ADR 0034: the live session adapter feeds scripting::LiveSessionHost.

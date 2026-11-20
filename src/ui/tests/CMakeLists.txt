@@ -3568,3 +3568,10 @@ if(NOT WIN32)
                    LABELS ui update TIMEOUT 120
                    ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
 endif()
+
+# #736: the next-start crash notice: offered once, never modal, Copy Report, and not shown (nor
+# recorded) while the session is headless or agent-driven.
+add_executable(bloom_crash_notice_test crash_notice_tests.cpp)
+target_link_libraries(bloom_crash_notice_test PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_crash_notice_test)
+bloom_add_test(NAME bloom.ui.crash-notice COMMAND bloom_crash_notice_test LABELS ui unit crash TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")

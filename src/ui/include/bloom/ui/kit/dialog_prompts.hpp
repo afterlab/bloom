@@ -31,6 +31,9 @@ struct KConfirmSpec final {
     QString rejectText;
     // The button Return presses. A destructive prompt names the safe action (Reject).
     KDialog::Role defaultRole = KDialog::Role::Accept;
+    // Window-modal by default. A notice that must never block the window (the crash notice,
+    // which may appear while an agent works) is Qt::NonModal.
+    Qt::WindowModality modality = Qt::WindowModal;
 };
 
 // Builds the confirmation, parented to `owner`'s window. Exposed so a caller can adjust it.
