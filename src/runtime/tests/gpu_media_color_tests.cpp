@@ -21,6 +21,7 @@
 // included below, inside this translation unit's anonymous namespace, so the executable and every
 // test name are unchanged.
 
+#include "settled_file.hpp"
 #include "gpu_media_executor_test_support.hpp"
 #include "gpu_media_scene_preparation_test_support.hpp"
 #include "gpu_media_video_scene_preparation_test_support.hpp"

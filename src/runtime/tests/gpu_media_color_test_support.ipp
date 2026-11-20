@@ -53,6 +53,8 @@ struct Fixture final {
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "aces_ap0.exr";
     writeExrRgbaWithChromaticities(fixture.path, 3, 2, signedHdrPixels(), acesAp0Chromaticities());
+    // Settled (settled_file.hpp): the cases count identity-only reuse of this source.
+    static_cast<void>(bloom::test_support::settleFileIdentity(fixture.path));
     fixture.asset = imageAsset(fixture.path, "aces_ap0", 700);
     return fixture;
 }

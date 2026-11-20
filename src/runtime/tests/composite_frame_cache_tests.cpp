@@ -1,5 +1,6 @@
 // Scene-referred composite frame cache: identity mismatches miss, a hit equals a fresh render at
 // half precision, and retention is evicted under memory pressure.
+#include "settled_file.hpp"
 #include <bloom/core/rational_time.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/asset.hpp>
@@ -63,9 +64,13 @@ void writeExr(const std::filesystem::path& path, const int width, const int heig
                            Imf::Slice(Imf::FLOAT, reinterpret_cast<char*>(planes[channel].data()),
                                       sizeof(float),
                                       sizeof(float) * static_cast<std::size_t>(width)));
-    Imf::OutputFile file(path.string().c_str(), header);
-    file.setFrameBuffer(frameBuffer);
-    file.writePixels(height);
+    {
+        Imf::OutputFile file(path.string().c_str(), header);
+        file.setFrameBuffer(frameBuffer);
+        file.writePixels(height);
+    }
+    // Settled (settled_file.hpp): a cache key stands on the source's vouched identity.
+    static_cast<void>(bloom::test_support::settleFileIdentity(path));
 }
 
 document::AssetRecord asset(const std::filesystem::path& path) {

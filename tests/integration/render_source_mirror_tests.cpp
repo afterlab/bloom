@@ -1,5 +1,6 @@
 // #718: a scripted or headless render reads a source the local mirror keeps exactly once. This
 // test spans scripting and the media cache, so it lives here and not in either module's tests.
+#include "settled_file.hpp"
 #include "fixed_memory_budget.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -101,6 +102,8 @@ void testRendersReadSlowSourcesOnce() {
         if (!made.succeeded || files.size() != 1)
             return;
         plate = root / "plates" / files.front();
+        // Settled (settled_file.hpp): the later sessions count identity-only reuse of the plate.
+        expect(bloom::test_support::settleFileIdentity(plate), "the plate is settled");
     }
     cache::SourceMirrorConfig mirrorConfig;
     mirrorConfig.rootDirectory = root / "mirror";

@@ -8,6 +8,7 @@
 // whole source itself, which the whole-read count shows.
 // NotRun without the media worker or the movie fixture.
 
+#include "settled_file.hpp"
 #include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
 
@@ -284,6 +285,8 @@ std::filesystem::path writeTone(const std::filesystem::path& path) {
     put(file, static_cast<std::uint32_t>(data.size()), 4);
     file += data;
     std::ofstream(path, std::ios::binary) << file;
+    // Settled (settled_file.hpp): the sessions count identity-only reuse of the source.
+    static_cast<void>(bloom::test_support::settleFileIdentity(path));
     return path;
 }
 
@@ -375,6 +378,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     std::filesystem::create_directories(footage);
     const auto movie = footage / "movie.mov";
     std::filesystem::copy_file(fixture, movie);
+    static_cast<void>(bloom::test_support::settleFileIdentity(movie));
 
     media::cache::SourceMirrorConfig config;
     config.rootDirectory = workDir / "mirror";

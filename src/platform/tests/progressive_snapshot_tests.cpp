@@ -1,6 +1,7 @@
 // #718: a snapshot that is usable before it is whole. Byte ranges are made local on demand, from
 // the chunk store when it holds them and from the source otherwise; what the source gave is
 // kept; the digest is proved once the whole file is local.
+#include "settled_file.hpp"
 #include "unique_temp_dir.hpp"
 #include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/source_identity.hpp>
@@ -48,6 +49,11 @@ std::vector<std::byte> pattern(const std::size_t size) {
     return bytes;
 }
 void write(const std::filesystem::path& path, std::span<const std::byte> bytes) {
+    // Settled once written (settled_file.hpp): a verified fill must be able to vouch for it.
+    struct Settle final {
+        const std::filesystem::path& path;
+        ~Settle() { static_cast<void>(bloom::test_support::settleFileIdentity(path)); }
+    } settle{path};
     std::ofstream output(path, std::ios::binary | std::ios::trunc);
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));

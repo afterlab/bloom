@@ -408,6 +408,7 @@ void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFix
         std::ofstream output(fixture.path, std::ios::binary | std::ios::app);
         output << '\0';
     }
+    static_cast<void>(bloom::test_support::settleFileIdentity(fixture.path));
     expectations.expect(!builder.build(plan, request),
                         "a changed source is rejected despite the retained revision");
     const auto cpuChanged = evaluator.evaluate(plan, request, {});
@@ -417,6 +418,7 @@ void testRevalidatedFramesReadNothing(Expectations& expectations, const MediaFix
         std::ofstream output(fixture.path, std::ios::binary | std::ios::trunc);
         output.write(original.data(), static_cast<std::streamsize>(original.size()));
     }
+    static_cast<void>(bloom::test_support::settleFileIdentity(fixture.path));
     expectations.expect(builder.build(plan, request).hasValue(), "restored content verifies again");
 }
 

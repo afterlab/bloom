@@ -1,3 +1,4 @@
+#include "settled_file.hpp"
 #include <bloom/host/session_save.hpp>
 #include <bloom/platform/private_temporary_directory.hpp>
 
@@ -1178,6 +1179,11 @@ void testDeterminism(Expectations& expectations) {
 // ---------------------------------------------------------------------------------------------
 
 void writeFile(const std::filesystem::path& path, const std::string& bytes) {
+    // Settled once written (settled_file.hpp): the cases count identity-only verification.
+    struct Settle final {
+        const std::filesystem::path& path;
+        ~Settle() { static_cast<void>(bloom::test_support::settleFileIdentity(path)); }
+    } settle{path};
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }

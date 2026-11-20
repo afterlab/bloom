@@ -5,6 +5,7 @@
 // old bytes, that a member whose bytes are not an image becomes a gap at its first read (ADR 0026
 // / #373), and that a project saved with some members stamped and some digested reopens to the
 // same asset, whose stamped members still read.
+#include "settled_file.hpp"
 #include "generated_jpeg.hpp"
 #include "image_source.hpp"
 #include "unique_temp_dir.hpp"
@@ -64,8 +65,12 @@ struct Folder {
 };
 
 void writeBytes(const std::filesystem::path& path, const std::string_view bytes) {
-    std::ofstream file(path, std::ios::binary | std::ios::trunc);
-    file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    }
+    // Settled (settled_file.hpp): the cases count identity-only reuse of each member.
+    static_cast<void>(bloom::test_support::settleFileIdentity(path));
 }
 void writeJpeg(const std::filesystem::path& path, const std::string_view trailer = {}) {
     std::string bytes(reinterpret_cast<const char*>(kGeneratedJpeg.data()), kGeneratedJpeg.size());

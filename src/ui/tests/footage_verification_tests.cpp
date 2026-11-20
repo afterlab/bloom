@@ -3,6 +3,7 @@
 // cancellation stops between and within files, a changed file is reported with the relink
 // suggestion, and the Assets controller runs the pass as a "Verify footage" job that purges the
 // media caches (footageChanged) when bytes changed since import.
+#include "settled_file.hpp"
 #include "await_qt.hpp"
 #include "footage_verification.hpp"
 
@@ -43,6 +44,11 @@ void expect(const bool condition, const std::string& message) {
     }
 }
 void writeFile(const fs::path& path, const std::string& bytes) {
+    // Settled once written (settled_file.hpp): the pass counts identity-only checks.
+    struct Settle final {
+        const fs::path& path;
+        ~Settle() { static_cast<void>(bloom::test_support::settleFileIdentity(path)); }
+    } settle{path};
     std::ofstream stream(path, std::ios::binary | std::ios::trunc);
     stream.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }

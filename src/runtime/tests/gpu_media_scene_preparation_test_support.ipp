@@ -43,6 +43,8 @@ struct MediaFixture final {
     std::filesystem::create_directories(fixture.directory);
     fixture.path = fixture.directory / "signed_hdr.exr";
     writeExrRgba(fixture.path, 3, 2, signedHdrPixels());
+    // Settled (settled_file.hpp): the cases count identity-only reuse of this source.
+    static_cast<void>(bloom::test_support::settleFileIdentity(fixture.path));
     fixture.asset = imageAsset(fixture.path, "signed_hdr", 900);
     return fixture;
 }
