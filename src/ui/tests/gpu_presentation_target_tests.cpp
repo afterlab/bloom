@@ -65,7 +65,6 @@ struct TestOptions final {
     std::filesystem::path loader_path;
     bool require_device = false;
     bool quarantine_fixture = false;
-    bool bounded_acquire = false;
     bool valid = true;
 };
 
@@ -82,8 +81,6 @@ struct TestOptions final {
             options.loader_path = argv[++index];
         } else if (argument == "--require-device") {
             options.require_device = true;
-        } else if (argument == "--bounded-acquire") {
-            options.bounded_acquire = true;
         } else if (argument == "--quarantine-fixture") {
             options.quarantine_fixture = true;
         } else {
@@ -338,13 +335,22 @@ int main(int argc, char** argv) {
         std::_Exit(1);
     }
 
-    const auto acquireMode = options.bounded_acquire
-                                 ? bloom::render::GpuPresentationAcquireMode::BoundedProgress
-                                 : bloom::render::GpuPresentationAcquireMode::Poll;
+    // Acquire as the production coordinator's pump does (gpu_presentation_coordinator_pump.cpp):
+    // a zero-timeout poll, then on NotReady the one bounded 1 ms progress probe. A zero-timeout
+    // poll alone never lets the Wayland WSI process the compositor's buffer releases, so it stalls
+    // once the first images are presented (gpu-backend.md, bounded presentation progress); that
+    // poll-only mode is not a production path and is not what this fixture proves.
+    const auto acquireNext = [&target]() {
+        const auto polled = target.acquire(bloom::render::GpuPresentationAcquireMode::Poll);
+        if (polled != bloom::render::GpuPresentationTargetCode::NotReady) {
+            return polled;
+        }
+        return target.acquire(bloom::render::GpuPresentationAcquireMode::BoundedProgress);
+    };
     const auto presentFrame = [&]() -> bool {
         return awaitQtCondition("the target acquires and presents a clear frame", [&] {
             static_cast<void>(target.pollRetirement());
-            const auto acquire = target.acquire(acquireMode);
+            const auto acquire = acquireNext();
             if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                 acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
                 const auto present = target.present(
@@ -400,7 +406,7 @@ int main(int argc, char** argv) {
         const bool settled =
             awaitQtCondition("the target acquires and presents the resident image", [&] {
                 static_cast<void>(target.pollRetirement());
-                const auto acquire = target.acquire(acquireMode);
+                const auto acquire = acquireNext();
                 if (acquire == bloom::render::GpuPresentationTargetCode::Ok ||
                     acquire == bloom::render::GpuPresentationTargetCode::Suboptimal) {
                     const bloom::render::GpuPresentOverlay overlay{
@@ -531,7 +537,7 @@ int main(int argc, char** argv) {
     auto acquired = bloom::render::GpuPresentationTargetCode::NotReady;
     static_cast<void>(awaitQtCondition("the target acquires the image to be left unpresented", [&] {
         static_cast<void>(target.pollRetirement());
-        acquired = target.acquire(acquireMode);
+        acquired = acquireNext();
         return acquired != bloom::render::GpuPresentationTargetCode::NotReady;
     }));
     if (acquired != bloom::render::GpuPresentationTargetCode::Ok &&

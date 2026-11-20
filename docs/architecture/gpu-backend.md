@@ -2388,9 +2388,11 @@ revisions, staleness and integer limits. Actual Linux native tests qualify unifo
 identity, pre-backing refusal, allocator/bind/map cleanup, ten overlay resize cycles and exact VMA
 allocation-count/bytes return. Rooted offscreen production draws still pass the independent
 QPainter oracle, including nonuniform 1280×720 images, with zero presentation claims after owner
-retirement. The private Wayland lifecycle passes using the production coordinator's bounded
-acquire mode through clear/resident presents, resize and acquired-unpresented close. Zero-timeout
-poll-only acquire does not progress in that private fixture and is not qualified by these results.
+retirement. The private Wayland lifecycle (`bloom.ui.gpu_presentation_target`, a `compositor` test)
+acquires as the production coordinator does, a zero-timeout poll and then the one bounded progress
+probe, through clear/resident presents, resize and acquired-unpresented close. Zero-timeout
+poll-only acquire does not progress in that private fixture (the WSI never processes the
+compositor's buffer releases) and is not qualified by these results.
 
 ### Rooted combined final-readback staging (bounded final-output slice)
 
