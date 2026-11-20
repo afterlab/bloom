@@ -893,6 +893,13 @@ The build therefore never writes a program file it does not need to:
   was rewritten by every configure, so a change to any `CMakeLists.txt` relinked every program
   that links `bloom_ui`, among them every UI test.
 
+A kept file is not scanned again. Its times change (the build must see it as newer than its
+inputs), so the system re-checks its remembered result once, which is much shorter than a scan.
+The suite that first linked every test program through the launcher relinked 1,203 test programs
+with unchanged bytes. Of those, 4 were scanned in full and the rest were re-checked. Summed test
+time grew by about 0.3 s per relinked program over a run with nothing relinked, against about
+2.8 s per relinked program in the run described above.
+
 Nothing on the Mac is changed for this: no security setting, no developer-tool exception and
 nothing installed system-wide. The check of a changed program remains, because skipping it would
 take one of those.
