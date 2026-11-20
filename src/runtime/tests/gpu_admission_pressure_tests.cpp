@@ -13,6 +13,8 @@
 #include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 
+#include "fixed_memory_budget.hpp"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -1092,6 +1094,150 @@ void previewWidthFollowsMeasuredRoom() {
             "it runs once the room comes back");
 }
 
+// The fixed host reading (16 GiB physical, 8 GiB available, no process limit) delivered the way a
+// composition root delivers a sample: through the policy's sampler seam and a sampling ledger.
+void deliverFixedHost(GpuProcessingPhasePolicy& policy) {
+    MemoryBudgetLedger ledger;
+    ledger.beginProcessSampling();
+    auto sample = policy.sampleHostMemory({}, bloom::test_support::fixedMemoryBudgetSample);
+    const auto at = sample.process.sampledAt;
+    const auto state = ledger.applySample(std::move(sample), at);
+    policy.applyHostSample(state, bloom::test_support::kFixedPhysicalMemoryBytes, at);
+}
+
+// #729: each admission class keeps its own device-work record. A small card (the fixed 2 GiB test
+// card, injected as the device's live budget) and the fixed host reading. The Viewer's frame
+// records its need; then another class's phase is granted (a Background scope measure or RAM
+// Preview fill frame, or an Export frame), fills the card with cached intermediates and ends. The
+// preview owner's pass then gives back what the reserve asks for, and the Viewer's next frame must
+// be admitted exactly as its first was: at once, with the same need. Before the fix the other
+// class's grant replaced the one shared record, the owner kept only that smaller room free, and
+// the Viewer's next frame waited for the caches.
+void otherClassGrantKeepsTheViewersNeed() {
+    constexpr std::uint64_t card = bloom::test_support::kFixedDeviceMemoryBytes;
+    constexpr std::uint64_t imageBytes = 64 * kMiB;
+    const NativeImageStorageIdentity local{.allocatorGeneration = 7, .memoryType = 2, .heap = 1};
+    // A Background scope measure, a RAM Preview fill frame (speculative preview frames are admitted
+    // as Background, cpu_gpu_scene_preparation) and an Export frame, each needing less than the
+    // Viewer's frame.
+    auto fillFrame = frame(16 * kMiB);
+    fillFrame.admissionClass = GpuAdmissionClass::Background;
+    auto exportFrame = frame(8 * kMiB);
+    exportFrame.admissionClass = GpuAdmissionClass::Export;
+    for (const auto& envelope : {measurePhase(16 * kMiB), fillFrame, exportFrame}) {
+        const auto other = envelope.admissionClass;
+        GpuProcessingPhasePolicy policy(32);
+        policy.setHeadroom({.ramBytes = 0, .vramBytes = 0});
+        deliverFixedHost(policy);
+        std::deque<NativeImageStorageToken> cache;
+        const auto owned = [&] { return static_cast<std::uint64_t>(cache.size()) * imageBytes; };
+        const auto report = [&] {
+            require(policy.reportDevice(1, {.source = GpuAllocationBudgetSource::MemoryBudget,
+                                            .device_local_bytes = card,
+                                            .available_bytes = card - owned()}),
+                    "the injected card reports");
+        };
+        report();
+        const auto start = Clock::now();
+        // The Viewer's frame: admitted, its need raised to the executor's live set as scene
+        // preparation does, recorded, and released.
+        auto viewer = policy.reserve(frame(), start);
+        require(viewer.status == GpuProcessingPhaseAdmission::Accepted && viewer.lease,
+                "the Viewer's first frame is admitted");
+        policy.noteDeviceWorkNeed(GpuAdmissionClass::Viewer, viewer.lease->deviceNeedBytes(),
+                                  start);
+        const auto viewerNeed = viewer.lease->deviceNeedBytes();
+        viewer.lease.reset();
+        const auto priorityBefore = policy.viewerPriority(start).reserveDeviceBytes;
+        require(policy.deviceWorkNeedBytes(GpuAdmissionClass::Viewer) == viewerNeed &&
+                    policy.deviceWorkReserveBytes(start) == viewerNeed,
+                "the Viewer's need is recorded and reserved");
+        // The other class's phase, after the Viewer went idle: a smaller need than the Viewer's.
+        const auto later =
+            start + GpuProcessingPhasePolicy::kViewerActivityWindow + std::chrono::milliseconds(1);
+        auto granted = policy.reserve(envelope, later);
+        require(granted.status == GpuProcessingPhaseAdmission::Accepted && granted.lease,
+                "the other class's phase is granted beside an idle Viewer");
+        const auto otherNeed = granted.lease->deviceNeedBytes();
+        require(otherNeed < viewerNeed, "the other class needs less than the Viewer");
+        // Its work publishes intermediates to the cache until the card is full. A scope measure
+        // holds only its stated need, so the frames of a fill of the same class fill the card.
+        if (envelope.output == GpuProcessingPhaseOutput::PackedPreview && envelope.pixels == 1) {
+            granted.lease.reset();
+            granted = policy.reserve(fillFrame, later);
+            require(granted.status == GpuProcessingPhaseAdmission::Accepted && granted.lease &&
+                        granted.lease->deviceNeedBytes() < viewerNeed,
+                    "a Background fill frame needing less than the Viewer is granted");
+        }
+        for (;;) {
+            auto image = NativeImageStorageToken::reserve(granted.lease, imageBytes, local, later);
+            if (!image.token)
+                break;
+            require(image.token->promote(), "an intermediate is published to the cache");
+            cache.push_back(std::move(*image.token));
+            report();
+        }
+        const auto otherRecorded = granted.lease->deviceNeedBytes();
+        granted.lease.reset();
+        report();
+        require(owned() + imageBytes > card - viewerNeed, "the card is full of cached images");
+        require(policy.deviceWorkNeedBytes(GpuAdmissionClass::Viewer) == viewerNeed,
+                "a grant to another class never changes the Viewer's recorded need");
+        require(policy.viewerPriority(later).reserveDeviceBytes == priorityBefore,
+                "nor the need the Viewer's priority keeps free");
+        require(policy.deviceWorkNeedBytes(other) == otherRecorded,
+                "the other class's grant is recorded as its own need");
+        require(policy.deviceWorkReserveBytes(later) == viewerNeed,
+                "the caches keep the Viewer's room, the larger need");
+        // The preview owner's pass: the caches give back what the reserve lacks.
+        const auto shortfall = deviceWorkReserveShortfall(policy, later);
+        std::uint64_t freed = 0;
+        while (freed < shortfall && !cache.empty()) {
+            cache.pop_front();
+            freed += imageBytes;
+        }
+        report();
+        require(deviceWorkReserveShortfall(policy, later) == 0,
+                "after the owner's pass the Viewer's need is free");
+        auto next = policy.reserve(frame(), later);
+        require(next.status == GpuProcessingPhaseAdmission::Accepted && next.lease &&
+                    next.lease->deviceNeedBytes() == viewerNeed,
+                "the Viewer's next frame is admitted at once with its unchanged need");
+        next.lease.reset();
+        cache.clear();
+    }
+}
+
+// #729: a grant to any class changes only that class's record, and the reserve the caches keep is
+// the largest of the Viewer's record, the class admitted last and every class admitted within the
+// Viewer activity window.
+void deviceWorkRecordsArePerClass() {
+    GpuProcessingPhasePolicy policy(32);
+    const auto start = Clock::now();
+    const auto window = GpuProcessingPhasePolicy::kViewerActivityWindow;
+    const auto ms = [](const int count) { return std::chrono::milliseconds(count); };
+    require(policy.deviceWorkReserveBytes(start) == 0, "nothing recorded keeps nothing free");
+    policy.noteDeviceWorkNeed(GpuAdmissionClass::Viewer, 300 * kMiB, start);
+    policy.noteDeviceWorkNeed(GpuAdmissionClass::Export, 500 * kMiB, start + ms(1));
+    policy.noteDeviceWorkNeed(GpuAdmissionClass::Background, 100 * kMiB, start + ms(2));
+    require(policy.deviceWorkNeedBytes(GpuAdmissionClass::Viewer) == 300 * kMiB &&
+                policy.deviceWorkNeedBytes(GpuAdmissionClass::Export) == 500 * kMiB &&
+                policy.deviceWorkNeedBytes(GpuAdmissionClass::Background) == 100 * kMiB,
+            "each class's record holds its own need");
+    require(policy.deviceWorkReserveBytes(start + ms(2)) == 500 * kMiB,
+            "classes admitted within the window keep the largest of their needs");
+    const auto idle = start + ms(2) + window + ms(1);
+    require(policy.deviceWorkReserveBytes(idle) == 300 * kMiB,
+            "past the window the Viewer's room and the last class's are kept, not an old export's");
+    policy.noteDeviceWorkNeed(GpuAdmissionClass::Viewer, 50 * kMiB, idle);
+    policy.noteDeviceWorkNeed(GpuAdmissionClass::Export, 200 * kMiB, idle + window + ms(10));
+    require(policy.deviceWorkReserveBytes(idle + 3 * window) == 200 * kMiB,
+            "a lone export keeps its own need however long its frames take");
+    require(policy.deviceWorkNeedBytes(GpuAdmissionClass::Viewer) == 50 * kMiB &&
+                policy.deviceWorkNeedBytes(GpuAdmissionClass::Background) == 100 * kMiB,
+            "an export's record never changes the Viewer's or the Background's");
+}
+
 // #682 #719: a RAM fill planned for a small card (6, 8 and 12 GiB), with no device and no frames.
 // Every frame leaves a cached image on the device, as the scene cache does, so the card fills.
 // What a fill must hold on any card: admission never claims more than the card has and never owns
@@ -1170,7 +1316,7 @@ void smallCardFillStaysInsideTheCard() {
                 const auto during = policy.snapshot().reservations;
                 require(during.totalDeviceClaimBytes <= card && during.deviceCapacityBytes == card,
                         "admission never claims more than the card has");
-                policy.noteDeviceWorkNeed(grant.lease->deviceNeedBytes());
+                policy.noteDeviceWorkNeed(envelope.admissionClass, grant.lease->deviceNeedBytes());
                 require(image.token->promote(), "the finished image is published to the cache");
                 cache.push_back(std::move(*image.token));
                 grant.lease.reset();
@@ -1234,6 +1380,8 @@ int main() {
         previewWidthFollowsMeasuredRoom();
         pendingClaimsExcludeAllocatedBacking();
         smallCardFillStaysInsideTheCard();
+        otherClassGrantKeepsTheViewersNeed();
+        deviceWorkRecordsArePerClass();
     } catch (const std::exception& error) {
         std::cerr << "admission pressure: " << error.what() << '\n';
         return EXIT_FAILURE;

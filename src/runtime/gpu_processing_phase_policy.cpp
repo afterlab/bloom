@@ -515,9 +515,11 @@ GpuProcessingPhasePolicy::reserve(const GpuProcessingPhaseEnvelope& envelope,
         } else {
             grant = budget_.reserve(*request);
         }
+        // #729: the grant updates only its own class's record.
         if (grant.status == render::GpuProcessingPhaseAdmission::Accepted && request->native &&
             grant.lease)
-            lastDeviceNeed_ = grant.lease->deviceNeedBytes();
+            recordDeviceWorkNeedLocked(envelope.admissionClass, grant.lease->deviceNeedBytes(),
+                                       now);
         if (viewer) {
             if (grant.status == render::GpuProcessingPhaseAdmission::Accepted) {
                 viewerWaitingAt_.reset();
@@ -681,13 +683,46 @@ MemoryHeadroom GpuProcessingPhasePolicy::headroom() const noexcept {
     const std::lock_guard lock(mutex_);
     return headroom_;
 }
-std::uint64_t GpuProcessingPhasePolicy::deviceWorkReserveBytes() const noexcept {
+std::uint64_t
+GpuProcessingPhasePolicy::deviceWorkReserveBytes(const Clock::time_point now) const noexcept {
     const std::lock_guard lock(mutex_);
-    return lastDeviceNeed_;
+    std::size_t latest = deviceWorkNeeds_.size();
+    for (std::size_t index = 0; index < deviceWorkNeeds_.size(); ++index) {
+        const auto& at = deviceWorkNeeds_[index].at;
+        if (at && (latest == deviceWorkNeeds_.size() || *at > *deviceWorkNeeds_[latest].at))
+            latest = index;
+    }
+    std::uint64_t reserve = 0;
+    for (std::size_t index = 0; index < deviceWorkNeeds_.size(); ++index) {
+        const auto& need = deviceWorkNeeds_[index];
+        const bool recent = need.at && now >= *need.at && now - *need.at <= kViewerActivityWindow;
+        if (index == static_cast<std::size_t>(GpuAdmissionClass::Viewer) || index == latest ||
+            recent)
+            reserve = std::max(reserve, need.bytes);
+    }
+    return reserve;
 }
-void GpuProcessingPhasePolicy::noteDeviceWorkNeed(const std::uint64_t bytes) noexcept {
+std::uint64_t GpuProcessingPhasePolicy::deviceWorkNeedBytes(
+    const GpuAdmissionClass admissionClass) const noexcept {
+    const auto index = static_cast<std::size_t>(admissionClass);
+    if (index >= deviceWorkNeeds_.size())
+        return 0;
     const std::lock_guard lock(mutex_);
-    lastDeviceNeed_ = bytes;
+    return deviceWorkNeeds_[index].bytes;
+}
+void GpuProcessingPhasePolicy::noteDeviceWorkNeed(const GpuAdmissionClass admissionClass,
+                                                  const std::uint64_t bytes,
+                                                  const Clock::time_point now) noexcept {
+    const std::lock_guard lock(mutex_);
+    recordDeviceWorkNeedLocked(admissionClass, bytes, now);
+}
+void GpuProcessingPhasePolicy::recordDeviceWorkNeedLocked(const GpuAdmissionClass admissionClass,
+                                                          const std::uint64_t bytes,
+                                                          const Clock::time_point now) noexcept {
+    const auto index = static_cast<std::size_t>(admissionClass);
+    if (index >= deviceWorkNeeds_.size())
+        return;
+    deviceWorkNeeds_[index] = {.bytes = bytes, .at = now};
 }
 void GpuProcessingPhasePolicy::reclaimFor(const render::GpuProcessingPhaseDomain domain,
                                           const std::uint64_t need,
@@ -834,8 +869,10 @@ std::uint64_t deviceReclaimBytes(GpuDeviceReclaimRequest& request,
             : std::uint64_t{0};
     return std::max(waiting, pressure);
 }
-std::uint64_t deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy) noexcept {
-    const auto reserve = policy.deviceWorkReserveBytes();
+std::uint64_t
+deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy,
+                           const GpuProcessingPhasePolicy::Clock::time_point now) noexcept {
+    const auto reserve = policy.deviceWorkReserveBytes(now);
     const auto counters = policy.snapshot().reservations;
     if (reserve == 0 || !counters.deviceReady || !counters.deviceCapacityBytes)
         return 0;

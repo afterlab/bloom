@@ -273,11 +273,15 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     std::uint64_t retainedAllowance = request.pixelStorageByteLimit;
     std::uint64_t sourceAllowance = request.pixelStorageByteLimit;
     std::uint64_t coverageAllowance = request.pixelStorageByteLimit;
+    // The class this build's own phase is admitted in; its device-work record is the one the
+    // phase's growth updates (#729).
+    auto admittedClass = phase_.envelope.admissionClass;
     if (phase_.policy && !phaseLease) {
         auto envelope = phase_.envelope;
         // #539: speculative frames yield to the Viewer's (ADR 0033 section 9 classes).
         if (request.background && envelope.admissionClass == GpuAdmissionClass::Viewer)
             envelope.admissionClass = GpuAdmissionClass::Background;
+        admittedClass = envelope.admissionClass;
         bool derivedCeiling = false;
         if (envelope.native && !envelope.requestedExecutorBytes && phase_.policy->budgetView()) {
             const auto delivered = phase_.policy->budgetView()->load();
@@ -1383,7 +1387,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         case render::GpuProcessingPhaseAdmission::Accepted:
             // #682: the device caches keep this much free for the next frame of the same work.
             if (phase_.policy)
-                phase_.policy->noteDeviceWorkNeed(phaseLease->deviceNeedBytes());
+                phase_.policy->noteDeviceWorkNeed(admittedClass, phaseLease->deviceNeedBytes());
             break;
         case render::GpuProcessingPhaseAdmission::AwaitingCapacity:
             // #682: a phase that must grow waits like a reservation does, so the device caches

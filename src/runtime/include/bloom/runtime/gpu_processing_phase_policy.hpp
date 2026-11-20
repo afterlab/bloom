@@ -131,11 +131,23 @@ class GpuProcessingPhasePolicy final {
     // preference (MemoryHeadroom{} when none is saved); a root starts with no margin.
     void setHeadroom(MemoryHeadroom headroom) noexcept;
     [[nodiscard]] MemoryHeadroom headroom() const noexcept;
-    // #682: the device need of the most recently admitted native phase, the room the device caches
-    // keep free so the next frame of the same work is admitted without waiting for them.
-    [[nodiscard]] std::uint64_t deviceWorkReserveBytes() const noexcept;
-    // Records the device need a native phase was finally admitted with (its executor need included).
-    void noteDeviceWorkNeed(std::uint64_t bytes) noexcept;
+    // #682 #729: the room the device caches keep free so the next frame of current work is admitted
+    // without waiting for them. Each admission class keeps its own record: the device need its last
+    // native phase was admitted with, and when. A grant to one class never changes another class's
+    // record. The reserve is the largest need among the Viewer's record, the record of the class
+    // admitted last, and the record of every class admitted within kViewerActivityWindow of `now`:
+    // the Viewer's next frame always keeps its room, work running beside it keeps its own, and a
+    // lone export or fill keeps its own however long its frames take.
+    [[nodiscard]] std::uint64_t
+    deviceWorkReserveBytes(Clock::time_point now = Clock::now()) const noexcept;
+    // One class's record: the device need its last native phase was admitted with (zero before
+    // any).
+    [[nodiscard]] std::uint64_t
+    deviceWorkNeedBytes(GpuAdmissionClass admissionClass) const noexcept;
+    // Records the device need a native phase of `admissionClass` was finally admitted with (its
+    // executor need included, after GpuProcessingPhaseLease::raiseExecutorNeed).
+    void noteDeviceWorkNeed(GpuAdmissionClass admissionClass, std::uint64_t bytes,
+                            Clock::time_point now = Clock::now()) noexcept;
     // Asks the reclaimers for what `need` lacks in `domain` now (the need minus the free room),
     // as a waiting reservation does. For work whose admitted phase must grow (#682): its wait
     // must give the caches the same chance to give memory back.
@@ -216,7 +228,14 @@ class GpuProcessingPhasePolicy final {
     std::optional<Clock::time_point> viewerAdmittedAt_;
     std::uint64_t viewerNeedHostBytes_ = 0;
     std::uint64_t viewerNeedDeviceBytes_ = 0;
-    std::uint64_t lastDeviceNeed_ = 0;
+    // #729: one device-work record per GpuAdmissionClass, indexed by its value.
+    struct DeviceWorkNeed final {
+        std::uint64_t bytes = 0;
+        std::optional<Clock::time_point> at;
+    };
+    std::array<DeviceWorkNeed, 3> deviceWorkNeeds_{};
+    void recordDeviceWorkNeedLocked(GpuAdmissionClass admissionClass, std::uint64_t bytes,
+                                    Clock::time_point now) noexcept;
     std::vector<RetentionReclaimer> reclaimers_;
     mutable std::mutex reclaimerMutex_;
     std::optional<AwaitingNeed> lastAwaitingNeed_;
@@ -290,5 +309,8 @@ void registerDeviceReclaim(GpuProcessingPhasePolicy& policy,
 // caches included) has fallen below one more phase of the current work (deviceWorkReserveBytes).
 // The reusable caches give this back before the next frame asks, so a frame does not wait for a
 // cache to shrink; finished frames are never evicted for it.
-[[nodiscard]] std::uint64_t deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy) noexcept;
+[[nodiscard]] std::uint64_t
+deviceWorkReserveShortfall(const GpuProcessingPhasePolicy& policy,
+                           GpuProcessingPhasePolicy::Clock::time_point now =
+                               GpuProcessingPhasePolicy::Clock::now()) noexcept;
 } // namespace bloom::runtime

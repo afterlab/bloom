@@ -1685,8 +1685,20 @@ the caches for memory (only a waiting reservation did), so each frame waited for
 sample, about 24 times per frame (0.85 frames per second). Now a phase that must grow asks the
 reclaimers for its shortfall at once, as a reservation does (`GpuProcessingPhasePolicy::reclaimFor`),
 and the preview owner keeps the root's free device room at least one phase of the current work
-(`deviceWorkReserveBytes`, the need the last native phase was admitted with): at each capacity
-sample the parked storage and the scene cache give back the difference before the next frame asks.
+(`deviceWorkReserveBytes`): at each capacity sample the parked storage and the scene cache give
+back the difference before the next frame asks. Each admission class (Viewer, Export, Background)
+keeps its own record of that work (#729): the device need its last native phase was admitted with
+(raised to the executor's live set by `raiseExecutorNeed`) and when. A grant to one class never
+changes another class's record; before, one record served every class, so a Background scope
+measure's or an export frame's smaller grant replaced the Viewer's need, the caches kept only that
+room free and the Viewer's next frame waited for them. The reserve is the largest of the Viewer's
+record, the record of the class admitted last, and the record of every class admitted within the
+Viewer activity window (250 ms): the Viewer's next frame always keeps its room, work running beside
+it keeps its own, and a lone export or fill keeps its own however long its frames take. RAM Preview
+fill and read-ahead frames are admitted as Background (`cpu_gpu_scene_preparation`), so a fill
+beside the Viewer keeps both rooms. `bloom.runtime.gpu_admission_pressure`
+(`otherClassGrantKeepsTheViewersNeed`, `deviceWorkRecordsArePerClass`) proves it on the fixed 2 GiB
+test card with the fixed host reading.
 Only reusable retention gives way for that reserve, never finished frames. The retention ceilings are
 planned against the device memory less the VRAM headroom. `render::GpuDeviceCreationOptions::
 device_memory_limit_bytes` caps every device-local heap in the allocator, so a test plans for a small
