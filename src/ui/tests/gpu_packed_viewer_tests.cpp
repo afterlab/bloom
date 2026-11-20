@@ -56,6 +56,7 @@
 #include <ctime>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 
 #if defined(__linux__)
@@ -422,8 +423,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                        const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
                        const std::vector<runtime::SnapshotParameterOverride>& overrides,
                        runtime::TaskContext& context) {
-            // Real sampling happens only on this production CPU-stage worker, before admission.
-            auto sample = runtime::memoryBudgetSample(context.cancellation());
+            // Sampling happens only on this production CPU-stage worker, before admission. The
+            // reading is the fixed one: admission must not move with what this machine has free.
+            auto sample = test_support::fixedMemoryBudgetSample(context.cancellation());
             {
                 std::lock_guard lock(sampleRoot->mutex);
                 if (!sampleRoot->ledger) {
@@ -443,6 +445,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     serviceSettings.product = runtime::GpuPreviewDisplayProductMode::GpuPreparedPacked;
     serviceSettings.presentation = runtime::GpuPreviewDisplayServicePresentationMode::Disabled;
     serviceSettings.processingPhasePolicy = processingPolicy;
+    // A stated card: the driver's live budget, which moves with every other program on the
+    // device, would change the admission the ownership proofs count.
+    if (processingPolicy)
+        serviceSettings.deviceMemoryLimitBytes = test_support::kFixedDeviceMemoryBytes;
     runtime::GpuPreviewDisplayService service(scheduler, gpuStage, fixture.productionCpuStage(),
                                               fixture.productionCpuFallback(displayPreparer),
                                               serviceSettings);
@@ -518,7 +524,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto* viewer = area->findChild<ui::ViewerEditor*>();
     if (!viewer)
         return 1;
-    ui::WindowStatusBar status(session, &controller);
+    // The status bar reads the controller it is given until it is destroyed, so it goes first, as
+    // the application's window does before the application's controller.
+    std::optional<ui::WindowStatusBar> statusOwner;
+    statusOwner.emplace(session, &controller);
+    auto& status = *statusOwner;
     status.setDisplayedViewer(viewer);
     const auto current = [&] {
         return awaitProof("the Viewer paints a Current frame", [&] {
@@ -612,18 +622,21 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             "allocation");
         controller.purgePreviewCache();
         viewer->update();
+        // The purged frame's allocation is freed on the retirement worker, off the UI thread, so
+        // its release is awaited with the painted state rather than read once after the purge.
         checks.expect(
             awaitProof(
                 "real cache purge leaves Viewer-painted/external aliases charged and readable",
                 [&] {
                     const auto painted = viewer->actualDisplayDescriptor();
+                    const auto root = processingPolicy->snapshot().reservations;
                     return painted && painted->frame &&
                            painted->frame->displayOnlyFrame() == external->displayOnlyFrame() &&
-                           painted->mapping && !painted->native && !painted->cover;
-                }) &&
-                frameCache->size() == 0 && frameCache->residentBytes() == 0 &&
-                processingPolicy->snapshot().reservations.ownedPackedHostBytes == publishedBytes &&
-                processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 1,
+                           painted->mapping && !painted->native && !painted->cover &&
+                           frameCache->size() == 0 && frameCache->residentBytes() == 0 &&
+                           root.ownedPackedHostBytes == publishedBytes &&
+                           root.ownedPackedHostAllocations == 1;
+                }),
             "real cache purge leaves Viewer-painted/external aliases charged and readable");
         {
             const auto paintedFrame = viewer->displayedFrameForTest();
@@ -633,6 +646,7 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                           "purged current Viewer still reads the exact original packed allocation");
         }
         controller.beginShutdown();
+        statusOwner.reset();
         delete area; // Destroy the actual Viewer and its displayed frame/presentation aliases.
         controllerOwner.reset();
         const auto externalView = external->displayBufferView();
@@ -640,7 +654,11 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             processingPolicy->snapshot().reservations.ownedPackedHostAllocations == 1 &&
                 externalView && externalView->pixels.data() == originalPixels,
             "external frame alone preserves backing after actual Viewer/controller destruction");
-        const auto revision = processingPolicy->snapshot().reservations.admissionRevision;
+        // The release returns exactly this allocation's claim. Other claims stay: the running
+        // service keeps its resident processing buffers, host-visible on some devices.
+        const auto beforeRelease = processingPolicy->snapshot().reservations;
+        const auto releasedClaim =
+            beforeRelease.ownedPackedHostBytes + beforeRelease.ownedPackedHostMetadataBytes;
         external.reset();
         checks.expect(
             awaitProof(
@@ -648,7 +666,10 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                 [&] {
                     const auto root = processingPolicy->snapshot().reservations;
                     return root.ownedPackedHostAllocations == 0 && root.ownedPackedHostBytes == 0 &&
-                           root.totalHostClaimBytes == 0 && root.admissionRevision == revision + 1;
+                           root.ownedPackedHostMetadataBytes == 0 &&
+                           root.totalHostClaimBytes + releasedClaim ==
+                               beforeRelease.totalHostClaimBytes &&
+                           root.admissionRevision == beforeRelease.admissionRevision + 1;
                 }),
             "last external alias releases one owned allocation and advances admission once");
         bridge.beginShutdown();
