@@ -10,9 +10,11 @@
 #include <csignal>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <numeric>
 #include <sstream>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <tuple>
 #include <utility>
@@ -193,6 +195,25 @@ void tests(const std::filesystem::path& directory) {
     settings.frames = 48;
     settings.audioCodec = "pcm_s16le";
     settings.audioSamples = 96000;
+    // A worker that cannot be started says so, with the operation and the system's own error,
+    // instead of a bare "Media worker I/O failed" that loses the cause (#750). An existing file
+    // that is not a program fails the launch itself on every platform.
+    {
+        const auto notAProgram = std::filesystem::absolute(directory / "not-a-worker");
+        std::ofstream(notAProgram) << "not a program\n";
+        EncodeSessionOptionsV1 options;
+        options.executable = notAProgram.string();
+        options.platformEncoder = PlatformEncoderV1::Skipped;
+        EncodeSessionV1 session(std::move(options));
+        const auto refused = session.begin(settings);
+        if (refused)
+            std::cout << "unstartable worker: " << refused->detail << '\n';
+        test::check(refused && refused->reason == Error::Io &&
+                        refused->detail.starts_with(
+                            "Media worker could not be started (launch: ") &&
+                        refused->detail.find("no system error") == std::string::npos,
+                    "a worker that cannot be started names the launch and the system's error");
+    }
     (void)run(settings, directory / "export-prores.mov");
     settings.videoCodec = "dnxhd";
     settings.profile = "dnxhr_hq";

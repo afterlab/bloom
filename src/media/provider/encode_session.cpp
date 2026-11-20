@@ -6,6 +6,8 @@
 #include <bloom/media/provider/media_workers.hpp>
 #include <filesystem>
 #include <random>
+#include <string>
+#include <system_error>
 #include <thread>
 
 namespace bloom::media::provider {
@@ -36,7 +38,27 @@ EncodeSettingsV1 providerSettings(EncodeSettingsV1 settings, const Handshake& he
         }
     return settings;
 }
-Unavailable processFailure(const platform::ProcessFailure& e) {
+// What the host was doing with the worker when the supervisor failed: the error says so, and
+// with the operating system's own error, so a failed export names its cause.
+enum class WorkerOperation { Launch, Write, Read, Finish };
+std::string operationName(const WorkerOperation operation) {
+    switch (operation) {
+    case WorkerOperation::Launch:
+        return "launch";
+    case WorkerOperation::Write:
+        return "write";
+    case WorkerOperation::Read:
+        return "read";
+    case WorkerOperation::Finish:
+        return "finish";
+    }
+    return "use";
+}
+std::string systemError(const int code) {
+    return code == 0 ? std::string("no system error")
+                     : std::system_category().message(code) + " (" + std::to_string(code) + ")";
+}
+Unavailable processFailure(const platform::ProcessFailure& e, const WorkerOperation operation) {
     switch (e.code) {
     case platform::ProcessError::Unavailable:
         return {Error::Unavailable, "Media worker unavailable on this platform"};
@@ -49,10 +71,13 @@ Unavailable processFailure(const platform::ProcessFailure& e) {
     case platform::ProcessError::ResourceLimit:
         return {Error::Oversized, "Media worker resource limit"};
     case platform::ProcessError::Spawn:
+        return {Error::Io, "Media worker could not be started (" + operationName(operation) +
+                               ": " + systemError(e.nativeCode) + ")"};
     case platform::ProcessError::Io:
-        return {Error::Io, "Media worker I/O failed"};
+        return {Error::Io, "Media worker I/O failed (" + operationName(operation) + ": " +
+                               systemError(e.nativeCode) + ")"};
     }
-    return {Error::Io, "Media worker failed"};
+    return {Error::Io, "Media worker failed (" + operationName(operation) + ")"};
 }
 std::optional<Unavailable> failure(const Payload& payload) {
     if (const auto* e = std::get_if<Unavailable>(&payload))
@@ -83,8 +108,8 @@ struct EncodeSessionV1::State {
     explicit State(EncodeSessionOptionsV1 o, platform::ProcessCancellation c)
         : options(std::move(o)), cancel(std::move(c)) {}
     // A worker that vanished mid-session is reaped here so the error names how it ended.
-    Unavailable crash(const platform::ProcessFailure& e) {
-        auto error = processFailure(e);
+    Unavailable crash(const platform::ProcessFailure& e, const WorkerOperation operation) {
+        auto error = processFailure(e, operation);
         if (e.code == platform::ProcessError::Crashed && process)
             if (const auto exit = process->waitExit(std::chrono::milliseconds(250)))
                 error.detail = "Media worker exited during encode (" +
@@ -137,7 +162,7 @@ struct EncodeSessionV1::State {
             return std::get<Unavailable>(stop(*e));
         const auto written = process->write(std::get<Bytes>(request), deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&written))
-            return std::get<Unavailable>(stop(crash(*e)));
+            return std::get<Unavailable>(stop(crash(*e, WorkerOperation::Write)));
         return std::nullopt;
     }
     Payload receive(MessageKind request, MessageKind expected) {
@@ -147,7 +172,7 @@ struct EncodeSessionV1::State {
         std::array<std::byte, 4> prefix{};
         auto received = process->read(prefix, deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&received))
-            return stop(crash(*e));
+            return stop(crash(*e, WorkerOperation::Read));
         const auto length = messageLength(prefix);
         if (const auto* e = std::get_if<Unavailable>(&length))
             return stop(*e);
@@ -159,7 +184,7 @@ struct EncodeSessionV1::State {
         response.resize(4U + std::get<std::uint32_t>(length));
         received = process->read(std::span(response).subspan(4), deadline, cancel);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&received))
-            return stop(crash(*e));
+            return stop(crash(*e, WorkerOperation::Read));
         auto message = protocol->receive(response, expected);
         if (const auto* e = std::get_if<Unavailable>(&message))
             return stop(*e);
@@ -303,7 +328,7 @@ struct EncodeSessionV1::State {
 #endif
         auto launched = platform::ProcessSupervisor::launch(launch);
         if (const auto* e = std::get_if<platform::ProcessFailure>(&launched))
-            return processFailure(*e);
+            return processFailure(*e, WorkerOperation::Launch);
         process = std::get<std::unique_ptr<platform::ProcessSupervisor>>(std::move(launched));
         if (options.launched)
             options.launched(process->processId());
@@ -442,7 +467,7 @@ std::optional<Unavailable> EncodeSessionV1::close() {
     const auto ended =
         state_->process->finish(std::chrono::steady_clock::now() + state_->options.timeout);
     if (const auto* e = std::get_if<platform::ProcessFailure>(&ended))
-        return state_->crash(*e);
+        return state_->crash(*e, WorkerOperation::Finish);
     state_->process.reset();
     return std::nullopt;
 }

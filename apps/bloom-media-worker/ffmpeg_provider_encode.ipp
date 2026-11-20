@@ -73,7 +73,11 @@ struct PrivateMediaFile {
 #endif
 #if defined(__unix__) || defined(__APPLE__)
         if (inherited >= 0) {
-            require(::ftruncate(inherited, 0) == 0, "Cannot reset the staged artifact", Error::Io);
+            if (::ftruncate(inherited, 0) != 0) {
+                const int code = errno;
+                throw Unavailable{Error::Io, "Cannot reset the staged artifact (" +
+                                                 std::system_category().message(code) + ")"};
+            }
             const int own = ::dup(inherited);
             file = own >= 0 ? ::fdopen(own, "w+b") : nullptr;
             if (file == nullptr && own >= 0)

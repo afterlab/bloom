@@ -10,6 +10,7 @@
 #include <bloom/media/provider/mediafoundation_manifest.hpp>
 #endif
 #include <bloom/platform/file_snapshot.hpp>
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -19,6 +20,7 @@
 #include <memory>
 #include <numeric>
 #include <optional>
+#include <system_error>
 #include <thread>
 #include <utility>
 #if defined(__unix__) || defined(__APPLE__)
