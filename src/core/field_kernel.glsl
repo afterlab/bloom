@@ -3304,21 +3304,26 @@ BFK_FN vec4 bfk_op_rays(BFK_CTX, int base, vec4 p) {
 }
 
 // --- Homography ---------------------------------------------------------------------------------
-// Block of six vec4 (the first three are the host's, read when a window map is placed, see
-// applyFieldRasterGeometry): the map itself is the last three,
-// [m00, m01, m02, m10] [m11, m12, m20, m21] [centre x, centre y, valid, 0]: a projective map from the
-// position p of an output pixel to the position to read, with d = p - centre and w = m20 dx + m21 dy + 1:
+// Block of seven vec4 (the first three are the host's, read when a window map is placed, see
+// applyFieldRasterGeometry): the map itself is the last four,
+// [m00, m01, m02, m10] [m11, m12, m20, m21] [centre x, centre y, valid, bounded]
+// [min x, min y, max x, max y]: a projective map from the position p of an output pixel to the position
+// to read, with d = p - centre and w = m20 dx + m21 dy + 1:
 //   q = ((m00 dx + m01 dy + m02) / w, (m10 dx + m11 dy + m12) / w).
 // The host solves the matrix in binary64 (core::field::homographyFromQuads, similarityHomography). A map
-// that is not valid (a degenerate quad) and a pixel on the far side of the horizon (w <= 0, which a
-// projection would fold back onto the picture) read 1e20, a position no image reaches, so the sample
-// is transparent.
+// that is not valid (a degenerate, twisted or edge-on quad), a pixel on the far side of the horizon
+// (w <= 0, which a projection would fold back onto the picture) and, for a bounded map, a pixel outside
+// the bounds (the pinned quad's bounding box, #738) read 1e20, a position no image reaches, so the
+// sample is transparent.
 
 BFK_FN vec4 bfk_op_homography(BFK_CTX, int base, vec4 p) {
     vec4 h0 = bfk_data(BFK_CTXA, base + 3);
     vec4 h1 = bfk_data(BFK_CTXA, base + 4);
     vec4 h2 = bfk_data(BFK_CTXA, base + 5);
+    vec4 h3 = bfk_data(BFK_CTXA, base + 6);
     if (!(h2.z > 0.5f))
+        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+    if (h2.w > 0.5f && !(p.x >= h3.x && p.x <= h3.z && p.y >= h3.y && p.y <= h3.w))
         return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
     BFK_P float dx = p.x - h2.x;
     BFK_P float dy = p.y - h2.y;

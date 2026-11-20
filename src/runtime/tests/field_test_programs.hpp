@@ -651,12 +651,14 @@ inline void packRegisters(FieldProgram& program) {
 // #348 Corner Pin, ST Map and Displace: the programs their lowerings build over the 16 x 12 test
 // composition, mirroring snapshot_compiler_warp.ipp (the snapshot compiler test holds each to the
 // same instruction sequence).
-[[nodiscard]] inline FieldProgram cornerPinProgram(const std::uint64_t idBase,
-                                                   const std::int64_t filter = 0) {
+[[nodiscard]] inline FieldProgram
+cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
+                 const std::array<Vec2d, 4>& corners = {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5},
+                                                        Vec2d{-1.0, 2.0}, Vec2d{2.5, 0.5}}) {
     Builder b(idBase);
     const auto c = b.add(FieldOp::Coordinate);
     const auto where = b.add(FieldOp::Homography, {c}, {0}, {},
-                             {Vec2d{-2.0, 1.0}, Vec2d{1.0, -1.5}, Vec2d{-1.0, 2.0}, Vec2d{2.5, 0.5}});
+                             {corners[0], corners[1], corners[2], corners[3]});
     b.last().slot = 0;
     const auto read = b.add(FieldOp::Image, {where}, {filter, 1, 3, 4, 0, 1});
     b.last().slot = 0;

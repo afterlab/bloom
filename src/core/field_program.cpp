@@ -111,6 +111,16 @@ constexpr double kMaxLatticeOffset = 1073741824.0; // 2^30
 bool finite(const double value) noexcept { return std::isfinite(value); }
 
 float narrow(const double value) noexcept { return static_cast<float>(value); }
+// #738: `value` in binary32 rounded away from the inside, down for `direction` < 0 and up
+// otherwise, so a bound narrowed for the kernel never excludes a position the binary64 bound holds.
+float outward(const double value, const double direction) noexcept {
+    auto bound = static_cast<float>(value);
+    if (direction < 0.0 && static_cast<double>(bound) > value)
+        bound = std::nextafter(bound, -std::numeric_limits<float>::infinity());
+    if (direction >= 0.0 && static_cast<double>(bound) < value)
+        bound = std::nextafter(bound, std::numeric_limits<float>::infinity());
+    return bound;
+}
 
 void push(std::vector<float>& out, const double a, const double b, const double c,
           const double d) {
@@ -679,6 +689,38 @@ bool solveEight(std::array<std::array<double, 9>, 8>& rows, std::array<double, 8
     return true;
 }
 
+// #738: whether two opposite edges of the quad (corners in order around it) cross, which a quad
+// whose corners turn both ways at once (two of its four corner turns against the other two) does.
+// A concave quad turns against the others at one corner only, and is simple.
+bool twistedQuad(const std::array<double, 8>& q) {
+    int left = 0;
+    int right = 0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto a = (i + 3) % 4;
+        const auto b = (i + 1) % 4;
+        const double ex = q[2 * i] - q[2 * a];
+        const double ey = q[2 * i + 1] - q[2 * a + 1];
+        const double fx = q[2 * b] - q[2 * i];
+        const double fy = q[2 * b + 1] - q[2 * i + 1];
+        const double turn = ex * fy - ey * fx;
+        left += turn > 0.0 ? 1 : 0;
+        right += turn < 0.0 ? 1 : 0;
+    }
+    return left == 2 && right == 2;
+}
+
+// #738: the quad's width across, its area (shoelace) over its longest edge.
+double quadWidth(const std::array<double, 8>& q) {
+    double twiceArea = 0.0;
+    double longest = 0.0;
+    for (std::size_t i = 0; i < 4; ++i) {
+        const auto j = (i + 1) % 4;
+        twiceArea += q[2 * i] * q[2 * j + 1] - q[2 * j] * q[2 * i + 1];
+        longest = std::max(longest, std::hypot(q[2 * j] - q[2 * i], q[2 * j + 1] - q[2 * i + 1]));
+    }
+    return longest > 0.0 ? 0.5 * std::fabs(twiceArea) / longest : 0.0;
+}
+
 } // namespace
 
 bool homographyFromQuads(const std::array<double, 8>& from, const std::array<double, 8>& to,
@@ -706,6 +748,12 @@ bool homographyFromQuads(const std::array<double, 8>& from, const std::array<dou
     }
     if (!(reach > 1.0e-6))
         return false;
+    // #738: a twisted quad (two edges cross) has no projective reading as a picture in front of
+    // the eye: its map sends the wedges beyond the crossing onto the picture, a streak to the edge
+    // of the frame. A quad narrower than kMinimumHomographyQuadWidth is a face seen edge-on, which
+    // is a twisted quad a rounding away. Both are culled.
+    if (twistedQuad(from) || twistedQuad(to) || !(quadWidth(to) >= kMinimumHomographyQuadWidth))
+        return false;
     std::array<std::array<double, 9>, 8> rows{};
     for (std::size_t i = 0; i < 4; ++i) {
         const double x = (to[2 * i] - cdx) / reach;
@@ -729,6 +777,9 @@ bool homographyFromQuads(const std::array<double, 8>& from, const std::array<dou
     for (const auto v : out.m)
         if (!finite(v))
             return false;
+    out.bounded = true;
+    out.bounds = {std::min({to[0], to[2], to[4], to[6]}), std::min({to[1], to[3], to[5], to[7]}),
+                  std::max({to[0], to[2], to[4], to[6]}), std::max({to[1], to[3], to[5], to[7]})};
     out.valid = true;
     return true;
 }
@@ -953,7 +1004,11 @@ std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p
          p.windowSlot >= 0 && p.windowCentred ? 1.0 : 0.0, 0.0);
     push(out, p.offsets[0], p.offsets[1], p.offsets[2], p.offsets[3]);
     push(out, p.offsets[4], p.offsets[5], p.offsets[6], p.offsets[7]);
-    if (!valid) {
+    const bool bounded = p.bounded && std::ranges::all_of(p.bounds, [](const double v) {
+        return finite(v) && std::fabs(v) < 1.0e15;
+    }) && p.bounds[0] <= p.bounds[2] && p.bounds[1] <= p.bounds[3];
+    if (!valid || (p.bounded && !bounded)) {
+        push(out, 0.0, 0.0, 0.0, 0.0);
         push(out, 0.0, 0.0, 0.0, 0.0);
         push(out, 0.0, 0.0, 0.0, 0.0);
         push(out, 0.0, 0.0, 0.0, 0.0);
@@ -961,7 +1016,14 @@ std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p
     }
     push(out, p.m[0], p.m[1], p.m[2], p.m[3]);
     push(out, p.m[4], p.m[5], p.m[6], p.m[7]);
-    push(out, p.centreX, p.centreY, 1.0, 0.0);
+    push(out, p.centreX, p.centreY, 1.0, bounded ? 1.0 : 0.0);
+    if (bounded)
+        push(out, static_cast<double>(outward(p.bounds[0], -1.0)),
+             static_cast<double>(outward(p.bounds[1], -1.0)),
+             static_cast<double>(outward(p.bounds[2], 1.0)),
+             static_cast<double>(outward(p.bounds[3], 1.0)));
+    else
+        push(out, 0.0, 0.0, 0.0, 0.0);
     return checked(std::move(out));
 }
 
@@ -1130,7 +1192,7 @@ void placeHomographyWindows(std::vector<float>& table, const FieldRasterGeometry
         if (a[0] != static_cast<float>(FieldOp::Homography))
             continue;
         const auto base = static_cast<std::size_t>(std::max(a[6], 0.0F));
-        if ((base + 6U) * 4U > table.size())
+        if ((base + 7U) * 4U > table.size())
             continue;
         float* block = &table[base * 4U];
         if (block[0] != 1.0F)
@@ -1144,12 +1206,22 @@ void placeHomographyWindows(std::vector<float>& table, const FieldRasterGeometry
             bool ok = map.valid;
             for (std::size_t k = 0; k < 8; ++k)
                 ok = ok && std::fabs(m[k]) < 1.0e15;
+            // #738: a quad's map draws only within the quad's bounding box, widened by half an
+            // output pixel so a pixel the quad's edge crosses keeps its filtered edge.
+            const bool bounded = map.bounded;
+            const double margin = 0.5 * std::max(std::fabs(geometry.ax), std::fabs(geometry.ay));
+            for (std::size_t k = 0; k < 4; ++k)
+                ok = ok && (!bounded || (finite(map.bounds[k]) && std::fabs(map.bounds[k]) < 1.0e15));
             for (std::size_t k = 0; k < 8; ++k)
                 block[12U + k] = ok ? narrow(m[k]) : 0.0F;
             block[20] = ok ? narrow(map.centreX) : 0.0F;
             block[21] = ok ? narrow(map.centreY) : 0.0F;
             block[22] = ok ? 1.0F : 0.0F;
-            block[23] = 0.0F;
+            block[23] = ok && bounded ? 1.0F : 0.0F;
+            block[24] = ok && bounded ? outward(map.bounds[0] - margin, -1.0) : 0.0F;
+            block[25] = ok && bounded ? outward(map.bounds[1] - margin, -1.0) : 0.0F;
+            block[26] = ok && bounded ? outward(map.bounds[2] + margin, 1.0) : 0.0F;
+            block[27] = ok && bounded ? outward(map.bounds[3] + margin, 1.0) : 0.0F;
         };
         if (slotIndex >= kMaxFieldImages) {
             write(invalid);
@@ -1318,7 +1390,7 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
     case FieldOp::Rays:
         return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
     case FieldOp::Homography:
-        return 6;
+        return 7;
     case FieldOp::ProceduralWarp: {
         const auto mode = at(0, 0);
         if (!(mode >= 0.0F) || !(mode < static_cast<float>(kProceduralWarpModeCount)))

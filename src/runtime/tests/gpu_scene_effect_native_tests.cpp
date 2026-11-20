@@ -2693,6 +2693,26 @@ void runFields(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
                                    {0.0, 0.25, 1.0, 0.5}, {1.0, 1.0, 0.0, 1.0}}}),
                              1U});
     id += 100;
+    // #738 Corner Pin seen almost edge-on, on the 12 x 10 source (corner offsets in pixels, y
+    // down): a twisted quad (its right edge crossing its left), one narrower than the minimum
+    // width, both culled, a 0.1 px sliver and a concave quad, both drawn only within their bounds.
+    {
+        using bloom::document::Vec2d;
+        const std::array<std::pair<std::string, std::array<Vec2d, 4>>, 4> quads{{
+            {"twisted", {Vec2d{0.0, 0.0}, Vec2d{-12.05, 1.0}, Vec2d{-11.85, -1.0}, Vec2d{0.0, 0.0}}},
+            {"edge-on",
+             {Vec2d{0.45, 0.0}, Vec2d{-11.549, 1.0}, Vec2d{-11.549, -1.0}, Vec2d{0.45, 0.0}}},
+            {"sliver", {Vec2d{0.45, 0.0}, Vec2d{-11.45, 1.0}, Vec2d{-11.45, -1.0}, Vec2d{0.45, 0.0}}},
+            {"concave", {Vec2d{0.0, 0.0}, Vec2d{0.0, 0.0}, Vec2d{-9.0, -8.0}, Vec2d{0.0, 0.0}}},
+        }};
+        for (const auto& [quadName, corners] : quads) {
+            kernels.emplace_back("corner pin " + quadName,
+                                 bloom::runtime::FieldRasterKernel{
+                                     bloom::field_test_programs::cornerPinProgram(id, 0, corners),
+                                     1U});
+            id += 100;
+        }
+    }
     // #348 Corner Pin, ST Map and Displace: the programs their lowerings build, each filter.
     for (const std::int64_t filter : {0, 1, 2}) {
         kernels.emplace_back("corner pin filter " + std::to_string(filter),

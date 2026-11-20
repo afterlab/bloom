@@ -808,6 +808,107 @@ void testHomography(Expectations& e) {
              "a position beyond any texel index reads transparent, not the edge pixel");
 }
 
+// #738: a Corner Pin quad seen almost edge-on. The report's repro: a 30 x 80 picture pinned so two
+// of its long edges nearly coincide. When they cross (a twisted quad, which an edge-on face becomes
+// as it turns past edge-on), the map used to send the wedge beyond the crossing back onto the
+// picture: a 1 px streak hundreds of pixels long. Now a twisted quad and one narrower than
+// kMinimumHomographyQuadWidth are culled, and no pixel outside the quad's bounding box (widened by
+// half a pixel) is ever drawn, for a concave quad too, whose horizon crosses it.
+void testCornerPinEdgeOn(Expectations& e) {
+    TestImage image{30, 80, {}};
+    image.texels.assign(30U * 80U, {1.0F, 1.0F, 1.0F, 1.0F});
+    const field::FieldImages images{&image, &fetchTest};
+    // A 64 x 1024 frame (field y from 512 down to -512); the picture's window covers composition
+    // pixels [17, 47) x [472, 552), field x in [-15, 15] and y in [-40, 40].
+    auto geometry = field::fieldRasterGeometry(0, 0, 64, 1024, 64.0, 1024.0, 1.0, 1.0, 1);
+    geometry.slots[0] = field::fieldImageSlot(17, 472, 30, 80, 64.0, 1024.0, 1.0, 1.0);
+    const std::array<double, 8> window{-15.0, 40.0, 15.0, 40.0, 15.0, -40.0, -15.0, -40.0};
+    struct Drawn final {
+        int inside = 0;
+        int outside = 0;
+    };
+    const auto draw = [&](const std::array<double, 8>& offsets) {
+        field::HomographyParameters pin;
+        pin.windowSlot = 0;
+        pin.offsets = offsets;
+        field::FieldProgramBuilder builder;
+        builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+        builder.emit(FieldOp::Homography, 1, {0, -1, -1, -1}, *field::encodeHomography(pin));
+        field::ImageParameters read;
+        read.selector = 3;
+        read.edge = field::FieldImageEdge::Transparent;
+        builder.emit(FieldOp::Image, 2, {1, -1, -1, -1}, field::encodeImage(read));
+        auto table = builder.finish(2, field::FieldResultKind::Premultiplied,
+                                    field::FieldOutputMode::Raw)
+                         .value_or(std::vector<float>{});
+        Drawn drawn;
+        if (!field::applyFieldRasterGeometry(table, geometry))
+            return std::optional<Drawn>{};
+        double minX = 1.0e9;
+        double maxX = -1.0e9;
+        double minY = 1.0e9;
+        double maxY = -1.0e9;
+        for (std::size_t k = 0; k < 4; ++k) {
+            minX = std::min(minX, window[2 * k] + offsets[2 * k]);
+            maxX = std::max(maxX, window[2 * k] + offsets[2 * k]);
+            minY = std::min(minY, window[2 * k + 1] + offsets[2 * k + 1]);
+            maxY = std::max(maxY, window[2 * k + 1] + offsets[2 * k + 1]);
+        }
+        for (int j = 0; j < 1024; ++j)
+            for (int i = 0; i < 64; ++i) {
+                const auto pixel = field::fieldPixel(table, images, i, j);
+                if (!(pixel[3] > 0.0F))
+                    continue;
+                const double x = static_cast<double>(i) + 0.5 - 32.0;
+                const double y = 512.0 - (static_cast<double>(j) + 0.5);
+                const bool inBox = x >= minX - 0.5 && x <= maxX + 0.5 && y >= minY - 0.5 &&
+                                   y <= maxY + 0.5;
+                ++(inBox ? drawn.inside : drawn.outside);
+            }
+        return std::optional<Drawn>{drawn};
+    };
+    // Twisted: the right edge runs from 0.05 px left of the left edge at the top to 0.15 px right of
+    // it at the bottom (offsets in field pixels, y up).
+    const auto twisted = draw({0.0, 0.0, -30.05, -1.0, -29.85, 1.0, 0.0, 0.0});
+    e.expect(twisted && twisted->inside == 0 && twisted->outside == 0,
+             "a twisted quad (two edges crossing) is culled, with no streak beyond it");
+    // The same with the crossing the other way round.
+    const auto crossed = draw({0.0, 0.0, -29.85, -1.0, -30.15, 1.0, 0.0, 0.0});
+    e.expect(crossed && crossed->inside == 0 && crossed->outside == 0,
+             "a quad twisted the other way is culled too");
+    // Not twisted, 0.1 px across: a sliver, drawn only within its bounds. Moved so pixel centres
+    // fall inside it.
+    const auto sliver = draw({0.45, 0.0, -29.45, -1.0, -29.45, 1.0, 0.45, 0.0});
+    e.expect(sliver && sliver->outside == 0 && sliver->inside > 0,
+             "a sliver 0.1 px across is drawn within its bounds and nowhere else");
+    // Narrower than kMinimumHomographyQuadWidth: edge-on, culled.
+    const auto edgeOn = draw({0.45, 0.0, -29.549, -1.0, -29.549, 1.0, 0.45, 0.0});
+    e.expect(edgeOn && edgeOn->inside == 0 && edgeOn->outside == 0,
+             "a quad narrower than the minimum width is culled");
+    // Concave: the bottom right corner pulled in past the diagonal. Its horizon crosses the quad, so
+    // its map reads the picture beyond the quad too; the bounds keep that from being drawn.
+    const auto concave = draw({0.0, 0.0, 0.0, 0.0, -24.0, 64.0, 0.0, 0.0});
+    e.expect(concave && concave->outside == 0 && concave->inside > 0,
+             "a concave quad is drawn only within its bounds");
+    // An ordinary pin keeps every pixel it drew.
+    const auto ordinary = draw({-2.0, 1.0, 1.0, -1.5, -1.0, 2.0, 2.5, 0.5});
+    e.expect(ordinary && ordinary->outside == 0 && ordinary->inside > 2000,
+             "an ordinary quad is drawn whole");
+
+    // The solver's own refusals, and the bounds it reports.
+    field::HomographyParameters map;
+    const std::array<double, 8> bowTie{-15.0, 40.0, -15.05, 39.0, -14.85, -39.0, -15.0, -40.0};
+    e.expect(!field::homographyFromQuads(window, bowTie, map) && !map.valid,
+             "homographyFromQuads refuses a twisted quad");
+    const std::array<double, 8> thin{-15.0, 40.0, -14.999, 40.0, -14.999, -40.0, -15.0, -40.0};
+    e.expect(!field::homographyFromQuads(window, thin, map) && !map.valid,
+             "homographyFromQuads refuses a quad 0.001 px across");
+    const std::array<double, 8> quad{-50.0, 45.0, 70.0, 30.0, 55.0, -50.0, -65.0, -35.0};
+    e.expect(field::homographyFromQuads(window, quad, map) && map.bounded &&
+                 map.bounds == std::array<double, 4>{-65.0, -50.0, 70.0, 45.0},
+             "a solved quad is bounded by its bounding box");
+}
+
 // #508 Rays: the weighted gather along the segment towards the centre against an independent
 // double-precision reading, the identities (zero length, zero boost, the centre itself), the alpha
 // source, and the encoder's refusals.
@@ -1329,6 +1430,7 @@ int main() {
     testImagesAndRaster(expectations);
     testLensWarp(expectations);
     testHomography(expectations);
+    testCornerPinEdgeOn(expectations);
     testTestCard(expectations);
     testRays(expectations);
     testDistanceTransform(expectations);

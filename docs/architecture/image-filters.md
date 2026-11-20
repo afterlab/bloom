@@ -3197,6 +3197,11 @@ Common rules:
 - Without a connected map, ST Map and Displace pass the picture through unchanged.
 - Corner Pin with a degenerate quad (collinear corners, or a fold through the horizon) shows nothing where
   the map is undefined rather than a smear.
+- Corner Pin with a twisted quad (two of its edges cross, as a face seen almost edge-on does when it
+  turns past edge-on) or a quad narrower than 1/256 pixel (its area over its longest edge) shows
+  nothing: the face is culled (#738). Corner Pin never draws a pixel outside its quad's bounding box
+  widened by half a pixel, so a concave quad, whose horizon crosses it, or a near-singular map cannot
+  smear the picture across the frame.
 - A huge map value cannot overflow: a position beyond a billion pixels reads transparent.
 - Because the position can point anywhere, a region of interest reads the whole input.
 
@@ -3204,6 +3209,7 @@ Cost, from the code: one raster pass; Bicubic reads sixteen texels per pixel, Bi
 No timing is recorded; see [Benchmarks](../development/benchmarks.md#corner-pin-st-map-and-displace-348).
 
 Tests: `field_program_tests` (the Homography against an independent forward quad map, identity,
-degenerate quads, window mode, far-position guard), `snapshot_compiler_warp_tests` (lowering and pixels,
-tied to Lens Distortion's ST map), the three Required GPU coverage fixtures and the native CPU/GPU
-parity cases.
+degenerate quads, window mode, far-position guard, and #738's twisted, edge-on, sliver and concave
+quads drawn nowhere outside their bounds), `snapshot_compiler_warp_tests` (lowering and pixels, tied
+to Lens Distortion's ST map), the three Required GPU coverage fixtures and the native CPU/GPU parity
+cases, which include #738's quads.

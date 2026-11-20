@@ -24,7 +24,7 @@ namespace bloom::core::field {
 
 // Advances whenever any operation's arithmetic changes; part of every table (and so of every cache
 // identity a table enters).
-inline constexpr std::uint32_t kFieldProgramSemanticsVersion = 1;
+inline constexpr std::uint32_t kFieldProgramSemanticsVersion = 2;
 inline constexpr float kFieldTableMagic = 525.0F;
 inline constexpr std::size_t kMaxFieldInstructions = 64;
 inline constexpr std::size_t kFieldRegisterCount = 16;
@@ -423,6 +423,10 @@ struct RaysParameters final {
 // and a pixel with w <= 0 (the far side of the horizon) read a position no image reaches, so the
 // pixel is transparent. The matrix is row-major with m22 = 1.
 //
+// #738: a `bounded` map also reads nowhere for a position outside `bounds` (min x, min y, max x,
+// max y): the pinned quad's bounding box, which a window map widens by half an output pixel. A quad's
+// map can reach past the quad (a concave quad's horizon crosses it), and the map never draws there.
+//
 // With `windowSlot` >= 0 the map is not known until the raster's image is: it pins the data window
 // of that image slot, its four corners (top left, top right, bottom right, bottom left, in field
 // positions) each moved by `offsets` (x, y pairs, field pixels, y up). applyFieldRasterGeometry
@@ -434,16 +438,25 @@ struct HomographyParameters final {
     double centreY = 0.0;
     std::array<double, 9> m{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0};
     bool valid = true;
+    bool bounded = false;
+    std::array<double, 4> bounds{};
     int windowSlot = -1;
     bool windowCentred = false;
     std::array<double, 8> offsets{};
 };
 
+// #738: the narrowest quad a Corner Pin draws, in field pixels across (its area over its longest
+// edge). A narrower quad is a face seen edge-on: it covers less than one level of an 8-bit pixel,
+// and its map is near singular, so it is culled (the invalid map) instead of extrapolated.
+inline constexpr double kMinimumHomographyQuadWidth = 1.0 / 256.0;
+
 // The projective map that takes the quad `to` (four corners, x then y, in order around it) to the
 // quad `from`, as the parameters for the pixels of `to`: an output pixel inside `to` reads the point
-// of `from` that sits at the same place in it. Solved in binary64 about the quad's centroid. False
-// when either quad is degenerate (two corners together, three in a line, a pinched or self-
-// intersecting quad whose map folds over): `out` is then the invalid map.
+// of `from` that sits at the same place in it. Solved in binary64 about the quad's centroid, and
+// bounded by `to`'s bounding box. False when either quad is degenerate (two corners together, three
+// in a line, a pinched quad), when either is twisted (two of its edges cross, so the map would send
+// the wedges beyond the crossing back onto the picture, #738), or when `to` is narrower than
+// kMinimumHomographyQuadWidth: `out` is then the invalid map.
 [[nodiscard]] bool homographyFromQuads(const std::array<double, 8>& from,
                                        const std::array<double, 8>& to, HomographyParameters& out);
 

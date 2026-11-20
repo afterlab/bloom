@@ -156,8 +156,18 @@ evaluates it. In window mode the geometry pass places the quad against the data 
 image, so the identity default holds for any input size on the CPU and in the GPU atlas. A map that is
 singular, or a position behind the horizon (w at or below a small epsilon), returns a position far
 outside any image, which reads as transparent. The sampler returns transparent for any position beyond
-a billion pixels, so a huge map value cannot overflow the sample arithmetic. These change no existing
-operation, so `kFieldProgramSemanticsVersion` stays.
+a billion pixels, so a huge map value cannot overflow the sample arithmetic.
+
+A quad's map is also **bounded** (#738): its block's fourth vec4 is the quad's bounding box, which the
+window mode widens by half an output pixel, and a position outside it returns the far position, so the
+map never draws outside its quad, whatever a concave quad's horizon or binary32 rounding of a
+near-singular map would read there. `homographyFromQuads` refuses a twisted quad (two of its four
+corner turns against the other two: two edges cross, and the map would send the wedges beyond the
+crossing back onto the picture, a streak to the edge of the frame) and a quad narrower than
+`kMinimumHomographyQuadWidth` (1/256 field pixel, its area over its longest edge: a face seen
+edge-on). Both are the invalid map. The bound is narrowed to binary32 outward, so it never excludes a
+position the binary64 box holds. This changed the Homography block from six vec4 to seven and what an
+existing instruction draws, so `kFieldProgramSemanticsVersion` is 2.
 
 Homography has a second mode, **translation** (choices `[1, direction]`, vectors `[held point, tracked
 position]`), used by Stabilize (`point-tracking.md`): the similarity map with the offset between the
