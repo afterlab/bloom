@@ -56,7 +56,7 @@ bool isPickList(const document::ParameterDefinition& p) {
            ui::isInputColorSpaceSchema(p.schemaKey) || p.schemaKey == "bloom.ocio-file.lut" ||
            p.schemaKey == "bloom.image.asset" || p.schemaKey == "bloom.video.asset" ||
            p.schemaKey == "bloom.audio.asset" ||
-           p.schemaKey == document::kTextFontParameterSchemaKey;
+           ui::isFontParameterSchema(p.schemaKey);
 }
 
 // #487: the String parameters whose value is open (the artist types it): text content, string
@@ -70,7 +70,10 @@ bool isOpenText(const std::string_view schemaKey) {
            schemaKey == "bloom.image-to-channel-set.layer" ||
            schemaKey == "bloom.image-to-channel-set.channels" ||
            // #484: names a layer of every footage leaf upstream, not of one input to list.
-           schemaKey == "bloom.motion-blur.vectorLayer";
+           schemaKey == "bloom.motion-blur.vectorLayer" ||
+           // #752: the Subtitles language is a BCP 47 tag the artist types (empty means the cue
+           // list's own), and the export track name names a new subtitle track.
+           schemaKey == "bloom.subtitles.language" || schemaKey == "bloom.subtitles.trackName";
 }
 
 // #487: an Integer whose value is one of a closed or discoverable set (an enum, a choice such as a

@@ -1095,7 +1095,9 @@ class NodeItem final : public QGraphicsObject {
                 valueRows_.push_back({QStringLiteral("Y"), positionY_, nullptr,
                                       document::kPositionParameterRole,
                                       document::AnimationComponent::Y});
-            } else if (role == document::kAnchorParameterRole) {
+            } else if (role == document::kAnchorParameterRole &&
+                       declaresSchemaKey(node, role, document::kAnchorParameterSchemaKey,
+                                         registry)) {
                 // Range/decimals/step/unit mirror PropertiesEditor's Anchor editors verbatim.
                 anchorX_ =
                     makeCardField(QStringLiteral("nodeAnchorXEditor"), tr("Anchor X"),
@@ -1146,7 +1148,9 @@ class NodeItem final : public QGraphicsObject {
                 valueRows_.push_back({tr("Rotation"), rotation_,
                                       makeCardDiamond(document::kRotationParameterRole),
                                       document::kRotationParameterRole});
-            } else if (role == document::kOpacityParameterRole) {
+            } else if (role == document::kOpacityParameterRole &&
+                       declaresSchemaKey(node, role, document::kOpacityParameterSchemaKey,
+                                         registry)) {
                 opacity_ = makeCardField(QStringLiteral("nodeOpacityEditor"), tr("Opacity"),
                                          document::kOpacityParameterSchemaKey,
                                          document::ParameterValueKind::Float64);
@@ -1310,13 +1314,22 @@ class NodeItem final : public QGraphicsObject {
     [[nodiscard]] static bool declaresTextSize(const document::NodeRecord& node,
                                                const std::string_view role,
                                                const document::NodeDefinitionRegistry& registry) {
+        return declaresSchemaKey(node, role, document::kTextSizeParameterSchemaKey, registry);
+    }
+
+    // #752: the same rule for the layer transform's anchor and opacity. Another node's "anchor"
+    // (the Subtitles node's nine-way choice) or "opacity" (a fraction of its own) has its own
+    // schema, so it is an ordinary operand row, never the transform editor.
+    [[nodiscard]] static bool declaresSchemaKey(const document::NodeRecord& node,
+                                                const std::string_view role,
+                                                const std::string_view schemaKey,
+                                                const document::NodeDefinitionRegistry& registry) {
         const auto* definition = registry.find(node.typeId, node.schemaVersion);
         if (definition == nullptr)
             return true;
         const auto declared =
             std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
-        return declared == definition->parameters.end() ||
-               declared->schemaKey == document::kTextSizeParameterSchemaKey;
+        return declared == definition->parameters.end() || declared->schemaKey == schemaKey;
     }
 
     // #644: true when the registry declares `role` as a whole Path or Gradient value, the two kinds
@@ -1366,7 +1379,7 @@ class NodeItem final : public QGraphicsObject {
         // list here, so a row cannot offer a key the command layer would refuse.
         const bool animatable = document::isAnimatableSchemaKey(declared->schemaKey);
 
-        if (declared->schemaKey == document::kTextFontParameterSchemaKey && session_ != nullptr) {
+        if (isFontParameterSchema(declared->schemaKey) && session_ != nullptr) {
             row.fontField = new FontField;
             row.fontField->setObjectName(QStringLiteral("nodeTextFont"));
             row.fontField->setAccessibleName(label);

@@ -8,6 +8,7 @@
 
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
 #include <bloom/ui/kit/popup_list.hpp>
 #include <bloom/ui/kit/popup_window.hpp>
@@ -22,6 +23,7 @@
 #include <functional>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 class QStandardItemModel;
@@ -156,6 +158,15 @@ class FontField final : public QWidget {
     std::vector<fontpicker::StyleChoice> styles_;
     QTimer statusTimer_;
 };
+
+// Whether a parameter holds a font ID and is edited with the FontField: the Text font and the
+// Subtitles font (#752).
+[[nodiscard]] inline bool isFontParameterSchema(const std::string_view schemaKey) {
+    if (schemaKey == document::kTextFontParameterSchemaKey)
+        return true;
+    const auto* subtitles = document::subtitlesParameterSpec(schemaKey);
+    return subtitles != nullptr && subtitles->kind == document::SubtitlesParameterKind::Font;
+}
 
 // Wires a FontField to a font parameter: previews through beginValueEdit/updateValueEdit, reverts on
 // cancel, and commits one "Set Text Font" step. `parameter` is read at each gesture.

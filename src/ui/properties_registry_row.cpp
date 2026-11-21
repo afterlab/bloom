@@ -69,7 +69,7 @@ namespace bloom::ui {
 namespace {
 
 [[nodiscard]] bool isFontSchema(const std::string_view schema) {
-    return schema == document::kTextFontParameterSchemaKey;
+    return isFontParameterSchema(schema);
 }
 
 } // namespace

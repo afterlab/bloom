@@ -320,10 +320,10 @@ NodeCardSize estimatedNodeCardSize(const document::Composition& composition, con
         const auto kind = parameter == definition->parameters.end()
                               ? document::ParameterValueKind::Float64
                               : parameter->valueKind;
-        // A colour is its chip plus one row per channel.
+        // A colour is its chip plus one row per channel: red, green, blue and alpha.
         rows += kind == document::ParameterValueKind::Vec2d     ? 2.0
                 : kind == document::ParameterValueKind::Vec3d   ? 3.0
-                : kind == document::ParameterValueKind::Color4d ? 4.0
+                : kind == document::ParameterValueKind::Color4d ? 5.0
                                                                 : 1.0;
     }
     double sockets = static_cast<double>(definition->outputs.size());
