@@ -9,10 +9,19 @@ bloom-cli open <file>
 bloom-cli run <script.json>
 bloom-cli render [--project <file>] (--frame N | --range A-B) \
   --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace] \
-  [--require-device]
-bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save]
+  [--require-device] [--subtitles srt,vtt,ttml] [--subtitle-nodes <id>,...]
+bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save] \
+  [--subtitles srt,vtt,ttml] [--embed-subtitles] [--subtitle-nodes <id>,...]
 bloom-cli help [<name>] [--json]
 ```
+
+`--subtitles` writes each Subtitles node's cues as sidecar files of those formats beside the
+output (`<name>.<language>.srt`), `--embed-subtitles` embeds them as tracks in an MP4, MOV or WebM
+movie, and `--subtitle-nodes` names the nodes (otherwise every node with Export as track on); see
+[Export](exporting-video.md#subtitles). For `export` they replace the subtitles setting of every
+output of the selected jobs for that run only: `--save` writes the settings back as they were
+saved. `render` writes images, so it takes sidecars only, and prints one `subtitles node=...` line
+per file with its cue count and SHA-256.
 
 `bloom-cli help` lists every command, operation, MCP tool and query kind with a one-line summary;
 `bloom-cli help <name>` shows one in full: arguments with their type, unit, range, default and

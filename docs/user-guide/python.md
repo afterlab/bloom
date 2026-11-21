@@ -389,6 +389,14 @@ before it is written. This is the same rule as `bloom-cli render --require-devic
 Every `_bloom.Host()` in one interpreter renders through the same GPU device, which is released
 once when the interpreter exits.
 
+`subtitles={"sidecar": ["srt", "vtt"], "nodes": [12]}` also writes each Subtitles node's cues as
+sidecar files beside the frames (`frame.en.srt`), frame-exact to the rendered range; `nodes` is
+optional (every node with Export as track on). `RenderResult.subtitles` lists each file as a
+`RenderSubtitle` (node, language, title, format, path, cues, bytes, sha256), and `files` lists them
+too. A malformed `subtitles` raises `ValueError`. An image carries no subtitle track, so `embed=True` raises `RuntimeError` naming the sidecar
+formats; an export queue output embeds tracks through its saved settings
+([Export](exporting-video.md#subtitles)).
+
 Long Python work uses a dedicated Python worker and a bounded queue:
 
 ```python
