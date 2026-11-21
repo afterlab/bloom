@@ -28,7 +28,8 @@ screen) to **Input**. It moves with the track instead of against it.
   frames. Use a larger pattern for a soft feature and a wider search for a fast move; both cost more.
 - **Track Point** and **Tracked Position**: pixels from the frame's centre. Both can be keyed or driven.
   **Tracked Position** is written by the track; correct it by hand by editing its X and Y on a frame.
-- **Filter** and **Edges**: how the moved picture is sampled and what shows where the picture no longer
+- **Filter** (Bilinear, Nearest, Bicubic, Trilinear, Anisotropic or Automatic, the default; see
+  [Corner Pin, ST Map and Displace](warp-nodes.md)) and **Edges**: how the moved picture is sampled and what shows where the picture no longer
   reaches (transparent by default).
 
 ## What ends a track

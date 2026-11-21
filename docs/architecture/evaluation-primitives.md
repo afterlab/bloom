@@ -436,6 +436,12 @@ shrink the image they are exactly Bilinear.
   `feature.resample.anisotropic` and `feature.resample.mip-pyramid`.
 - **Known limit.** The output's support window is still the Bilinear support of the transformed
   source, so at content edges a filtered footprint can be clipped by up to about one output pixel.
+- **Field and warp reads.** A field program's Image read takes the same Trilinear and Anisotropic
+  filters (see [`fields.md`](fields.md), "Filtered reads"); the warp nodes' Filter adds them with
+  Automatic, and the CPU reference retains the field read's mip levels in the operation cache per
+  source identity rather than rebuilding them per evaluation.
+- **Pixel-art mode.** Where the compiler resolves Automatic it chooses Nearest instead of Trilinear in a
+  pixel-art composition (#743); explicit filters never change.
 
 ### Transform 2D
 

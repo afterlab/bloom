@@ -255,6 +255,31 @@ evaluation pixels); distances are capped at the reach plus one. A texel is insid
 is at least one half; the signed distance is negative inside and measured to the boundary half a
 texel away.
 
+### Filtered reads
+
+An Image read takes two more filters (#742), `FieldImageFilter` Trilinear (3) and Anisotropic (4), that
+prefilter a shrinking read through the slot image's mip pyramid; Bilinear, Nearest and Bicubic and their
+results are unchanged. The instruction takes a **footprint**, the read position's change per output
+pixel, from its second and third inputs: one closed-form Jacobian register when the position comes from
+a Homography (the instruction's `jacobian` flag, Homography choice 2), or a forward and a backward
+one-sided difference of the position (Derivative mode Jacobian, compiler only) for every other map. A
+finite-difference read takes the shorter of the two per column, so a pixel beside a seam (a fold, a
+tile edge) keeps the footprint of its own side. With singular values `s1 >= s2` of the footprint in
+level-0 texels: `s1 <= 1` is exactly Bilinear; Trilinear reads `rho = s1` blending two levels; Anisotropic
+takes `N = min(ceil(s1 / s2), 16)` taps along the major axis, each a trilinear read at `rho = s1 / N`.
+
+The levels are the premultiplied 2x box chain, built like the composed-matrix resample's
+(`render::affineMipReductionMatrix`, see "Filtered Sampling" in
+[`evaluation-primitives.md`](evaluation-primitives.md)). `FieldLevelPolicy` says how many a read needs,
+and `fieldImageLevels` resolves it per slot (at most `kMaxFieldImageLevels`, 16): **WholeChain** for a
+finite-difference footprint, whose size is known only per pixel, or **HomographyBound** (Corner Pin,
+Stabilize), as deep as the placed Homography maps shrink the image where they draw, plus one level of
+margin. A footprint beyond the levels built clamps at the deepest, the same on both hosts. On the GPU the
+levels are placed in the field atlas beside their slot (`FieldImageSlot::levelPlaces`). On the CPU the
+reference reads level `n` of slot `s` as image slot `s + 4n` and retains each level in the operation cache
+per source identity (key `cpu-mip-level-v1`, `src/runtime/affine_mip_levels.hpp`), so a warm frame
+rebuilds nothing; every level is charged to the operation's pixel budget, retained or not.
+
 ### Field Sample
 
 `runtime::CompiledValueFieldSample` holds the program and its Scalar and Vector 2 operands as value
@@ -278,7 +303,7 @@ from full strength at the centre to none at the radius.
 | Pattern | scalar, image, mask | Stripes, Checker, Rings, Dots, Grid Lines, Hex, Wave with Sine, Triangle, Square and Saw profiles; edges filtered analytically over the softness (Quilez, "Filterable procedurals"); speed in cycles a second from exact clock time |
 | Gradient Field | t, image, mask | Linear, Radial, Angular, Diamond between start and end, as the gradient generators; Clamp, Repeat, Mirror; cycle offset |
 | Shape Distance | signed distance, falloff, direction, image, mask | Quilez's 2D signed distance functions (circle, box, rounded box, segment, polygon and star by angular folding, ring); a Mask source reads the exact distance image above; falloff over a distance with Linear, Smooth, Exponential or Step |
-| Image Field | scalar, vector, colour | an image read at the field position (or at a `position` field, an absolute lookup); Bilinear, Nearest, Bicubic (Catmull–Rom); Clamp, Transparent, Repeat, Mirror edges; channel or channel pair |
+| Image Field | scalar, vector, colour | an image read at the field position (or at a `position` field, an absolute lookup); Bilinear, Nearest, Bicubic (Catmull–Rom), Trilinear, Anisotropic (see "Filtered reads"); Clamp, Transparent, Repeat, Mirror edges; channel or channel pair |
 | Force Field | vector, magnitude | Vortex, Radial, Uniform; strength, radius, spin; falloff Linear, Smooth, Inverse Square or a curve |
 | Field Math | scalar, vector, colour | Add, Subtract, Multiply, Divide (zero where the divisor is zero), Min, Max, Power, Abs, Difference, Lerp, Screen, Smooth Min and Smooth Max (polynomial smooth minimum, k = smoothness), Dot, Length, Normalize, Scale, Rotate; an unconnected operand is its value parameter |
 | Field Remap | scalar, vector | input range to output range, clamp, invert, steps, Schlick's bias and gain (Graphics Gems IV, 1994), a curve; a vector keeps its direction and remaps its length |

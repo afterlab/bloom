@@ -262,7 +262,7 @@ the call passes `discardChanges:true`, and while export jobs run they answer
 | `profiler.snapshot` | none | One reading of the [Profiler panel](profiler.md): memory, GPU, CPU, workload, pressure and helper processes. With the panel closed it asks for a fresh GPU heap query that the next snapshot carries. |
 | `cache.purge` | `cache` (`preview` or `media`) | Edit > Purge: derived caches only; the project, its revision and undo are untouched. `bloom.mcp.busy` while a purge runs. |
 | `asset.reveal` | `asset` | Reveal in File Manager. `bloom.mcp.invalid-argument` for an asset without a file. |
-| `composition.presets` | none | The Composition Settings presets: the built-in sizes, then your saved presets with `frameRate`, `duration`, `startTimecode`, `dropFrame` and `background`. Apply one with `bloom.composition.set-settings`. |
+| `composition.presets` | none | The Composition Settings presets: the built-in sizes, then your saved presets with `frameRate`, `duration`, `startTimecode`, `dropFrame` and `background`. Apply one with `bloom.composition.set-settings`, whose `pixelArt` argument (Boolean) turns the composition's [pixel-art mode](pixel-art.md) on or off. |
 | `composition.save-preset` | `composition`, `name` | **Save as preset**: the composition's size, pixel aspect, frame rate, duration, start timecode, drop-frame and background. `bloom.mcp.invalid-argument` for an empty or used name. |
 | `composition.rename-preset` | `name`, `newName` | **Rename preset**, for a saved preset. `bloom.mcp.unknown-target` when no saved preset has that name. |
 | `composition.delete-preset` | `name` | **Delete preset**. Presets are saved for you, not in the project, so Undo cannot restore one. |
@@ -599,7 +599,10 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
 - `bloom.layer.set-filter` (`composition`, `layer`, `filter`; or `merge` and `slot` for an entry)
   sets how the layer's transform samples its picture: 0 Bilinear, 1 Nearest, 2 Trilinear,
   3 Anisotropic or 4 Automatic. It creates the layer's optional `filter` parameter when the layer
-  has none; a layer without one is Bilinear.
+  has none; a layer without one is Bilinear. Automatic is Nearest in a pixel-art composition.
+- `bloom.layer.set-snap` (`composition`, `layer`, `snap`; or `merge` and `slot` for an entry) sets whether
+  the layer's final position rounds to whole output pixels: 0 Off, 1 On or 2 Automatic (on in a pixel-art
+  composition). It creates the layer's optional `snap` parameter; a layer without one does not snap.
 - `bloom.cryptomatte.pick` (`node`, `point` `[x, y]` in composition pixels as `capture` shows them,
   optional `mode` `add` or `remove`, `time` contextual) is the Viewer's Cryptomatte eyedropper: it
   maps the point through the layer that shows the node, reads the object with the most coverage
@@ -641,7 +644,7 @@ in `entries`, with its `merge` and `slot`.
 - `bloom.merge.set-entry-parameter` (`merge`, `slot`, `role`, `value`, optional `time`) sets one
   control of the entry's layer by role -- `position`, `anchor`, `scale`, `rotation`, `opacity`,
   `blendMode` (a value or a label such as `"screen"`), `filter` (0 to 4, which creates the entry
-  layer's filter) or `timeRemap` (only while Time Remap is on)
+  layer's filter), `snap` (0 to 2, which creates its snap) or `timeRemap` (only while Time Remap is on)
   -- whatever that layer is. Without `time` the parameter becomes the constant; with `time` it is
   keyed there. An entry layer's parameters are constants or curves; insert a Layer node to drive
   one from the value graph.

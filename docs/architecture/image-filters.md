@@ -2981,6 +2981,24 @@ and 2160p against a Grade and the closest existing nodes, and the `cryptomatte-m
 of the real-world suite plays, fills and exports a Cryptomatte matte mask, a masked Grade and a
 node track matte on the bench EXR.
 
+## Warp filters
+
+Corner Pin, ST Map, Displace, Stabilize, Procedural Warp and Tile & Mirror share one **Filter** (#742),
+stored 0 Bilinear, 1 Nearest, 2 Bicubic, 3 Trilinear, 4 Anisotropic, 5 Automatic. Stored 0 to 2 keep
+their meaning and results, and a new node defaults to Automatic. Automatic is a document value only: the
+compiler resolves it to Trilinear, which is exactly Bilinear wherever the map does not shrink the picture,
+or to Nearest in a pixel-art composition (#743); an explicit choice never changes with the composition.
+Trilinear and Anisotropic read the picture through its mip levels with a footprint (see
+[`fields.md`](fields.md), "Filtered reads"):
+
+- Corner Pin and Stabilize take the footprint from the placed map's own Homography Jacobian, so the
+  levels go only as deep as the quad shrinks the picture.
+- ST Map, Displace, Procedural Warp and Tile & Mirror Kaleidoscope take it from finite differences of the
+  position they compute, with the whole chain available.
+- Tile & Mirror's Motion Tile, Wrap Offset and Mirror only shift, wrap or reflect and never scale the
+  picture, so a filtered choice reads Bilinear there. Procedural Warp Magnify's plain read, where it draws
+  the picture unscaled, is Bilinear when the filter is filtered.
+
 ## Tile & Mirror
 
 One node, `bloom.tile-mirror`, under **Transform** (#511): the picture repeated, panned with wrap,
@@ -3002,7 +3020,7 @@ node's points are pixels from that centre with y down, and its angles turn clock
 | Mirror | The pixel reflected about a line, on one side only. | Line Point, Line Angle (degrees clockwise from screen right, 90 is vertical), Reflect. |
 | Kaleidoscope | The pixel turned, divided by the size and folded into a wedge. | Center, Segments (1 to 64), Rotation (degrees clockwise), Size (percent). |
 
-**Filter** (Bilinear, Nearest, Bicubic) is shared by every mode. **Edges** (Transparent, Extend, Repeat,
+**Filter** (Bilinear, Nearest, Bicubic, Trilinear, Anisotropic, Automatic; see "Warp filters" below) is shared by every mode. **Edges** (Transparent, Extend, Repeat,
 Mirror) is read by every mode but Wrap Offset, whose rule is Repeat: it names what shows where a read
 leaves the input.
 
@@ -3120,7 +3138,7 @@ drag as it stands), and the Radius as a ring about the Center (drag the ring to 
 Pinch and Ripple also show the Falloff as a dashed ring inside, and the card's **Radius** and **Falloff**
 are one two-handle range control (the outer handle the radius, the inner one where the fade starts).
 
-**Filter** (Bilinear, Nearest, Bicubic) and **Edges** (Transparent, Extend, Repeat, Mirror) are shared by
+**Filter** (Bilinear, Nearest, Bicubic, Trilinear, Anisotropic, Automatic; see "Warp filters" below) and **Edges** (Transparent, Extend, Repeat, Mirror) are shared by
 every mode: the filter is how a read between texels is made, the edge rule what shows where a read
 leaves the input.
 
@@ -3190,7 +3208,8 @@ Common rules:
 - **Raw maps.** The map is read as the data it is: unclamped (values below zero and above one keep
   their meaning), with no colour conversion, and never through an input colour space. The texel is read as
   stored, so a map with partial alpha is not unpremultiplied.
-- **Filter** is Bilinear, Nearest (exactly one texel, for ID and data pictures) or Bicubic (Catmull-Rom).
+- **Filter** is Bilinear, Nearest (exactly one texel, for ID and data pictures), Bicubic (Catmull-Rom),
+  Trilinear, Anisotropic or Automatic (see "Warp filters" below).
   **Edges** (ST Map, Displace) is Transparent, Extend, Repeat or Mirror. Corner Pin reads outside its
   window as transparent.
 - The picture's colour is not changed: values above one, negatives and alpha keep their range.

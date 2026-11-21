@@ -149,7 +149,8 @@ bloom.ops.composition.set_duration(Fraction(3, 2))
 pass only what changes. Frame rate and pixel aspect are exact numerator/denominator pairs, `duration`
 and `start` (the timecode of frame 0) are times, an empty `workingColorSpace` returns to the project
 space, and `anchor` (0 to 8, row by row from top left, default 4 for center) decides where existing
-layers sit when the size changes. Layer and key times are never rewritten. Composition presets are
+layers sit when the size changes, and `pixelArt` (a Boolean) turns the composition's
+[pixel-art mode](pixel-art.md) on or off. Layer and key times are never rewritten. Composition presets are
 per-user application settings of the desktop app and are not operations.
 
 ```python

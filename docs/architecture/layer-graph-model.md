@@ -370,13 +370,33 @@ The Layer Output boundary also owns how the layer combines with what is beneath 
 | --- | --- | --- | --- | --- |
 | `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's color combines with the layers beneath it |
 | `filter` | `bloom.layer.filter` | Int64, optional | absent (Bilinear) | How the layer transform samples its picture (#742) |
+| `snap` | `bloom.layer.snap` | Int64, optional | absent (does not snap) | Whether the layer's final position rounds to whole output pixels (#743) |
 
 `filter` is an optional, non-animatable integer, role `filter`: `0` Bilinear, `1` Nearest, `2` Trilinear,
 `3` Anisotropic, `4` Automatic (the compiler resolves Automatic to Trilinear). A layer saved without it
 is Bilinear, so older projects are unchanged. Add Layer and Add Node bind it Automatic on a new layer.
 A Merge entry layer never creates it automatically; setting it with `bloom.merge.set-entry-parameter`
 (role `filter`) or `bloom.layer.set-filter` creates it. The filtering model is in
-[`evaluation-primitives.md`](evaluation-primitives.md), "Filtered Sampling".
+[`evaluation-primitives.md`](evaluation-primitives.md), "Filtered Sampling". In a pixel-art composition
+(below) the compiler resolves Automatic to Nearest instead of Trilinear; an explicit filter is unchanged.
+
+`snap` is an optional, non-animatable integer, role `snap`: `0` Off, `1` On, `2` Automatic (on in a
+pixel-art composition, off otherwise). Add Layer and Add Node bind it Automatic on a new layer; a layer
+saved without it does not snap, so older projects are unchanged. `bloom.layer.set-snap` or
+`bloom.merge.set-entry-parameter` (role `snap`) sets it and creates it on a layer that has none. Snap rounds
+the layer's final composed screen translation (the device position of its author origin, after
+parenting) to whole output pixels, halves up, leaving the linear part unchanged
+(`snapLayerMatrix` in `src/runtime/layer_parent_transform.hpp`). Children compose the parent's
+unsnapped matrix, so a snapped parent does not shift its children by its rounding. CPU and GPU snap the
+same binary64 matrix and agree; at a proxy resolution the translation rounds to the proxy's pixels.
+Transform 2D has the same rounding through its optional Boolean `snap` (`bloom.transform-2d.snap`,
+absent is off), applied to its own map by `transform_2d_geometry.hpp`.
+
+**Pixel-art mode.** `Composition::pixelArt()` is a per-composition evaluation input, off by default
+and saved as `"pixelArt": true` only when on. While on, an Automatic filter (Layer, Transform 2D,
+Resize/Fit and the warp nodes) resolves to Nearest and a layer whose `snap` is Automatic snaps.
+Explicit filters and Off/On snaps are unchanged. `bloom.composition.set-settings` argument `pixelArt`
+sets it as one undoable settings change.
 
 The value is an enumeration stored as a small integer under one closed, durable mapping — `Normal`,
 `Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference`, `Subtract`, `Divide`,

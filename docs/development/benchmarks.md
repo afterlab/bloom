@@ -432,6 +432,7 @@ given at 1920 wide and scale with the composition (clamped to each parameter's r
 | `frame-rate-hold-2k` | 1920×1080 | 24 | A PNG16 plate through Frame Rate Hold (#564) at 12 fps with a seeded irregular cadence, over a Transform 2D that moves the plate so every held picture is new. Written, not yet run: it has no recorded numbers and no budget |
 | `codec-degrade-2k` | 1920×1080 | 24 | A PNG16 plate under Codec Degrade (#563) with 16 px blocks, a 12-frame GOP and 75% P-frame persistence, its quality keyed from 60 to 15 so every frame is new and renders its chain from the last keyframe, optical flow included. Written, not yet run: it has no recorded numbers and no budget |
 | `corner-pin-2k` | 1920×1080 | 24 | A PNG16 plate under Corner Pin (#348), its top-right corner keyed so every frame is new. Written, not yet run: no recorded numbers and no budget |
+| `corner-pin-filtered-512` | 1920×1080 | 24 | A 512 px Zone Plate Test Card texture (#742) pinned by Corner Pin into a quad that shrinks it 8x to 16x, one layer at Trilinear and one at Anisotropic, every frame new; run cold and warm. Written, not yet run: no recorded numbers and no budget |
 | `stabilize-2k` | 1920×1080 | 24 | A PNG16 plate under Stabilize (#513), its Position keyed so every frame is new. Written, not yet run: no recorded numbers and no budget. The tracking job has no scenario: it is started from the UI and has no headless entry |
 | `tile-mirror-2k` | 1920×1080 | 24 | A PNG16 plate under Tile & Mirror (#511): quarter-frame tiles with Mirror Edges filling the frame, the horizontal phase keyed from 0 to 360 so every frame is new. Written, not yet run: no recorded numbers and no budget |
 | `procedural-warp-2k` | 1920×1080 | 24 | A PNG16 plate under Procedural Warp (#510) in Twirl, a 500 pixel radius with its angle keyed from 0 to 720 degrees so every frame is new. Written, not yet run: no recorded numbers and no budget |
@@ -1007,7 +1008,7 @@ pixel than the 8 px one. These are suspicions to check against the scenario, not
 
 ### Corner Pin, ST Map and Displace (#348)
 
-These have no recorded numbers and no budget. The scenario `corner-pin-2k` is written, not run. Read
+These have no recorded numbers and no budget. The scenarios `corner-pin-2k` and `corner-pin-filtered-512` are written, not run. Read
 from the code: each node is one field raster pass; a region of interest reads the whole input; Bicubic
 reads sixteen texels per pixel against four for Bilinear; on the GPU the input sits beside the canvas in the
 raster's atlas, as for Lens Distortion.

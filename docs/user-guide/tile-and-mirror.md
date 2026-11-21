@@ -41,6 +41,6 @@ frame, so a small shape or text layer tiles into copies of itself and folds roun
 
 ## Both
 
-**Filter** is how the picture is sampled (Bilinear, Nearest, Bicubic). **Edges** is what shows where the
-picture does not reach (transparent by default; not used by Wrap Offset, which always wraps). All sizes
+**Filter** is how the picture is sampled (Bilinear, Nearest, Bicubic, Trilinear, Anisotropic or Automatic, the default; see [Corner Pin, ST Map and Displace](warp-nodes.md#choices)). **Edges** is what shows where the
+picture does not reach (transparent by default; not used by Wrap Offset, which always wraps). Motion Tile, Wrap Offset and Mirror never resize the picture, so Trilinear and Anisotropic read it like Bilinear there. All sizes
 and offsets are in full-resolution pixels, so a half-scale preview shows the same picture.

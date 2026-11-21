@@ -525,7 +525,7 @@ are not project truth and are absent from `document.json`.
 | Object | Required members in writer order |
 | --- | --- |
 | project | `id`, `name`, `colorSettings`, `compositions` |
-| composition | `id`, `name`, `duration`, `format`, `parameters`, `animationCurves`, `graph`, `nodeLayout`, `nodeGroups`, optional `safeAreas`, optional `workArea` |
+| composition | `id`, `name`, `duration`, `format`, `parameters`, `animationCurves`, `graph`, `nodeLayout`, `nodeGroups`, optional `safeAreas`, optional `workArea`, optional `pixelArt` |
 | composition format | `width`, `height`, `pixelAspect`, `frameRate` |
 | rational/pixel aspect/frame rate | `numerator`, `denominator` |
 
@@ -544,6 +544,12 @@ The schema fixes the live value domains exactly:
 | frame-rate numerator/denominator | reduced positive `uint32`, each `1..4294967295` |
 | duration numerator | signed-64 decimal component `1..9223372036854775807` |
 | duration denominator | signed-64 decimal component `1..9223372036854775807` |
+
+`pixelArt` (#743) is the pixel-art mode: the only accepted value is `true`, and the writer emits the member
+only when the mode is on, so a composition without it is off. A layer's optional `bloom.layer.snap`
+parameter (integer 0 Off, 1 On, 2 Automatic) and Transform 2D's optional `bloom.transform-2d.snap`
+parameter (Boolean) are ordinary constant parameters; absent means no snap. The warp nodes' `filter`
+choice stores 0 Bilinear, 1 Nearest, 2 Bicubic, 3 Trilinear, 4 Anisotropic and 5 Automatic.
 
 Duration is reduced before serialization and must already be reduced on v1 decode. A zero or
 negative duration, a zero unsigned-rational term, an unreduced pair, a dimension above the maximum,

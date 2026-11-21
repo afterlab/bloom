@@ -620,6 +620,27 @@ SCENARIOS["corner-pin-2k"] = {
     ],
 }
 
+# #742: filtered Corner Pin reads. A 512 px Test Card texture (a custom size, no media) is pinned into a quad
+# shrinking it 8x on frame 0 to 16x on the last, each corner keyed inward so every frame is new, one layer
+# at Trilinear and one at Anisotropic. The run's cold and warm passes show the mip levels building, then
+# retained. Written, not run.
+SCENARIOS["corner-pin-filtered-512"] = {
+    "description": "A 512 px Zone Plate texture shrunk 8x to 16x by Corner Pin at Trilinear and Anisotropic.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": f"Texture {label}",
+         "generator": ["bloom.test-card", {"card": "Zone Plate", "sizeMode": "Custom", "width": 512,
+                                           "height": 512, "label": False}],
+         "effects": [["bloom.corner-pin", {"filter": label},
+                      {"keys": {"topLeft": [[0, [224, 224]], [23, [240, 240]]],
+                                "topRight": [[0, [-224, 224]], [23, [-240, 240]]],
+                                "bottomRight": [[0, [-224, -224]], [23, [-240, -240]]],
+                                "bottomLeft": [[0, [224, -224]], [23, [240, -240]]]}}]]}
+        for label in ("Trilinear", "Anisotropic")
+    ],
+}
+
 # #513: Stabilize over a plate, its tracked position keyed so every frame is new (the render of the node; the
 # tracking job that normally writes those keys is started from the UI and is not in this suite).
 SCENARIOS["stabilize-2k"] = {

@@ -24,8 +24,12 @@ midpoint of 0.5 a mid-grey map moves nothing.
 
 ## Choices
 
-- **Filter**: Bilinear (smooth), Nearest (one exact texel; use it for ID and data pictures), or Bicubic
-  (sharper).
+- **Filter**: Bilinear (smooth), Nearest (one exact texel; use it for ID and data pictures), Bicubic
+  (sharper), Trilinear or Anisotropic (for a picture the map shrinks: they average the picture down to the size it
+  is drawn at, so it stays smooth instead of shimmering; Anisotropic also copes with a stronger squash one way
+  than the other), or Automatic (the default of a new node: Trilinear, or Nearest in a [pixel-art](pixel-art.md)
+  composition). Trilinear and Anisotropic look the same as Bilinear where the picture is not shrunk. Nodes from
+  earlier projects keep the filter they had.
 - **Edges** (ST Map, Displace): what is read beyond the picture: Transparent, Extend, Repeat or Mirror.
 
 The map is used as raw data: nothing is clamped to 0 to 1 and no colour conversion is applied. The

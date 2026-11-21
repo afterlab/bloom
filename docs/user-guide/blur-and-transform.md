@@ -40,8 +40,14 @@ its shear and an opacity that fades through the shutter fades the blur with it.
 - **Anisotropic** is Trilinear that also copes with a picture shrunk more in one direction than the other, such as a
   receding floor or a strong squash. It keeps detail along the long direction instead of blurring it, and costs a little
   more. When the picture does not shrink it looks the same as Bilinear.
-- **Automatic** (the default for a new node) lets Bloom choose; today it uses Trilinear.
+- **Automatic** (the default for a new node) lets Bloom choose: Trilinear, or Nearest in a [pixel-art](pixel-art.md)
+  composition.
 
 Projects made before these choices keep the Bilinear or Nearest they had and render exactly as before. With Transform 2D's
 **Motion blur** on, each point of the shutter is sampled with the same filter. Layers have the same **Filter** choice for
 their own transform; a new layer uses Automatic and a layer from an older project stays Bilinear.
+
+**Snap to Pixels** (Transform 2D, off by default) rounds the final position of the result to whole pixels, so a picture
+that moves copies its pixels exactly instead of blending them. Layers have a **Snap** choice: **Off**, **On** or
+**Automatic** (the default for a new layer; on only in a pixel-art composition). A layer from an older project does not
+snap. See [Pixel art](pixel-art.md).

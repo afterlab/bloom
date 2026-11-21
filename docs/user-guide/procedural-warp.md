@@ -105,6 +105,6 @@ the card, **Radius** and **Falloff** are one two-handle range bar.
 
 ## Every mode
 
-**Filter** is how the picture is sampled (Bilinear, Nearest, Bicubic). **Edges** is what shows where a
+**Filter** is how the picture is sampled (Bilinear, Nearest, Bicubic, Trilinear, Anisotropic or Automatic, the default; see [Corner Pin, ST Map and Displace](warp-nodes.md#choices)). **Edges** is what shows where a
 mode reads past the picture (transparent by default, or the edge pixels extended, repeated or mirrored).
 All lengths are in full-resolution pixels, so a half-scale preview shows the same picture.
