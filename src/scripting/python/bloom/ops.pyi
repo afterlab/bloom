@@ -6186,6 +6186,75 @@ class LayerOps:
         Related: query:layers, transact
         """
         ...
+    def set_filter(self, filter: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-filter  (operation, layer)
+        Sets how a layer's transform resamples its image: Bilinear, Nearest (pixel art, IDs), Trilinear
+        (mipmapped, smooth when the layer is shrunk), Anisotropic (sharper when it is shrunk more along
+        one axis) or Automatic (Trilinear). Trilinear and Anisotropic equal Bilinear when the layer is
+        not shrunk. A layer saved without a filter is Bilinear; a plain Merge entry takes
+        bloom.merge.set-entry-parameter with role filter.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          filter  int  required
+              Integer. The layer transform's resample filter: 0 Bilinear, 1 Nearest, 2 Trilinear
+              (mipmapped), 3 Anisotropic, 4 Automatic (Trilinear).
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          parameter parameter
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: parameter
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The filter is not 0..4
+              Do: pick 0 Bilinear, 1 Nearest, 2 Trilinear, 3 Anisotropic or 4 Automatic.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-filter","args":{"filter":4}}]}}
+          Python:
+            bloom.ops.layer.set_filter(filter=4)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-filter","args":{"filter":4}}]
+
+        Related: bloom.merge.set-entry-parameter, query:layers, transact
+        """
+        ...
     def set_label_color(self, color: tuple[float, float, float] = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.set-label-color  (operation, layer)
         Sets or clears the layer's Timeline label colour.
@@ -7651,11 +7720,11 @@ class MergeOps:
     def set_entry_parameter(self, merge: int | Proxy, slot: int | Proxy, role: str, value: Value, time: Time = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.merge.set-entry-parameter  (operation, merge)
         Sets one layer control of a Merge entry by its role -- position, anchor, scale, rotation,
-        opacity, blendMode or timeRemap -- whatever the entry's layer is: its Layer node, or its own
-        entry layer, which is created at its defaults in the same undo step when the entry has none yet.
-        Without `time` the parameter becomes the constant `value` (an animated one loses its animation,
-        as bloom.parameter.set-source does); with `time` it is keyed at that time (a constant becomes
-        animated, its constant the first key). A blend mode takes its stored value or its label
+        opacity, blendMode, timeRemap or filter -- whatever the entry's layer is: its Layer node, or its
+        own entry layer, which is created at its defaults in the same undo step when the entry has none
+        yet. Without `time` the parameter becomes the constant `value` (an animated one loses its
+        animation, as bloom.parameter.set-source does); with `time` it is keyed at that time (a constant
+        becomes animated, its constant the first key). A blend mode takes its stored value or its label
         ("screen"). An entry layer's parameters are constants or animation curves; to drive one from the
         value graph, insert a Layer node (bloom.merge.insert-layer-node). Outputs: "layer" (the entry's
         layer), "parameter.<role>" ids when the layer was created, and the edit's own outputs (a key's
@@ -7679,8 +7748,8 @@ class MergeOps:
               Unit: layer-stack slot id (query:layers .entries[].slot)
               Range: >= 1
           role  str  required
-              String. The layer control: position, anchor, scale, rotation, opacity, blendMode or
-              timeRemap.
+              String. The layer control: position, anchor, scale, rotation, opacity, blendMode,
+              timeRemap or filter.
               Unit: layer parameter role
               Values:
                 "position"  position
@@ -7690,9 +7759,11 @@ class MergeOps:
                 "opacity"  opacity
                 "blendMode"  blendMode
                 "timeRemap"  timeRemap
+                "filter"  filter
           value  value  required
               Value. In the parameter's stored units: [x, y] for position, anchor and scale, degrees for
-              rotation, 0..1 for opacity, a blend mode's value or label, seconds for timeRemap.
+              rotation, 0..1 for opacity, a blend mode's value or label, seconds for timeRemap, 0..4 for
+              filter (Bilinear, Nearest, Trilinear, Anisotropic, Automatic).
               Unit: the parameter's own width: a number, [x, y], [x, y, z] or [r, g, b, a]
           time  time  optional
               Time. When given, the value is keyed at this time instead of replacing the parameter with

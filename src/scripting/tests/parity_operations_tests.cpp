@@ -979,6 +979,28 @@ void mergeEntryOperations() {
     args["value"] = Value("screen");
     expect(fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
            "an entry's blend mode takes its label");
+    // #742: the optional filter by role, then by bloom.layer.set-filter on the same entry.
+    args = at(second);
+    args["role"] = Value("filter");
+    args["value"] = Value(std::int64_t{3});
+    expect(fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
+           "an entry's filter is set by role");
+    entry = view(second);
+    expect(entry && roleValue(*entry, "filter") == document::ParameterValue(std::int64_t{3}),
+           "the entry layer holds the Anisotropic filter");
+    args = at(second);
+    args["filter"] = Value(std::int64_t{1});
+    expect(fixture.run("bloom.layer.set-filter", args).succeeded(),
+           "set-filter addresses the entry by merge and slot");
+    entry = view(second);
+    expect(entry && roleValue(*entry, "filter") == document::ParameterValue(std::int64_t{1}),
+           "the entry layer's filter is now Nearest");
+    args = at(second);
+    args["filter"] = Value(std::int64_t{5});
+    auto badFilter = fixture.run("bloom.layer.set-filter", args);
+    expect(!badFilter.succeeded() && badFilter.diagnostic &&
+               badFilter.diagnostic->argument == "filter",
+           "a filter outside 0..4 is refused naming filter");
     args = at(second);
     args["role"] = Value("position");
     args["value"] = Value(document::Vec2d{10.0, 20.0});

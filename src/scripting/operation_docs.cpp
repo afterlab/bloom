@@ -482,6 +482,15 @@ constexpr std::array kNotes{
         "", "bloom.layer.disable-time-remap query:layers", ""},
     OperationNotes{"bloom.layer.disable-time-remap", "Turns off Time Remap for a layer.", "",
         "bloom.layer.enable-time-remap", ""},
+    OperationNotes{"bloom.layer.set-filter",
+        "Sets how a layer's transform resamples its image: Bilinear, Nearest (pixel art, IDs), "
+        "Trilinear (mipmapped, smooth when the layer is shrunk), Anisotropic (sharper when it is "
+        "shrunk more along one axis) or Automatic (Trilinear). Trilinear and Anisotropic equal "
+        "Bilinear when the layer is not shrunk. A layer saved without a filter is Bilinear; a "
+        "plain Merge entry takes bloom.merge.set-entry-parameter with role filter.",
+        "parameter", "bloom.merge.set-entry-parameter query:layers",
+        "[invalid-argument] The filter is not 0..4 => pick 0 Bilinear, 1 Nearest, 2 Trilinear, "
+        "3 Anisotropic or 4 Automatic."},
     OperationNotes{"bloom.layer.add-mask",
         "Adds a mask to a layer. The path is in the layer's content space (pixels of the layer's "
         "own content, before its transform).",

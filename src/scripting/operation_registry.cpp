@@ -3355,6 +3355,29 @@ OperationRegistry OperationRegistry::builtIn() {
                 return OperationCreateResult(std::move(operation), std::nullopt);
             });
 
+    // #742: the layer transform's resample filter.
+    add("bloom.layer.set-filter",
+        {compositionArgument(), layerArgument(),
+         need("filter", ValueKind::Integer, std::int64_t{4},
+              "Integer. The layer transform's resample filter: 0 Bilinear, 1 Nearest, 2 Trilinear "
+              "(mipmapped), 3 Anisotropic, 4 Automatic (Trilinear).")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto filter = integer(args, op, "filter", error);
+            if (!composition || !layer || !filter)
+                return error;
+            if (*filter < 0 || *filter > 4)
+                return failure(op, "filter",
+                               "filters are 0 Bilinear, 1 Nearest, 2 Trilinear, 3 Anisotropic, "
+                               "4 Automatic");
+            return OperationCreateResult(std::make_unique<commands::SetLayerFilter>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), *filter),
+                                         std::nullopt);
+        });
+
     // ADR 0028 layer masks and track mattes. A path argument is a whole PathValue in the layer's
     // content space (ValueKind::Path).
     const auto maskArgument = [] {

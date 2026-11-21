@@ -6,8 +6,10 @@
 // Timeline does, so an agent never needs a layer id it cannot know yet.
 
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_filter.hpp>
 
 #include "operation_registry_parity.hpp"
 
@@ -78,7 +80,7 @@ const std::string kAddAdjustment =
 
 const std::string kSetEntryParameter =
     R"(Sets one layer control of a Merge entry by its role -- position, anchor, scale, rotation, )"
-    R"(opacity, blendMode or timeRemap -- whatever the entry's layer is: its Layer node, or its )"
+    R"(opacity, blendMode, timeRemap or filter -- whatever the entry's layer is: its Layer node, or its )"
     R"(own entry layer, which is created at its defaults in the same undo step when the entry )"
     R"(has none yet. Without `time` the parameter becomes the constant `value` (an animated one )"
     R"(loses its animation, as bloom.parameter.set-source does); with `time` it is keyed at that )"
@@ -334,7 +336,7 @@ void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors) {
         return;
     auto role = need("role", ValueKind::String, "opacity",
                      "String. The layer control: position, anchor, scale, rotation, opacity, "
-                     "blendMode or timeRemap.");
+                     "blendMode, timeRemap or filter.");
     role.unit = "layer parameter role";
     for (const auto& entryRole : document::entryLayerRoles())
         role.choices.push_back({.value = Value(std::string(entryRole.role)),
@@ -347,7 +349,8 @@ void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors) {
          need("value", ValueKind::Value, 0.5,
               "Value. In the parameter's stored units: [x, y] for position, anchor and scale, "
               "degrees for rotation, 0..1 for opacity, a blend mode's value or label, seconds "
-              "for timeRemap."),
+              "for timeRemap, 0..4 for filter (Bilinear, Nearest, Trilinear, Anisotropic, "
+              "Automatic)."),
          time},
         [constant = setSource->factory, keyed = setKey->factory](const std::string& op,
                                                                  const Arguments& args) {
@@ -361,7 +364,7 @@ void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors) {
                 std::ranges::none_of(roles, [&](const auto& item) { return item.role == *roleName; }))
                 return argumentFailure(op, "role",
                                        "expects one of position, anchor, scale, rotation, "
-                                       "opacity, blendMode or timeRemap");
+                                       "opacity, blendMode, timeRemap or filter");
             const bool key = args.contains("time");
             const auto innerId = key ? std::string("bloom.animation.set-keyframe-at-time-for-parameter")
                                      : std::string("bloom.parameter.set-source");
@@ -377,6 +380,24 @@ void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors) {
                 const auto* diagnostic = checked.diagnostic();
                 return argumentFailure(op, diagnostic ? diagnostic->argument : "value",
                                        diagnostic ? diagnostic->message : "is not valid");
+            }
+            // #742: the optional filter is bound on first use (a layer saved without one is
+            // Bilinear), so it is set through bloom.layer.set-filter's command, not by id.
+            if (*roleName == document::kLayerFilterParameterRole) {
+                if (key)
+                    return argumentFailure(op, "time", "the filter is not animatable");
+                const auto filter = integerOf(args.at("value"));
+                if (!filter || *filter < 0 || *filter > 4)
+                    return argumentFailure(op, "value",
+                                           "filters are 0 Bilinear, 1 Nearest, 2 Trilinear, "
+                                           "3 Anisotropic, 4 Automatic");
+                return made(std::make_unique<commands::EntryLayerEdit>(
+                    entry->composition, entry->merge, entry->slot,
+                    [composition = entry->composition,
+                     value = *filter](const LayerId layer) -> std::unique_ptr<commands::Operation> {
+                        return std::make_unique<commands::SetLayerFilter>(composition, layer,
+                                                                          value);
+                    }));
             }
             return made(std::make_unique<commands::EntryLayerEdit>(
                 entry->composition, entry->merge, entry->slot,
