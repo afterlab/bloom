@@ -3,6 +3,7 @@
 #include <bloom/runtime/function_body.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/system_font_index.hpp>
+#include <bloom/runtime/text_markup.hpp>
 #include <bloom/runtime/vector_artwork_scene_cache.hpp>
 
 #include "channel_static.hpp"
@@ -46,6 +47,7 @@
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>

@@ -48,6 +48,9 @@ resolveVectorLeafWindow(const CompiledOperation& operation, const CompiledCompos
     window = std::nullopt;
     local = {};
     if (const auto* text = std::get_if<CompiledText>(&operation)) {
+        if (text->style)
+            return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                       "A styled text reached the plain text window resolution"};
         if (const auto error = resolveTextLeafWindow(*text, plan, resolved, coverageByteLimit,
                                                      hScale, vScale, cancellation, window)) {
             return error;
@@ -219,10 +222,12 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
     // #752: a Subtitles leaf. Read as an image (by an image effect or a Merge) or on the integer
     // grid, it is the CPU leaf's own image, moved exactly; through any other matrix its layer
     // redraws every path, so a scaled or rotated layer stays crisp.
-    if (std::holds_alternative<CompiledSubtitles>(inputOperation)) {
+    // #757: a styled Text Source draws its prepared frame the same way.
+    if (std::holds_alternative<CompiledSubtitles>(inputOperation) ||
+        (textInput != nullptr && textInput->style)) {
         if (subtitlesFrame == nullptr) {
             return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
-                                       "The Subtitles frame is unavailable"};
+                                       "The prepared text frame is unavailable"};
         }
         consumedText = true;
         if (nativeGrid || leafImage) {

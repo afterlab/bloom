@@ -16,6 +16,7 @@
 #include "gpu_scene_preparation_private.hpp"
 #include "operation_key.hpp"
 #include "subtitles_frame.hpp"
+#include "text_styled_frame.hpp"
 
 #include <bloom/render/image.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
@@ -57,6 +58,32 @@ prepareSubtitlesLeaf(const CompiledSubtitles& subtitles, const CompiledCompositi
     bounds[index].local = frame->bounds;
     bounds[index].output = frame->bounds;
     // Nothing on screen: the leaf publishes no image, and its layer draws nothing.
+    if (frame->window)
+        outputWindowOf[index] = *frame->window;
+    frames[index] = std::move(frame);
+    return std::nullopt;
+}
+
+// #757: a styled Text Source's leaf: its frame prepared at the evaluation (text_styled_frame.hpp,
+// the same call the CPU reference makes), its bounds and ink window published, no command.
+[[nodiscard]] inline std::optional<GpuSceneLeafFailure>
+prepareStyledTextLeaf(const CompiledText& text, const CompiledCompositionPlan& plan,
+                      const ResolvedEvaluation& resolved, const std::size_t index,
+                      const CancellationToken& cancellation,
+                      std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
+                      std::vector<EvaluatedOperationBounds>& bounds,
+                      std::vector<std::shared_ptr<const SubtitlesFrame>>& frames) {
+    auto prepared = prepareStyledTextFrame(text, plan, resolved, cancellation);
+    if (const auto* failure = std::get_if<SubtitlesFailure>(&prepared)) {
+        return fail(failure->kind == SubtitlesFailureKind::Cancelled
+                        ? PreparedGpuSceneDiagnosticCode::Cancelled
+                        : PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                    failure->message);
+    }
+    auto frame =
+        std::make_shared<const SubtitlesFrame>(std::move(std::get<SubtitlesFrame>(prepared)));
+    bounds[index].local = frame->bounds;
+    bounds[index].output = frame->bounds;
     if (frame->window)
         outputWindowOf[index] = *frame->window;
     frames[index] = std::move(frame);
@@ -262,7 +289,7 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         auto raster = render::PathRaster::transformed(
             std::span<const render::Path>(*layer.paths), layer.pathStroke,
             render::PathMatrix{matrix.a, matrix.b, matrix.c, matrix.d, matrix.x, matrix.y}, hScale,
-            vScale, cancel);
+            vScale, cancel, layer.clip);
         if (!raster)
             return failed();
         auto built = raster.value()->coverageGeometry(

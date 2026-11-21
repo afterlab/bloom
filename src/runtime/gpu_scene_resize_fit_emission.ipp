@@ -25,7 +25,7 @@ emitResizeFitCommand(const ResizeFitKernel& kernel, const OperationIndex input,
                 *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
                 chain->opacity, false, ctx.allowance, operation, ctx.coverageCache, cancellation,
                 emit, charge, chargeCoverage, inputCommand, inputKey, result.consumedText,
-                result.consumedShape, true))
+                result.consumedShape, true, subtitlesFrameOf(ctx, chain->source)))
             return error;
         result.consumedLeaf = chain->source;
     }

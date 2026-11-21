@@ -793,6 +793,19 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
+        // #757: a styled Text Source is a vector leaf whose frame is prepared here, as a
+        // Subtitles node's is.
+        if (const auto* text = std::get_if<CompiledText>(&operation);
+            text != nullptr && text->style) {
+            if (const auto error =
+                    detail::prepareStyledTextLeaf(*text, *plan, resolved, index, cancellation,
+                                                  outputWindowOf, bounds, subtitlesFrames)) {
+                return fail(error->code, error->message);
+            }
+            vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
+            continue;
+        }
+
         if (std::holds_alternative<CompiledText>(operation) ||
             std::holds_alternative<CompiledShape>(operation)) {
             // A text or shape leaf emits no command of its own: the Layer Output that consumes it

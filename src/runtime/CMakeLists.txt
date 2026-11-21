@@ -331,6 +331,9 @@ target_sources(
         value_graph_evaluation.cpp
         subtitles_frame.cpp
         subtitles_frame.hpp
+        text_markup.cpp
+        text_styled_frame.cpp
+        text_styled_frame.hpp
         gpu_scene_subtitles_emission.hpp
         subtitles_layout.cpp
         subtitle_tracks.cpp
@@ -360,6 +363,7 @@ target_sources(
             include/bloom/runtime/operation_cache.hpp
             include/bloom/runtime/text_metrics.hpp
             include/bloom/runtime/subtitles_layout.hpp
+            include/bloom/runtime/text_markup.hpp
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp

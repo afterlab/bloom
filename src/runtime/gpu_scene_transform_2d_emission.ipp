@@ -61,7 +61,7 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
                 ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale, chain->opacity,
                 false, ctx.allowance, operation, ctx.coverageCache, cancellation, emit, charge,
                 chargeCoverage, inputCommand, inputKey, result.consumedText, result.consumedShape,
-                true))
+                true, subtitlesFrameOf(ctx, chain->source)))
             return error;
         result.consumedLeaf = chain->source;
     }

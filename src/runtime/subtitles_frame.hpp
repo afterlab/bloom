@@ -43,6 +43,8 @@ struct SubtitlesLayer final {
     bool stroke = false;
     // The premultiplied process pixel, opacity and fade included.
     render::Rgba32f pixel = render::Rgba32f::transparent();
+    // #757: the author-space rectangle a Text Source's box clips the layer to (Overflow Clip).
+    std::optional<render::PathBounds> clip{};
 };
 
 // Where one active cue was drawn.

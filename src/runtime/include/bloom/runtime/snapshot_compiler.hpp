@@ -61,6 +61,9 @@ enum class CompileDiagnosticCode {
     // #752: a subtitle cue holds text in a script that needs shaping (Arabic, an Indic script),
     // which Bloom draws without shaping; the warning names the cue.
     UnshapedScript,
+    // #757: a Text Source with Markup on holds a tag it draws as written (an unknown tag, an end
+    // tag that closes nothing) or a color class that names no color.
+    TextMarkupIgnored,
 };
 
 [[nodiscard]] std::string_view compileDiagnosticCodeId(CompileDiagnosticCode code) noexcept;

@@ -1654,6 +1654,37 @@ struct CompiledShape {
     friend bool operator==(const CompiledShape&, const CompiledShape&) = default;
 };
 
+// The four faces a cue's runs draw with: regular, bold, italic and bold italic. A style the font
+// lacks is drawn with a stand-in: a missing italic as the synthesized oblique of the upright face
+// (`oblique`), a missing bold as the regular weight (`boldMissing`, warned at compile time).
+struct CompiledSubtitlesFaces final {
+    std::array<render::TextFont, 4> faces{
+        render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans,
+        render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans};
+    std::array<bool, 4> oblique{false, false, true, true};
+    bool boldMissing = true;
+    friend bool operator==(const CompiledSubtitlesFaces&, const CompiledSubtitlesFaces&) = default;
+};
+
+// #757: a Text Source's styling (document/text_styling.hpp), present only when the node draws
+// styled: Markup on, a Background other than Off, or an Outline width that is not the constant 0.
+// Without it the text draws exactly as it always has (docs/architecture/evaluation-primitives.md,
+// "Styled Text Source"). Unbound roles hold their defaults with an invalid parameter id.
+struct CompiledTextStyle final {
+    bool markup = false;
+    std::array<CompiledColorParameter, 4> accents{};
+    CompiledColorParameter outlineColor;
+    CompiledScalarParameter outlineWidth;
+    std::int64_t outlineJoin = 0;
+    std::int64_t background = 0;
+    CompiledColorParameter backgroundColor;
+    CompiledScalarParameter backgroundPadding;
+    CompiledScalarParameter backgroundRadius;
+    // Regular, bold, italic and bold italic, resolved from the node's font as Subtitles does.
+    CompiledSubtitlesFaces faces;
+    friend bool operator==(const CompiledTextStyle&, const CompiledTextStyle&) = default;
+};
+
 struct CompiledText {
     CompiledText() = default;
     CompiledText(document::NodeId source, document::ParameterId contentParameter,
@@ -1699,6 +1730,8 @@ struct CompiledText {
     bool fontMissing = false;
     // The font is downloading; `font` is the fallback until it arrives.
     bool fontPending = false;
+    // #757: present when the node draws styled runs, an outline or a background box.
+    std::optional<CompiledTextStyle> style{};
 
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
@@ -1740,19 +1773,6 @@ struct CompiledSubtitlesSettings final {
     std::int64_t minGap = 2;
     friend bool operator==(const CompiledSubtitlesSettings&,
                            const CompiledSubtitlesSettings&) = default;
-};
-
-// The four faces a cue's runs draw with: regular, bold, italic and bold italic. A style the font
-// lacks is drawn with a stand-in: a missing italic as the synthesized oblique of the upright face
-// (`oblique`), a missing bold as the regular weight (`boldMissing`, warned at compile time).
-struct CompiledSubtitlesFaces final {
-    std::array<render::TextFont, 4> faces{render::EmbeddedFace::DejaVuSans,
-                                          render::EmbeddedFace::DejaVuSans,
-                                          render::EmbeddedFace::DejaVuSans,
-                                          render::EmbeddedFace::DejaVuSans};
-    std::array<bool, 4> oblique{false, false, true, true};
-    bool boldMissing = true;
-    friend bool operator==(const CompiledSubtitlesFaces&, const CompiledSubtitlesFaces&) = default;
 };
 
 struct CompiledSubtitles {

@@ -3552,17 +3552,6 @@ lowerSubtitles(const document::NodeRecord& node) {
     }
     auto& resolver =
         request_.fontResolver ? *request_.fontResolver : runtime::fonts::processFontResolver();
-    const auto resolve = [&](const FontId& id) -> std::pair<render::TextFont, bool> {
-        const auto resolution = resolver.resolve(
-            id, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
-        render::TextFont face = render::EmbeddedFace::DejaVuSans;
-        if (resolution.bytes)
-            face = render::ExternalFontFile{resolution.bytes, resolution.digest,
-                                            resolution.faceIndex};
-        else
-            face = static_cast<render::EmbeddedFace>(resolution.builtinFace);
-        return {face, resolution.isFallback()};
-    };
     const auto regular = [&] {
         const auto resolution = resolver.resolve(
             fontId, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
@@ -3580,11 +3569,35 @@ lowerSubtitles(const document::NodeRecord& node) {
         return render::TextFont{static_cast<render::EmbeddedFace>(resolution.builtinFace)};
     }();
     lowered.fontId = encodeFontId(fontId);
-    auto& faces = lowered.faces;
+    lowered.faces = styledTextFaces(fontId, regular, lowered.fontMissing);
+    return runtime::CompiledOperation{std::move(lowered)};
+}
+
+// #752, #757: the four faces styled runs draw with, regular, bold, italic and bold italic, from
+// the node's font. A style the font lacks is drawn by the upright face: an italic as its
+// synthesized oblique, a bold at the regular weight (`boldMissing`, warned by the caller).
+[[nodiscard]] runtime::CompiledSubtitlesFaces styledTextFaces(const document::FontId& fontId,
+                                                              const render::TextFont& regular,
+                                                              const bool regularMissing) {
+    using namespace document;
+    auto& resolver =
+        request_.fontResolver ? *request_.fontResolver : runtime::fonts::processFontResolver();
+    const auto resolve = [&](const FontId& id) -> std::pair<render::TextFont, bool> {
+        const auto resolution = resolver.resolve(
+            id, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
+        render::TextFont face = render::EmbeddedFace::DejaVuSans;
+        if (resolution.bytes)
+            face = render::ExternalFontFile{resolution.bytes, resolution.digest,
+                                            resolution.faceIndex};
+        else
+            face = static_cast<render::EmbeddedFace>(resolution.builtinFace);
+        return {face, resolution.isFallback()};
+    };
+    runtime::CompiledSubtitlesFaces faces;
     faces.faces = {regular, regular, regular, regular};
     faces.oblique = {false, false, true, true};
     faces.boldMissing = true;
-    if (fontId.source != FontSource::Builtin && !lowered.fontMissing) {
+    if (fontId.source != FontSource::Builtin && !regularMissing) {
         const auto styled = [&](const std::int32_t weight, const bool italic,
                                 const std::string_view style) {
             auto variant = fontId;
@@ -3613,7 +3626,7 @@ lowerSubtitles(const document::NodeRecord& node) {
             faces.faces[3] = bold;
         }
     }
-    return runtime::CompiledOperation{std::move(lowered)};
+    return faces;
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>
@@ -3745,6 +3758,84 @@ lowerText(const document::NodeRecord& node) {
     result.fontId = document::encodeFontId(fontId);
     result.fontMissing = fontMissing;
     result.fontPending = fontPending;
+    // #757: the styling, present only when the node draws styled (text_styling.hpp). An unbound
+    // role holds its default, so a node saved before them lowers exactly as it did.
+    {
+        const auto specFor = [](const std::string_view role) {
+            return document::textStylingParameterSpecForRole(role);
+        };
+        const auto scalar =
+            [&](const std::string_view role) -> std::optional<runtime::CompiledScalarParameter> {
+            const auto* binding = findParameterBinding(node, role);
+            if (binding == nullptr)
+                return runtime::CompiledScalarParameter{{}, specFor(role)->value};
+            return compiledScalarParameter(binding);
+        };
+        const auto colorOf =
+            [&](const std::string_view role) -> std::optional<runtime::CompiledColorParameter> {
+            const auto* binding = findParameterBinding(node, role);
+            if (binding == nullptr)
+                return runtime::CompiledColorParameter{{}, specFor(role)->color};
+            return compiledColorParameter(binding);
+        };
+        const auto discrete = [&](const std::string_view role) {
+            const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
+            return value == nullptr ? static_cast<std::int64_t>(specFor(role)->value) : *value;
+        };
+        const auto* markupValue = parameterConstant<bool>(findParameterBinding(node, "markup"));
+        runtime::CompiledTextStyle style;
+        style.markup = markupValue != nullptr && *markupValue;
+        style.outlineJoin = discrete("outlineJoin");
+        style.background = discrete("background");
+        const auto outlineWidth = scalar("outlineWidth");
+        const auto outlineColor = colorOf("outlineColor");
+        const auto backgroundColor = colorOf("backgroundColor");
+        const auto padding = scalar("backgroundPadding");
+        const auto radius = scalar("backgroundRadius");
+        if (!outlineWidth || !outlineColor || !backgroundColor || !padding || !radius) {
+            addTopologyFailure(node.id, "Text styling could not be lowered.");
+            return std::nullopt;
+        }
+        for (std::size_t index = 0; index < style.accents.size(); ++index) {
+            const auto accent = colorOf("accent" + std::to_string(index + 1));
+            if (!accent) {
+                addTopologyFailure(node.id, "Text accent colors could not be lowered.");
+                return std::nullopt;
+            }
+            style.accents[index] = *accent;
+        }
+        style.outlineWidth = *outlineWidth;
+        style.outlineColor = *outlineColor;
+        style.backgroundColor = *backgroundColor;
+        style.backgroundPadding = *padding;
+        style.backgroundRadius = *radius;
+        const auto* widthConstant = std::get_if<double>(&style.outlineWidth.source);
+        const bool outlined = widthConstant == nullptr || *widthConstant != 0.0;
+        if (style.markup || outlined || style.background != document::kTextBackgroundOff) {
+            style.faces = styledTextFaces(fontId, result.font, fontMissing);
+            if (style.markup && !result.drivenContent) {
+                // What the markup draws as written, named on the node (a driven text is read
+                // every frame, where nothing can warn).
+                const auto runs = runtime::textMarkupRuns(result.content, true, style.faces);
+                for (const auto& warning : runs.warnings) {
+                    auto diagnosticSubject = subject(node.id, "text");
+                    diagnosticSubject.parameterId = contentBinding->parameterId;
+                    addWarning(runtime::CompileDiagnosticCode::TextMarkupIgnored,
+                               std::move(diagnosticSubject), "Text markup is drawn as written",
+                               "Markup is on: " + warning + ".");
+                }
+                if (runs.usesBold && style.faces.boldMissing && fontBinding != nullptr &&
+                    !fontMissing) {
+                    auto diagnosticSubject = subject(node.id, "font");
+                    diagnosticSubject.parameterId = fontBinding->parameterId;
+                    addWarning(runtime::CompileDiagnosticCode::FontMissing,
+                               std::move(diagnosticSubject), "Text bold face is missing",
+                               "The font has no bold style; bold runs draw at the regular weight.");
+                }
+            }
+            result.style = std::move(style);
+        }
+    }
     return result;
 }
 

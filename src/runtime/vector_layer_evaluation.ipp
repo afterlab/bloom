@@ -12,20 +12,25 @@ const auto pixel = [&](core::Color4d color) {
     return *result.value();
 };
 const auto& sourceOperation = plan->operations()[chain.source];
-if (std::holds_alternative<CompiledSubtitles>(sourceOperation)) {
-    // #752: every box, outline and fill layer of the frame the node prepared, redrawn through the
-    // chain matrix in drawing order, so a scaled or rotated layer stays crisp.
+// #752, #757: a Subtitles node, or a styled Text Source, draws the layers of its prepared frame.
+const auto* styledText = std::get_if<CompiledText>(&sourceOperation);
+const bool framedSource = std::holds_alternative<CompiledSubtitles>(sourceOperation) ||
+                          (styledText != nullptr && styledText->style.has_value());
+if (framedSource) {
+    // Every box, outline and fill layer of the frame the node prepared, redrawn through the chain
+    // matrix in drawing order, so a scaled or rotated layer stays crisp.
     const auto& frame = subtitlesFrames[chain.source];
     if (frame == nullptr) {
         operationFailure = diagnostic(EvaluationDiagnosticCode::InternalInvariant,
-                                      "The Subtitles frame is unavailable", {}, operationSubject);
+                                      "The prepared text frame is unavailable", {},
+                                      operationSubject);
         return;
     }
     for (const auto& entry : frame->layers) {
         auto layerRaster = render::PathRaster::transformed(
             std::span<const render::Path>(*entry.paths), entry.pathStroke,
             {m.a, m.b, m.c, m.d, m.x, m.y}, resolved.horizontalScale, resolved.verticalScale,
-            [&] { return cancellation.isCancellationRequested(); });
+            [&] { return cancellation.isCancellationRequested(); }, entry.clip);
         if (!layerRaster) {
             operationCancelled = cancellation.isCancellationRequested();
             if (!operationCancelled)
@@ -105,7 +110,7 @@ if (std::holds_alternative<CompiledSubtitles>(sourceOperation)) {
     vectorHasFill = true;
     vectorFill = pixel(color->value);
 }
-if (!std::holds_alternative<CompiledSubtitles>(sourceOperation)) {
+if (!framedSource) {
     auto raster = render::PathRaster::transformed(
         paths, stroke, {m.a, m.b, m.c, m.d, m.x, m.y}, resolved.horizontalScale,
         resolved.verticalScale, [&] { return cancellation.isCancellationRequested(); }, clip);

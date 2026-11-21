@@ -339,6 +339,15 @@ struct CompiledTextOutlineSource final {
     std::int64_t verticalAlignment = 0;
     std::int64_t anchorMode = 0;
     std::int64_t overflow = 0;
+    // #757: a styled text (Markup, an outline or a background) is laid out by the styled text
+    // layout, with these faces (regular, bold, italic, bold italic), so the outline lands on the
+    // letters as they draw. The glyphs only: the outline width and the background add nothing.
+    bool styled = false;
+    bool markup = false;
+    std::array<render::TextFont, 4> faces{
+        render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans,
+        render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans};
+    std::array<bool, 4> oblique{false, false, true, true};
 
     friend bool operator==(const CompiledTextOutlineSource&,
                            const CompiledTextOutlineSource&) = default;

@@ -15,6 +15,8 @@
 #include <bloom/render/path_raster.hpp>
 #include <bloom/render/text_raster.hpp>
 
+#include "text_styled_frame.hpp"
+
 #include <cmath>
 #include <cstdint>
 #include <utility>
@@ -114,16 +116,48 @@ ValueUtilityOutcome textOutline(const ValueUtilityInvocation& invocation) {
         static_cast<render::TextLayoutOptions::VerticalAlignment>(fixed.verticalAlignment);
     layout.anchorMode = render::resolveTextAnchorMode(fixed.anchorMode, layout.alignment);
     layout.overflow = static_cast<render::TextLayoutOptions::Overflow>(fixed.overflow);
-    auto outlines =
-        render::textOutlines(fixed.font, content, *parameters.value(), layout,
-                             [&invocation] { return support::stopRequested(invocation); });
-    if (!outlines) {
-        if (support::stopRequested(invocation))
-            return support::cancelledOutcome(invocation);
-        return support::refuse(std::move(outcome), "Text Outline glyphs are unavailable",
-                               "The text's glyph outlines could not be read from its font.");
+    const auto stop = [&invocation] { return support::stopRequested(invocation); };
+    std::vector<render::Path> paths;
+    if (fixed.styled) {
+        // #757: the styled layout the text draws with: its runs' faces, the oblique and the
+        // underlines, with the markup's tags left out.
+        bloom::runtime::CompiledSubtitlesFaces faces;
+        faces.faces = fixed.faces;
+        faces.oblique = fixed.oblique;
+        const bloom::runtime::detail::StyledTextSourceInput input{.content = content,
+                                                                  .markup = fixed.markup,
+                                                                  .faces = &faces,
+                                                                  .size = size,
+                                                                  .lineHeight = lineHeight,
+                                                                  .letterSpacing = letterSpacing,
+                                                                  .alignment = alignment,
+                                                                  .box = fixed.box,
+                                                                  .wrap = fixed.wrap,
+                                                                  .verticalAlignment =
+                                                                      fixed.verticalAlignment,
+                                                                  .anchorMode = fixed.anchorMode,
+                                                                  .overflow = fixed.overflow};
+        auto laid = bloom::runtime::detail::layoutStyledTextSource(input, stop);
+        if (auto* message = std::get_if<std::string>(&laid)) {
+            if (support::stopRequested(invocation))
+                return support::cancelledOutcome(invocation);
+            return support::refuse(std::move(outcome), "Text Outline glyphs are unavailable",
+                                   *message);
+        }
+        for (auto& paint : std::get<bloom::runtime::detail::StyledTextGeometry>(laid).fills)
+            for (auto& path : paint.paths)
+                paths.push_back(std::move(path));
+    } else {
+        auto outlines =
+            render::textOutlines(fixed.font, content, *parameters.value(), layout, stop);
+        if (!outlines) {
+            if (support::stopRequested(invocation))
+                return support::cancelledOutcome(invocation);
+            return support::refuse(std::move(outcome), "Text Outline glyphs are unavailable",
+                                   "The text's glyph outlines could not be read from its font.");
+        }
+        paths = std::move(*outlines.value());
     }
-    const auto& paths = *outlines.value();
     if (paths.size() > document::kMaximumPathContours)
         return support::refuse(std::move(outcome), "Text Outline result is too large",
                                "The text has more glyph contours than a path may hold; shorten "

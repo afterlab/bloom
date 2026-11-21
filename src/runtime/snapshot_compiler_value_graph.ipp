@@ -912,6 +912,12 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
                                                                 text->layout.verticalAlignment,
                                                                 text->layout.anchorMode,
                                                                 text->layout.overflow};
+                if (text->style) {
+                    textSource->styled = true;
+                    textSource->markup = text->style->markup;
+                    textSource->faces = text->style->faces.faces;
+                    textSource->oblique = text->style->faces.oblique;
+                }
             }
         }
         return runtime::CompiledValueKernel{runtime::CompiledValueUtility{

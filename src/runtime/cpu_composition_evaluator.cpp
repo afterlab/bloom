@@ -7,6 +7,7 @@
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
 #include "subtitles_frame.hpp"
+#include "text_styled_frame.hpp"
 #include "cryptomatte.hpp"
 #include "depth_effect_image_effect.hpp"
 #include "film_grain_image_effect.hpp"
@@ -976,7 +977,25 @@ enum class ScalarDomain : std::uint8_t {
                         text.layout.verticalAlignment >= 0 && text.layout.verticalAlignment <= 2 &&
                         text.layout.anchorMode >= 0 &&
                         text.layout.anchorMode <= render::kTextAnchorFollowsAlignment &&
-                        text.layout.overflow >= 0 && text.layout.overflow <= 1);
+                        text.layout.overflow >= 0 && text.layout.overflow <= 1) &&
+                       (!text.style ||
+                        (hasValidScalarCurveReference(text.style->outlineWidth, plan, index,
+                                                      failure) &&
+                         hasValidScalarCurveReference(text.style->backgroundPadding, plan, index,
+                                                      failure) &&
+                         hasValidScalarCurveReference(text.style->backgroundRadius, plan, index,
+                                                      failure) &&
+                         hasValidColorCurveReference(text.style->outlineColor, plan, index,
+                                                     failure) &&
+                         hasValidColorCurveReference(text.style->backgroundColor, plan, index,
+                                                     failure) &&
+                         std::ranges::all_of(text.style->accents,
+                                             [&](const CompiledColorParameter& accent) {
+                                                 return hasValidColorCurveReference(accent, plan,
+                                                                                    index, failure);
+                                             }) &&
+                         text.style->outlineJoin >= 0 && text.style->outlineJoin <= 2 &&
+                         text.style->background >= 0 && text.style->background <= 2));
             },
             [&plan, index, &failure](const CompiledLayerOutput& layer) {
                 const auto sourcesAnImage = [&plan, index, &layer] {
@@ -1576,6 +1595,32 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         registerScalar(text.size, "size", ScalarDomain::TextSize,
                                        operationSubject) &&
                         registerColor(text.color, "color", operationSubject));
+                    // #757: the styling operands a bound role names (an unbound one is its
+                    // default and has no parameter).
+                    if (text.style) {
+                        const auto& style = *text.style;
+                        const auto scalar = [&](const CompiledScalarParameter& parameter,
+                                                const char* field) {
+                            if (parameter.id.isValid())
+                                static_cast<void>(registerScalar(
+                                    parameter, field, ScalarDomain::Unbounded, operationSubject));
+                        };
+                        const auto color = [&](const CompiledColorParameter& parameter,
+                                               const char* field) {
+                            if (parameter.id.isValid())
+                                static_cast<void>(
+                                    registerColor(parameter, field, operationSubject));
+                        };
+                        scalar(style.outlineWidth, "outlineWidth");
+                        scalar(style.backgroundPadding, "backgroundPadding");
+                        scalar(style.backgroundRadius, "backgroundRadius");
+                        color(style.outlineColor, "outlineColor");
+                        color(style.backgroundColor, "backgroundColor");
+                        color(style.accents[0], "accent1");
+                        color(style.accents[1], "accent2");
+                        color(style.accents[2], "accent3");
+                        color(style.accents[3], "accent4");
+                    }
                 },
                 [&](const CompiledSubtitles& subtitles) {
                     static_cast<void>(
@@ -3219,6 +3264,28 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     std::move(std::get<detail::SubtitlesFrame>(prepared)));
                 subtitlesFrames[index] = subtitlesFrame;
             }
+            // #757: a styled Text Source's frame, prepared before its key in the same way.
+            if (const auto* text = std::get_if<CompiledText>(&plan->operations()[index]);
+                text != nullptr && text->style) {
+                auto prepared =
+                    detail::prepareStyledTextFrame(*text, *plan, resolved, cancellation);
+                if (const auto* failure = std::get_if<detail::SubtitlesFailure>(&prepared)) {
+                    if (failure->kind == detail::SubtitlesFailureKind::Cancelled ||
+                        cancellation.isCancellationRequested())
+                        return EvaluationResult::cancelled();
+                    auto failed = diagnostic(EvaluationDiagnosticCode::InvalidParameter,
+                                             failure->kind == detail::SubtitlesFailureKind::Budget
+                                                 ? "Text exceeds a frame limit"
+                                                 : "Text could not be prepared",
+                                             failure->message, operationSubject);
+                    failed.subject.parameterId = text->contentParameterId;
+                    failed.subject.field = "content";
+                    return EvaluationResult::failed(std::move(failed));
+                }
+                subtitlesFrame = std::make_shared<const detail::SubtitlesFrame>(
+                    std::move(std::get<detail::SubtitlesFrame>(prepared)));
+                subtitlesFrames[index] = subtitlesFrame;
+            }
 
             std::shared_ptr<const ProcessFrame> nestedFrame;
             std::optional<core::RationalTime> nestedTime;
@@ -3920,32 +3987,38 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         } else if constexpr (std::is_same_v<Step, CompiledSubtitles>) {
                             key.add(subtitlesFrame->contentKey);
                         } else if constexpr (std::is_same_v<Step, CompiledText>) {
-                            authored(step.contentParameterId, step.content, step.drivenContent);
+                            // #757: a styled text is keyed by its frame's content.
+                            if (subtitlesFrame) {
+                                key.add(std::string("styled"));
+                                key.add(subtitlesFrame->contentKey);
+                            } else {
+                                authored(step.contentParameterId, step.content, step.drivenContent);
 
-                            authored(step.layout.alignmentId, step.layout.alignment,
-                                     step.layout.drivenAlignment);
-                            parameter(step.layout.lineHeight);
-                            parameter(step.layout.letterSpacing);
-                            key.add(step.layout.box);
-                            key.add(step.layout.wrap);
-                            key.add(step.layout.verticalAlignment);
-                            key.add(step.layout.anchorMode);
-                            key.add(step.layout.overflow);
-                            std::visit(
-                                [&key](const auto& font) {
-                                    using Font = std::decay_t<decltype(font)>;
-                                    if constexpr (std::is_same_v<Font, render::EmbeddedFace>) {
-                                        key.add(font);
-                                    } else {
-                                        const auto digest = font.contentDigest.toLowercaseHex();
-                                        key.add(std::string(digest.data(), digest.size()));
-                                        key.add(font.faceIndex);
-                                    }
-                                },
-                                step.font);
+                                authored(step.layout.alignmentId, step.layout.alignment,
+                                         step.layout.drivenAlignment);
+                                parameter(step.layout.lineHeight);
+                                parameter(step.layout.letterSpacing);
+                                key.add(step.layout.box);
+                                key.add(step.layout.wrap);
+                                key.add(step.layout.verticalAlignment);
+                                key.add(step.layout.anchorMode);
+                                key.add(step.layout.overflow);
+                                std::visit(
+                                    [&key](const auto& font) {
+                                        using Font = std::decay_t<decltype(font)>;
+                                        if constexpr (std::is_same_v<Font, render::EmbeddedFace>) {
+                                            key.add(font);
+                                        } else {
+                                            const auto digest = font.contentDigest.toLowercaseHex();
+                                            key.add(std::string(digest.data(), digest.size()));
+                                            key.add(font.faceIndex);
+                                        }
+                                    },
+                                    step.font);
 
-                            parameter(step.size);
-                            parameter(step.color);
+                                parameter(step.size);
+                                parameter(step.color);
+                            }
                         } else if constexpr (std::is_same_v<Step, CompiledLayerOutput>) {
 
                             if (step.parent) {
@@ -4040,6 +4113,92 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 ++frameStatistics.misses;
                 frameStatistics.evaluatedNodes.push_back(
                     operationSubject.nodeId.value_or(document::NodeId{}));
+                // #752, #757: a prepared frame's layers (subtitles_frame.hpp), each filled
+                // through the path coverage reference and composited source-over in order over
+                // the frame's ink window: the Subtitles node's image and a styled Text Source's.
+                const auto drawFrameLayers = [&](const detail::SubtitlesFrame& frame,
+                                                 const std::string_view what) {
+                    bounds[index].local = frame.bounds;
+                    bounds[index].output = frame.bounds;
+                    if (!frame.window)
+                        return;
+                    auto local = render::Rgba32fImageDescriptor::create(
+                        *frame.window, fullDescriptor.displayWindow(),
+                        fullDescriptor.pixelAspect());
+                    if (!local) {
+                        operationFailure =
+                            imageDiagnostic(*local.error(), operationSubject,
+                                            std::string(what) + " descriptor is invalid");
+                        return;
+                    }
+                    auto descriptor = *local.value();
+                    if (!clipDescriptor(descriptor, index))
+                        return;
+                    auto builder =
+                        render::Rgba32fImageBuilder::create(descriptor, remainingPixelBudget());
+                    if (!builder) {
+                        operationFailure =
+                            imageDiagnostic(*builder.error(), operationSubject,
+                                            std::string(what) + " image could not be allocated");
+                        return;
+                    }
+                    const auto data = descriptor.dataWindow();
+                    reportRowPassStarted(progress, operationIndex, data.extent().height());
+                    auto& image = *builder.value();
+                    const auto width = static_cast<std::size_t>(data.extent().width());
+                    const auto outcome = runRowBandPass(
+                        rowBands, cancellation, data.extent().height(), data.originY(),
+                        [&image, &frame, data, width, &operationSubject, &cancellation,
+                         what](const std::int64_t y) -> RowFailure {
+                            auto row = image.row(y);
+                            if (!row)
+                                return imageDiagnostic(*row.error(), operationSubject,
+                                                       std::string(what) +
+                                                           " row could not be addressed");
+                            std::vector<std::uint8_t> coverage(width);
+                            std::vector<render::Rgba32f> layer(width,
+                                                               render::Rgba32f::transparent());
+                            std::fill(row.value()->begin(), row.value()->end(),
+                                      render::Rgba32f::transparent());
+                            const auto cancel = [&cancellation] {
+                                return cancellation.isCancellationRequested();
+                            };
+                            for (const auto& entry : frame.layers) {
+                                std::fill(coverage.begin(), coverage.end(), std::uint8_t{0});
+                                if (!entry.raster->coverageRow(data.originX(), y, coverage,
+                                                               render::PathFillRule::NonZero,
+                                                               entry.stroke, cancel))
+                                    return std::nullopt;
+                                if (render::coverageSolidRow(coverage, entry.pixel, layer))
+                                    return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
+                                                      std::string(what) + " coverage is invalid",
+                                                      {}, operationSubject);
+                                if (render::sourceOverLinearRec709SceneRow(layer, *row.value()))
+                                    return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
+                                                      std::string(what) +
+                                                          " layers do not composite",
+                                                      {}, operationSubject);
+                            }
+                            return std::nullopt;
+                        });
+                    if (outcome.cancelled || cancellation.isCancellationRequested()) {
+                        operationCancelled = true;
+                        return;
+                    }
+                    if (outcome.failure || outcome.incomplete) {
+                        operationFailure = rowPassFailure(outcome, operationSubject);
+                        return;
+                    }
+                    reportRowPassFinished(progress, operationIndex, data.extent().height());
+                    auto frozen = std::move(*builder.value()).freeze();
+                    if (!frozen) {
+                        operationFailure =
+                            imageDiagnostic(*frozen.error(), operationSubject,
+                                            std::string(what) + " image could not be published");
+                        return;
+                    }
+                    produced.emplace(std::move(*frozen.value()));
+                };
                 std::visit(
                     Overloaded{
                         [&](const CompiledSolid& solid) {
@@ -4880,94 +5039,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                         },
 #include "shape_evaluation.ipp"
                         [&](const CompiledSubtitles&) {
-                            // #752: the frame's layers (subtitles_frame.hpp), each filled
-                            // through the path coverage reference and composited source-over in
-                            // order, over the cues' ink window. The content bounds are the frame.
-                            const auto& frame = *subtitlesFrame;
-                            bounds[index].local = frame.bounds;
-                            bounds[index].output = frame.bounds;
-                            if (!frame.window)
-                                return;
-                            auto local = render::Rgba32fImageDescriptor::create(
-                                *frame.window, fullDescriptor.displayWindow(),
-                                fullDescriptor.pixelAspect());
-                            if (!local) {
-                                operationFailure =
-                                    imageDiagnostic(*local.error(), operationSubject,
-                                                    "Subtitles descriptor is invalid");
-                                return;
-                            }
-                            auto descriptor = *local.value();
-                            if (!clipDescriptor(descriptor, index))
-                                return;
-                            auto builder = render::Rgba32fImageBuilder::create(
-                                descriptor, remainingPixelBudget());
-                            if (!builder) {
-                                operationFailure =
-                                    imageDiagnostic(*builder.error(), operationSubject,
-                                                    "Subtitles image could not be allocated");
-                                return;
-                            }
-                            const auto data = descriptor.dataWindow();
-                            reportRowPassStarted(progress, operationIndex, data.extent().height());
-                            auto& image = *builder.value();
-                            const auto width = static_cast<std::size_t>(data.extent().width());
-                            const auto outcome = runRowBandPass(
-                                rowBands, cancellation, data.extent().height(), data.originY(),
-                                [&image, &frame, data, width, &operationSubject,
-                                 &cancellation](const std::int64_t y) -> RowFailure {
-                                    auto row = image.row(y);
-                                    if (!row)
-                                        return imageDiagnostic(
-                                            *row.error(), operationSubject,
-                                            "Subtitles row could not be addressed");
-                                    std::vector<std::uint8_t> coverage(width);
-                                    std::vector<render::Rgba32f> layer(
-                                        width, render::Rgba32f::transparent());
-                                    std::fill(row.value()->begin(), row.value()->end(),
-                                              render::Rgba32f::transparent());
-                                    const auto cancel = [&cancellation] {
-                                        return cancellation.isCancellationRequested();
-                                    };
-                                    for (const auto& entry : frame.layers) {
-                                        std::fill(coverage.begin(), coverage.end(),
-                                                  std::uint8_t{0});
-                                        if (!entry.raster->coverageRow(
-                                                data.originX(), y, coverage,
-                                                render::PathFillRule::NonZero, entry.stroke,
-                                                cancel))
-                                            return std::nullopt;
-                                        if (render::coverageSolidRow(coverage, entry.pixel, layer))
-                                            return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
-                                                              "Subtitles coverage is invalid", {},
-                                                              operationSubject);
-                                        if (render::sourceOverLinearRec709SceneRow(layer,
-                                                                                   *row.value()))
-                                            return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
-                                                              "Subtitles layers do not composite",
-                                                              {}, operationSubject);
-                                    }
-                                    return std::nullopt;
-                                });
-                            if (outcome.cancelled || cancellation.isCancellationRequested()) {
-                                operationCancelled = true;
-                                return;
-                            }
-                            if (outcome.failure || outcome.incomplete) {
-                                operationFailure = rowPassFailure(outcome, operationSubject);
-                                return;
-                            }
-                            reportRowPassFinished(progress, operationIndex, data.extent().height());
-                            auto frozen = std::move(*builder.value()).freeze();
-                            if (!frozen) {
-                                operationFailure =
-                                    imageDiagnostic(*frozen.error(), operationSubject,
-                                                    "Subtitles image could not be published");
-                                return;
-                            }
-                            produced.emplace(std::move(*frozen.value()));
+                            drawFrameLayers(*subtitlesFrame, "Subtitles");
                         },
                         [&](const CompiledText& text) {
+                            // #757: a styled text draws its frame's background, outline and fill
+                            // layers, as Subtitles does.
+                            if (text.style) {
+                                drawFrameLayers(*subtitlesFrame, "Text");
+                                return;
+                            }
                             // A text source produces a full-frame image exactly like a solid, so
                             // the Layer Output stage transforms and fades it with the same
                             // primitive and the same five transform parameters. The difference is

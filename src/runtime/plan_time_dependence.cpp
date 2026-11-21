@@ -226,7 +226,17 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                            driven(step.drivenContent) ||
                            (parameter(step.layout.lineHeight) ||
                             parameter(step.layout.letterSpacing) ||
-                            driven(step.layout.drivenAlignment));
+                            driven(step.layout.drivenAlignment)) ||
+                           // #757: an animated accent, outline or background.
+                           (step.style &&
+                            (parameter(step.style->outlineWidth) ||
+                             parameter(step.style->outlineColor) ||
+                             parameter(step.style->backgroundColor) ||
+                             parameter(step.style->backgroundPadding) ||
+                             parameter(step.style->backgroundRadius) ||
+                             std::ranges::any_of(step.style->accents, [&](const auto& accent) {
+                                 return parameter(accent);
+                             })));
                 // A driven blend mode is consumed by the Layer Stack rather than by this step, but
                 // it is a property of the LAYER, so the layer's operation is what varies with time
                 // -- and the stack's own dependence already follows its inputs.
