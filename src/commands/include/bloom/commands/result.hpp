@@ -158,12 +158,15 @@ enum class CommandAction {
 
 // Who made an edit, so an agent can tell its own edits from the artist's. User is every edit made
 // in the application's own panels; Agent is an MCP client; Script is a Python or JSON script run
-// through a scripting session (the Script editor, bloom-cli, bloom.Host).
+// through a scripting session (the Script editor, bloom-cli, bloom.Host); Host is the application
+// acting on its own, such as the linked-file monitor reloading a subtitle file that changed (#752).
 enum class CommandOrigin : std::uint8_t {
     User,
     Agent,
     Script,
+    Host,
 };
+inline constexpr std::size_t kCommandOriginCount = 4;
 
 [[nodiscard]] constexpr std::string_view commandOriginName(const CommandOrigin origin) noexcept {
     switch (origin) {
@@ -173,6 +176,8 @@ enum class CommandOrigin : std::uint8_t {
         return "agent";
     case CommandOrigin::Script:
         return "script";
+    case CommandOrigin::Host:
+        return "host";
     }
     return "user";
 }

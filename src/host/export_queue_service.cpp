@@ -251,6 +251,36 @@ struct Pump final {
         }
     }
 
+    void collectLinkedSubtitleSample() {
+        if (!s.pendingLinkedSubtitles)
+            return;
+        auto result = s.pendingLinkedSubtitles->handle.tryTakeResult();
+        if (!result)
+            return;
+        if (result->state() == runtime::TaskState::Succeeded && result->value() && *result->value())
+            s.linkedSubtitles = {s.pendingLinkedSubtitles->key, **result->value()};
+        s.pendingLinkedSubtitles.reset();
+    }
+
+    // #752: the project's linked subtitle files are compared with their cues once per document
+    // revision (and on refresh), on a worker, so a job's preflight can warn that an export will
+    // render the cues saved in the project rather than the file's.
+    void scheduleLinkedSubtitleSample() {
+        if (s.gestureActive || s.pendingLinkedSubtitles ||
+            s.snapshot->project().exportJobs().empty())
+            return;
+        const detail::AudioSampleKey key{s.snapshot->revision().value(),
+                                         s.projectFolder.value_or(std::filesystem::path{})};
+        if (s.linkedSubtitles.key == key)
+            return;
+        auto handle = detail::submitLinkedSubtitleSample(
+            s.dependencies.scheduler, *s.snapshot, key.baseDirectory,
+            runtime::TaskOwner{runtime::TaskOwnerKind::Export,
+                               runtime::TaskOwnerId::fromRaw(s.serviceOwner)});
+        if (handle.isValid())
+            s.pendingLinkedSubtitles.emplace(key, std::move(handle));
+    }
+
     // #435: a composition whose job has an output that carries audio is sampled once per document
     // revision, on a worker, so availability can say before Start that a source is undecodable.
     void scheduleAudioSamples() {
@@ -288,8 +318,10 @@ struct Pump final {
             s.sampleKeys.clear();
             for (auto& [composition, verdict] : s.audioVerdicts)
                 verdict.key.reset();
+            s.linkedSubtitles.key.reset();
         }
         scheduleAudioSamples();
+        scheduleLinkedSubtitleSample();
         for (const auto& record : s.snapshot->project().exportJobs()) {
             const auto& job = s.jobs[record.id];
             if (isRunning(job.state))
@@ -993,6 +1025,7 @@ struct Pump final {
         readSession();
         collectSamples();
         collectAudioSamples();
+        collectLinkedSubtitleSample();
         syncJobs();
         advance();
         startNext();
@@ -1443,12 +1476,15 @@ void ExportQueueService::beginShutdown(const ExportStopCause cause) {
         pending.handle.cancel();
     for (auto& pending : s.pendingAudio)
         pending.handle.cancel();
+    if (s.pendingLinkedSubtitles)
+        s.pendingLinkedSubtitles->handle.cancel();
     pump();
 }
 
 bool ExportQueueService::quiescent() const noexcept {
     const auto& s = *state_;
-    if (s.active || !s.pendingSamples.empty() || !s.pendingAudio.empty())
+    if (s.active || !s.pendingSamples.empty() || !s.pendingAudio.empty() ||
+        s.pendingLinkedSubtitles)
         return false;
     for (const auto& [id, job] : s.jobs)
         if (job.runner || job.terminalEventPending)

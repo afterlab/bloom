@@ -8,6 +8,7 @@
 #include <bloom/runtime/input_color_context.hpp>
 
 #include <QCoreApplication>
+#include <QDir>
 #include <QStandardPaths>
 #include <QStringList>
 #include <QThread>
@@ -64,7 +65,7 @@ struct RecoveryScanState final {
 };
 
 ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
-    : QObject(parent), scheduler_(scheduler) {
+    : QObject(parent), scheduler_(scheduler), linkedSubtitles_(scheduler) {
     auto publicationResult = host::PublicationCoordinator::create();
     if (!publicationResult.has_value()) {
         throw std::runtime_error("Bloom could not create the publication coordinator");
@@ -149,6 +150,15 @@ ProjectHost::ProjectHost(runtime::TaskScheduler& scheduler, QObject* parent)
     pollTimer_.setTimerType(Qt::PreciseTimer);
     connect(&pollTimer_, &QTimer::timeout, this, &ProjectHost::poll);
 
+    // Linked subtitle files (#752): a check about once a second. The files are read on a
+    // blocking-I/O task; this thread only snapshots the project and applies finished reloads. A
+    // replaced session drops what was seen and cancels the checks in flight.
+    linkedSubtitleTimer_.setSingleShot(false);
+    linkedSubtitleTimer_.setInterval(1000);
+    connect(&linkedSubtitleTimer_, &QTimer::timeout, this, &ProjectHost::pollLinkedSubtitleFiles);
+    connect(this, &ProjectHost::sessionReplaced, this, [this] { linkedSubtitles_.cancel(); });
+    linkedSubtitleTimer_.start();
+
     // Repeating, not single-shot: the recovery write is a cadence, not a response to an event.
     // Started unconditionally -- a tick on a clean session costs one dirty-state read and retires
     // only a file written by this host, never one found from a previous or concurrent launch.
@@ -224,6 +234,8 @@ bool ProjectHost::pumpExportShutdown() {
 }
 
 ProjectHost::~ProjectHost() {
+    linkedSubtitleTimer_.stop();
+    linkedSubtitles_.cancel();
     if (recoveryTaskState_) {
         recoveryTaskState_->cancelled.store(true, std::memory_order_release);
     }
@@ -1123,6 +1135,50 @@ void ProjectHost::replaceWithNewProject() {
     retainedArchive_.reset();
     emit sessionReplaced();
     emit dirtyStateChanged();
+}
+
+void ProjectHost::pollLinkedSubtitleFiles() {
+    if (!session_.has_value())
+        return;
+    const auto state = session_->stateSnapshot();
+    if (state.contentKind != host::ProjectSessionContentKind::DecodedDocument ||
+        state.editability != host::DecodedProjectEditability::Editable)
+        return;
+    const auto decoded = session_->decodedSnapshot();
+    if (!decoded)
+        return;
+    // Relative locators resolve against the project's folder, as assets do.
+    const auto base = state.displayPath ? state.displayPath->value().parent_path()
+                                        : std::filesystem::path(QDir::currentPath().toStdU16String());
+    linkedSubtitles_.poll(decoded.snapshot().project(), base);
+
+    for (const auto& event : linkedSubtitles_.takeEvents()) {
+        const auto file = QString::fromStdU16String(event.path.filename().u16string());
+        switch (event.kind) {
+        case host::LinkedFileEvent::Kind::Reload: {
+            const auto applied = host::applyReload(*session_, event);
+            if (!applied.changed())
+                break;
+            auto message = tr("Reloaded subtitles from %1: %2 cues")
+                               .arg(file)
+                               .arg(event.cues.cues.size());
+            if (!event.warnings.empty())
+                message += tr(" (%1 warnings)").arg(event.warnings.size());
+            emit dirtyStateChanged();
+            emit linkedSubtitleNotice(message);
+            break;
+        }
+        case host::LinkedFileEvent::Kind::Failed:
+            emit linkedSubtitleNotice(tr("Could not reload %1: %2 The cues are unchanged.")
+                                          .arg(file, QString::fromStdString(event.message)));
+            break;
+        case host::LinkedFileEvent::Kind::Missing:
+            emit linkedSubtitleNotice(
+                tr("The subtitle file %1 is missing; the cues saved in the project are kept.")
+                    .arg(file));
+            break;
+        }
+    }
 }
 
 void ProjectHost::poll() {

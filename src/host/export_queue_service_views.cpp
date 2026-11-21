@@ -153,6 +153,33 @@ submitAudioSourceSample(runtime::TaskScheduler& scheduler,
     return std::move(submission.handle);
 }
 
+runtime::TaskHandle<std::shared_ptr<const std::vector<LinkedFileWarning>>>
+submitLinkedSubtitleSample(runtime::TaskScheduler& scheduler, document::Snapshot snapshot,
+                           std::filesystem::path baseDirectory, const runtime::TaskOwner owner) {
+    runtime::TaskRequest request("Check export subtitle files", owner,
+                                 runtime::TaskPriority::Foreground,
+                                 runtime::TaskExecutor::BlockingIo);
+    auto submission = scheduler.submit<std::shared_ptr<const std::vector<LinkedFileWarning>>>(
+        std::move(request),
+        [snapshot = std::move(snapshot),
+         baseDirectory = std::move(baseDirectory)](runtime::TaskContext& context) {
+            using Result = runtime::TaskResult<std::shared_ptr<const std::vector<LinkedFileWarning>>>;
+            if (context.isCancellationRequested())
+                return Result::cancelled();
+            std::vector<LinkedFileWarning> warnings;
+            for (const auto& linked : linkedCueLists(snapshot.project(), baseDirectory)) {
+                if (context.isCancellationRequested())
+                    return Result::cancelled();
+                // The file read is bounded by the reader's size limit; a cancel lands between files.
+                if (auto warning = linkedFileWarning(linked, linkedFileState(linked)))
+                    warnings.push_back(std::move(*warning));
+            }
+            return Result::succeeded(
+                std::make_shared<const std::vector<LinkedFileWarning>>(std::move(warnings)));
+        });
+    return std::move(submission.handle);
+}
+
 std::optional<std::uint64_t> estimateBytes(const document::ExportOutputSettings& settings,
                                            const document::Composition& composition,
                                            const ExportResolvedRange& range) {
@@ -374,6 +401,12 @@ std::shared_ptr<ExportQueueSnapshot> buildSnapshot(ExportQueueService::State& st
             refuseStart(no(ExportUnavailableCode::CompositionMissing,
                            "The job's composition no longer exists"));
         view.preflight = jobPreflightFor(state, record);
+        // #752: linked subtitle files that moved on; a warning, never a refusal.
+        for (const auto& warning : state.linkedSubtitles.warnings)
+            if (warning.composition == record.composition)
+                view.preflight.push_back({ExportPreflightCode::LinkedSubtitleFileChanged,
+                                          ExportPreflightTarget::Composition,
+                                          ExportPreflightSeverity::Warning, warning.message});
         if (const auto verdict = state.audioVerdicts.find(record.composition);
             verdict != state.audioVerdicts.end())
             view.audioSourceRefusal = verdict->second.refusal;

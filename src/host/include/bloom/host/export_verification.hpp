@@ -272,6 +272,11 @@ enum class ExportPreflightCode : std::uint8_t {
     // The composition mixes an audio source the export audio path cannot decode and this output
     // carries audio (target Audio). Sampled on a worker, never on the caller's thread (#435).
     AudioSourceUnsupported = 12,
+    // #752: a Subtitles node of the job's composition follows a file that changed, is missing or
+    // cannot be read (target Composition, severity Warning: never blocks). The export renders the
+    // cues saved in the project; it never reloads. Sampled on a worker, never on the caller's
+    // thread. The reason is the bloom.subtitles.linked-file-changed warning's message.
+    LinkedSubtitleFileChanged = 13,
 };
 
 // Which part of the job or output an issue is about, so the panel can mark the right field.

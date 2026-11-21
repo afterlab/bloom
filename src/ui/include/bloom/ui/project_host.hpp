@@ -4,6 +4,7 @@
 #include <bloom/document/ids.hpp>
 #include <bloom/host/copy_async_io.hpp>
 #include <bloom/host/export_queue.hpp>
+#include <bloom/host/linked_subtitle_files.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/save_failure_description.hpp>
@@ -364,8 +365,14 @@ class ProjectHost final : public QObject {
                       bloom::ui::ProjectHostOperationOrigin origin);
     void recoveryScanActivityChanged(bool active);
     void recoveryDiagnostic(QString message);
+    // A linked subtitle file was reloaded, could not be, or is missing (#752); a status-bar
+    // message. A reload is also one undoable "Reload Subtitles" edit with host origin.
+    void linkedSubtitleNotice(QString message);
 
   private:
+    // About once a second: hands the live project to the linked-subtitle monitor (which reads the
+    // files on a worker), then applies the reloads it finished through the command path.
+    void pollLinkedSubtitleFiles();
     void poll();
     void scheduleNextPoll();
     void setActivity(ProjectHostActivity activity);
@@ -440,6 +447,8 @@ class ProjectHost final : public QObject {
                  host::AsyncCopyPublication>
         inFlight_;
     QTimer pollTimer_;
+    QTimer linkedSubtitleTimer_;
+    host::LinkedFileMonitor linkedSubtitles_;
     QTimer recoveryTimer_;
     QTimer recoveryWorkPollTimer_;
     QTimer recoveryScanPollTimer_;

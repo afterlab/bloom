@@ -206,7 +206,7 @@ McpEventSummary summarizeEvents(const McpServerCore::State& core, Json& out, yyj
     Range project;
     std::map<std::uint64_t, Range> compositions;
     std::map<std::string_view, std::size_t> kinds;
-    std::array<std::size_t, 3> origins{};
+    std::array<std::size_t, commands::kCommandOriginCount> origins{};
     const auto start =
         events.empty() || after < events.front().first ? 0 : after + 1 - events.front().first;
     for (auto index = static_cast<std::size_t>(start); index < events.size(); ++index) {
@@ -254,9 +254,9 @@ McpEventSummary summarizeEvents(const McpServerCore::State& core, Json& out, yyj
         out.set(kindCounts, kind, out.number(count));
     out.set(into, "kinds", kindCounts);
     auto* originCounts = out.object();
-    constexpr std::array<commands::CommandOrigin, 3> originOrder{commands::CommandOrigin::User,
-                                                                 commands::CommandOrigin::Agent,
-                                                                 commands::CommandOrigin::Script};
+    constexpr std::array<commands::CommandOrigin, commands::kCommandOriginCount> originOrder{
+        commands::CommandOrigin::User, commands::CommandOrigin::Agent,
+        commands::CommandOrigin::Script, commands::CommandOrigin::Host};
     for (const auto origin : originOrder)
         if (const auto count = origins.at(static_cast<std::size_t>(origin)); count != 0)
             out.set(originCounts, commands::commandOriginName(origin), out.number(count));

@@ -164,6 +164,9 @@ MainWindow::MainWindow(const EditorRegistry& editorRegistry, CompositionSession&
     }
 
     connect(&projectHost_, &ProjectHost::dirtyStateChanged, this, &MainWindow::updateWindowTitle);
+    // A linked subtitle file reloaded, failed or went missing (#752).
+    connect(&projectHost_, &ProjectHost::linkedSubtitleNotice, this,
+            [this](const QString& message) { statusStrip_->showTransientMessage(message); });
     connect(&projectHost_, &ProjectHost::sessionReplaced, this, &MainWindow::updateWindowTitle);
     connect(&projectHost_, &ProjectHost::activityChanged, this, &MainWindow::updateFileActions);
     connect(&projectHost_, &ProjectHost::recoveryScanActivityChanged, this,

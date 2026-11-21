@@ -19,6 +19,7 @@ target_sources(
         frame_range_runner.cpp
         gpu_export_provider.cpp
         layer_alignment.cpp
+        linked_subtitle_files.cpp
         sequence_export_runner.cpp
         export_capacity_wait.cpp
         output_analysis_attempt_runner.cpp
@@ -52,6 +53,7 @@ target_sources(
             include/bloom/host/gpu_export_provider.hpp
             include/bloom/host/gpu_export_tool_package.hpp
             include/bloom/host/layer_alignment.hpp
+            include/bloom/host/linked_subtitle_files.hpp
             include/bloom/host/sequence_export_runner.hpp
             include/bloom/host/output_analysis_attempt_runner.hpp
             include/bloom/host/project_color_choice.hpp
@@ -110,7 +112,7 @@ target_compile_features(bloom_host PUBLIC cxx_std_20)
 # tools/quality/repository_checks/repository_checks.cpp's kAllowedModuleDependencies allowlist.
 target_link_libraries(bloom_host PUBLIC bloom_color bloom_color_ocio bloom_commands bloom_core
                                         bloom_document bloom_output bloom_project bloom_platform
-                                        bloom_runtime)
+                                        bloom_runtime bloom_subtitles)
 bloom_enable_warnings(bloom_host)
 
 if(BUILD_TESTING)
@@ -140,6 +142,18 @@ if(BUILD_TESTING)
         NAME bloom.host.publication-coordinator
         COMMAND bloom_host_publication_coordinator_test
         LABELS unit host project
+    )
+
+    add_executable(bloom_host_linked_subtitle_files_test tests/linked_subtitle_files_tests.cpp)
+    target_link_libraries(bloom_host_linked_subtitle_files_test PRIVATE bloom_host)
+    target_include_directories(bloom_host_linked_subtitle_files_test
+                               PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    bloom_enable_warnings(bloom_host_linked_subtitle_files_test)
+    bloom_add_test(
+        NAME bloom.host.linked-subtitle-files
+        COMMAND bloom_host_linked_subtitle_files_test
+        LABELS host unit
+        TIMEOUT 60
     )
 
     add_executable(bloom_host_project_session_test tests/project_session_tests.cpp)

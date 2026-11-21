@@ -6,6 +6,7 @@
 #include <bloom/commands/asset_operations.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_queue.hpp>
+#include <bloom/host/linked_subtitle_files.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 
@@ -123,6 +124,19 @@ struct PendingAudioSample final {
     runtime::TaskHandle<std::shared_ptr<const ExportAudioSourceSample>> handle;
 };
 
+// #752: the linked subtitle files of the project that no longer match their cues, sampled on a
+// worker once per document revision (and again on refreshPreflight()). The last answer stays shown
+// while a newer sample is in flight.
+struct LinkedSubtitleVerdict final {
+    std::optional<AudioSampleKey> key;
+    std::vector<LinkedFileWarning> warnings;
+};
+
+struct PendingLinkedSubtitles final {
+    AudioSampleKey key;
+    runtime::TaskHandle<std::shared_ptr<const std::vector<LinkedFileWarning>>> handle;
+};
+
 struct PendingSample final {
     ExportOutputId output;
     SampleKey key;
@@ -179,6 +193,8 @@ struct ExportQueueService::State {
     // Source-aware audio facts per composition (#435), sampled on a worker.
     std::map<document::CompositionId, detail::AudioVerdict> audioVerdicts;
     std::vector<detail::PendingAudioSample> pendingAudio;
+    detail::LinkedSubtitleVerdict linkedSubtitles;
+    std::optional<detail::PendingLinkedSubtitles> pendingLinkedSubtitles;
     std::map<ExportOutputId, core::Sha256Digest> confirmations;
     // Fingerprints of destinations this session itself published, per output.
     std::map<ExportOutputId, core::Sha256Digest> ownPublications;
@@ -210,6 +226,10 @@ submitAudioSourceSample(runtime::TaskScheduler& scheduler,
                         const runtime::SnapshotCompiler& compiler, document::Snapshot snapshot,
                         document::CompositionId composition,
                         std::filesystem::path baseDirectory, runtime::TaskOwner owner);
+
+[[nodiscard]] runtime::TaskHandle<std::shared_ptr<const std::vector<LinkedFileWarning>>>
+submitLinkedSubtitleSample(runtime::TaskScheduler& scheduler, document::Snapshot snapshot,
+                           std::filesystem::path baseDirectory, runtime::TaskOwner owner);
 
 // Builds the published snapshot from owner-thread state. Pure apart from reading the catalogue's
 // in-memory snapshot.
