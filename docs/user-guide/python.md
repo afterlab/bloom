@@ -258,6 +258,44 @@ records (`bloom.data.layers(composition)`) also carry `entry_layer`, `layer_kind
 (an entry layer's slot; its `node_id` is then the Merge), `pivot`, `entries` (`[{merge, slot}]`),
 `shared`, `adjustment`, `parameters` and `values`.
 
+### Subtitles
+
+A Subtitles layer draws a list of timed cues ([Subtitles](../architecture/subtitles.md) is the
+specification). Its operations are under `bloom.ops.subtitles` (`set_cues`, `insert_cue`,
+`edit_cue`, `remove_cues`, `shift_cues`, `scale_cues`, `load`, `reload`, `unlink`, `write_file`),
+and `bloom.ops.layer.add_subtitles` adds the layer.
+
+```python
+from fractions import Fraction
+
+added = bloom.ops.layer.add_subtitles(composition=1, cues=[
+    {"start": "00:00:01.000", "end": "00:00:03.500", "text": "Hello."},
+    {"start": Fraction(7, 2), "end": 120, "text": "<i>Second</i> cue", "speaker": "Ana"},
+])
+node = next(o["id"] for o in added["outputs"] if o["name"] == "subtitlesNode")
+bloom.ops.subtitles.edit_cue(node, cue=1, end=2.75)            # seconds
+bloom.ops.subtitles.shift_cues(node, by="-00:00:00.250")
+page = bloom.data.subtitles(node, composition=1, from_=0, to=48, page_size=32)
+srt = bloom.data.subtitles(node, composition=1, format="srt")["text"]
+bloom.ops.subtitles.write_file(node, "/abs/out.vtt", "vtt", overwrite=True)
+```
+
+A cue is a mapping `{id?, start, end, text, speaker?, style?, placement?}`, and its members may be
+written in snake_case (`position_x` in a placement reads as `positionX`). A cue time is a whole
+frame, a `Fraction`, a float or a `(numerator, denominator)` pair of seconds, or a timestamp
+`"HH:MM:SS.mmm"` or `"HH:MM:SS,mmm"`; the end is exclusive. `bloom.ops.layer.add_subtitles` and
+`bloom.ops.subtitles.load` also take a `file` (SRT, WebVTT, TTML or ASS) or pasted `text`, with
+`link=True` to follow the file: the app reloads a changed file as one undo step, and every edit
+except `load`, `reload` and `unlink` refuses a linked list. A list over a limit raises
+`OperationError`, whose diagnostic carries `limit` `{name, value, actual}` (`subtitleCues`
+50,000, `subtitleCueTextBytes` 4,096, `subtitleFileBytes` 16 MiB, `subtitleStyles` 256).
+
+`bloom.data.subtitles(node=None, *, composition=None, at=None, from_=None, to=None, page_size=None,
+cursor=None, format=None)` returns what MCP `query kind:"subtitles"` returns, in snake_case: without
+`node`, the composition's Subtitles nodes; with it, the list's `count`, `language`, `provenance`,
+`linked_file` (`"none"`, `"in-sync"`, `"changed"`, `"missing"` or `"unreadable"`), `styles`, a page
+of `cues` and `next_cursor`. `format="srt"` or `"vtt"` returns the whole list as `text`.
+
 ## Transactions and undo
 
 ```python

@@ -61,6 +61,20 @@ headless session has no selection, so name the `layers`:
 They measure the layers with the CPU reference evaluation before the step runs; see
 [Scripting Bloom with Python](python.md#align-and-distribute).
 
+Subtitles ([Subtitles](../architecture/subtitles.md)) work in `run` scripts too. A cue time also
+takes a timestamp `"HH:MM:SS.mmm"` or `"HH:MM:SS,mmm"`, and a large list can be loaded from a file:
+
+```json
+[{"op": "bloom.layer.add-subtitles", "args": {"file": "/abs/dialogue.srt", "link": true}},
+ {"op": "bloom.subtitles.write-file",
+  "args": {"node": 5, "path": "/abs/dialogue.vtt", "format": "vtt", "overwrite": true}}]
+```
+
+Here `5` stands for the `subtitlesNode` id the first step outputs. A step over a subtitle limit fails before anything applies, and the error line names the limit,
+its value and the actual amount, for example `(limit subtitleCues 50000, actual 50001)`. `render`
+never reloads a linked subtitle file. A file that changed, is missing or cannot be read prints
+`warning[bloom.subtitles.linked-file-changed]`, and the render uses the cues saved in the project.
+
 `render` selects the first composition when no project is supplied. Output keeps alpha; the composition background colour is display-only and is not rendered. A frame writes `frame.png` or
 `frame.exr`; a range writes zero-padded `frame.XXXX` sequence files. The command prints the output
 preservation report and only exits successfully after publication completes. A file that already

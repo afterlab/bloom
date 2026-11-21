@@ -45,6 +45,7 @@ Bloom is in alpha. Download the latest alpha from the
    [`architecture/workspace-layout.md`](architecture/workspace-layout.md),
    [`architecture/project-format.md`](architecture/project-format.md),
    [`architecture/fonts.md`](architecture/fonts.md),
+   [`architecture/subtitles.md`](architecture/subtitles.md),
    [`architecture/project-session.md`](architecture/project-session.md),
    [`architecture/color-management.md`](architecture/color-management.md),
    [`architecture/frame-output.md`](architecture/frame-output.md),
