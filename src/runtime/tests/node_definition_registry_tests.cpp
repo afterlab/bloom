@@ -972,7 +972,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
                         "Text is a lowered capability with its own compiled operation");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 12 &&
+        text != nullptr && text->parameters.size() == 24 &&
             text->parameters[0].role == document::kTextParameterRole &&
             text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
             text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
@@ -988,7 +988,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !text->parameters[6].required && !text->parameters[6].supportsAnimation,
         "the text schema includes a defaulted, non-animatable font reference");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 12 &&
+        text != nullptr && text->parameters.size() == 24 &&
             text->parameters[1].defaultValue ==
                 document::ParameterValue{document::kDefaultTextSizePixels} &&
             text->parameters[2].defaultValue ==
@@ -996,6 +996,17 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             text->parameters[6].defaultValue ==
                 document::ParameterValue{document::encodeFontId(document::defaultFontId())},
         "a new text layer defaults to 72 px opaque white and a DejaVu Sans reference");
+    // #757: twelve optional styling parameters follow the twelve layout ones, so a node saved
+    // without them still validates and draws as before.
+    expectations.expect(
+        text != nullptr && text->parameters.size() == 24 &&
+            std::ranges::none_of(std::span(text->parameters).subspan(12),
+                                 [](const auto& parameter) { return parameter.required; }) &&
+            text->parameters[12].role == "accent1" && text->parameters[21].role == "markup" &&
+            text->parameters[21].defaultValue == document::ParameterValue{false} &&
+            text->parameters[17].role == "outlineWidth" &&
+            text->parameters[17].defaultValue == document::ParameterValue{0.0},
+        "the text styling parameters are optional and default to plain text");
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
@@ -1015,7 +1026,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !layer->parameters[7].required && !layer->parameters[8].supportsAnimation &&
             !layer->parameters[8].required && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
-            text->parameters.size() == 12 && !text->parameters[0].supportsAnimation &&
+            text->parameters.size() == 24 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
         "animation support is an explicit per-parameter evaluator capability");
     const auto declarationMatchesSchema = [](const auto& definition) {

@@ -17,6 +17,7 @@
 #include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
@@ -584,6 +585,28 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #752 Subtitles: every parameter within its document domain.
     if (isSubtitlesSchemaKey(schemaKey))
         return isSubtitlesParameterValueValid(schemaKey, constant.value);
+    // #757 Text Source styling: every parameter within its document domain.
+    if (const auto* styling = textStylingParameterSpec(schemaKey)) {
+        switch (styling->kind) {
+        case TextStylingParameterKind::Color: {
+            const auto* color = std::get_if<bloom::core::Color4d>(&constant.value);
+            return color != nullptr && color->isValid();
+        }
+        case TextStylingParameterKind::Scalar: {
+            const auto* number = std::get_if<double>(&constant.value);
+            return number != nullptr && std::isfinite(*number) && *number >= styling->minimum &&
+                   *number <= styling->maximum;
+        }
+        case TextStylingParameterKind::Choice: {
+            const auto* number = std::get_if<std::int64_t>(&constant.value);
+            return number != nullptr && static_cast<double>(*number) >= styling->minimum &&
+                   static_cast<double>(*number) <= styling->maximum;
+        }
+        case TextStylingParameterKind::Boolean:
+            return std::holds_alternative<bool>(constant.value);
+        }
+        return false;
+    }
     // Four-Color Gradient: every parameter within its document domain.
     if (schemaKey.starts_with("bloom.four-color-gradient."))
         return isFourColorGradientParameterValueValid(schemaKey, constant.value);
@@ -813,6 +836,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isWarpConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isSubtitlesConstantSchemaKey(schemaKey) ||
+         bloom::document::isTextStylingConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isImagePixelConstantSchemaKey(schemaKey) ||
@@ -913,10 +937,9 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            // #591: a Coordinate Space turns.
            schemaKey == kSpaceRotationParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.opacity" || schemaKey == "bloom.blur.radius-y" ||
-           isFourColorGradientScalarSchemaKey(schemaKey) ||
-           schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||
-           schemaKey == "bloom.blur.blue-scale" || schemaKey == "bloom.blur.alpha-scale" ||
-           schemaKey == "bloom.luma-key.low" ||
+           isFourColorGradientScalarSchemaKey(schemaKey) || schemaKey == "bloom.blur.red-scale" ||
+           schemaKey == "bloom.blur.green-scale" || schemaKey == "bloom.blur.blue-scale" ||
+           schemaKey == "bloom.blur.alpha-scale" || schemaKey == "bloom.luma-key.low" ||
            schemaKey == "bloom.luma-key.high" || isLevelsValueSchemaKey(schemaKey) ||
            schemaKey == kHueSaturationHueSchemaKey ||
            schemaKey == kHueSaturationSaturationSchemaKey ||
@@ -928,15 +951,15 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isAutoExposureScalarSchemaKey(schemaKey) || isAudioEffectScalarSchemaKey(schemaKey) ||
            isLensDistortionScalarSchemaKey(schemaKey) ||
            isChromaticAberrationScalarSchemaKey(schemaKey) ||
-           isLightRaysScalarSchemaKey(schemaKey) ||
-           isRollingShutterScalarSchemaKey(schemaKey) || isWarpScalarSchemaKey(schemaKey) ||
-           sharpenParameterSpec(schemaKey) != nullptr ||
+           isLightRaysScalarSchemaKey(schemaKey) || isRollingShutterScalarSchemaKey(schemaKey) ||
+           isWarpScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            schemaKey == kDenoiseRadiusSchemaKey || schemaKey == kDenoiseStrengthSchemaKey ||
            isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
            isColorCleanupScalarSchemaKey(schemaKey) ||
            isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Scalar) ||
-           schemaKey == kLayerMaskFeatherSchemaKey ||
-           schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
+           isTextStylingAnimatableSchemaKey(schemaKey, TextStylingParameterKind::Scalar) ||
+           schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
+           schemaKey == kLayerMaskOpacitySchemaKey;
 }
 
 bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -947,7 +970,8 @@ bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
            isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey) ||
            isFourColorGradientColorSchemaKey(schemaKey) ||
-           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Color);
+           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Color) ||
+           isTextStylingAnimatableSchemaKey(schemaKey, TextStylingParameterKind::Color);
 }
 
 bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -1081,6 +1105,8 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return value > 0.0;
     if (isSubtitlesSchemaKey(schemaKey))
         return isSubtitlesScalarWithinDomain(schemaKey, value);
+    if (isTextStylingSchemaKey(schemaKey))
+        return isTextStylingScalarWithinDomain(schemaKey, value);
     if (hasUnitDomainSchemaKey(schemaKey)) {
         return value >= 0.0 && value <= 1.0;
     }

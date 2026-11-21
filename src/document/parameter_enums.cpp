@@ -15,6 +15,7 @@
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -265,6 +266,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         for (std::size_t index = 0; index < subtitles->choices.size(); ++index)
             options.push_back({std::string(subtitles->choices[index]),
                                static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #757 Text Source styling.
+    if (const auto* styling = textStylingParameterSpec(schemaKey);
+        styling != nullptr && styling->kind == TextStylingParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < styling->choices.size(); ++index)
+            options.push_back(
+                {std::string(styling->choices[index]), static_cast<std::int64_t>(index)});
         return options;
     }
     // #587 Test Card.

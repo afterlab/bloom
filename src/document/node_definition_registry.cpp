@@ -16,6 +16,7 @@
 #include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
@@ -159,6 +160,24 @@ template <typename Definition>
            definition.parameters[index].valueKind == valueKind &&
            definition.parameters[index].required == required &&
            definition.parameters[index].supportsAnimation == supportsAnimation;
+}
+
+// #757: the Text Source styling parameters, in the table's order after the twelve layout ones.
+[[nodiscard]] bool hasTextStylingParameters(const NodeDefinition& definition) noexcept {
+    const auto specs = bloom::document::textStylingParameters();
+    if (definition.parameters.size() != 12 + specs.size())
+        return false;
+    for (std::size_t index = 0; index < specs.size(); ++index) {
+        const auto& declared = definition.parameters[12 + index];
+        const auto& spec = specs[index];
+        if (declared.role != spec.role || declared.required ||
+            declared.supportsAnimation != spec.animatable ||
+            declared.schemaKey.size() != 11 + spec.role.size() ||
+            !std::string_view(declared.schemaKey).starts_with("bloom.text.") ||
+            !std::string_view(declared.schemaKey).ends_with(spec.role))
+            return false;
+    }
+    return true;
 }
 
 [[nodiscard]] bool hasCanonicalKey(const NodeDefinition& definition, const std::string_view typeId,
@@ -963,7 +982,7 @@ template <typename Definition>
         // at the binding boundary so a pre-FONT-1 text node can still lower to its old default.
         return hasCanonicalKey(definition, kTextSourceNodeType, kTextSourceNodeSchemaVersion) &&
                hasImageOutput(definition, kTextSourceOutputPort) &&
-               (definition.parameters.size() == 12 &&
+               (definition.parameters.size() == 12 + textStylingParameters().size() &&
                 hasParameter(definition, 3, kTextAlignmentParameterRole,
                              kTextAlignmentParameterSchemaKey, ParameterValueKind::Integer) &&
                 hasParameter(definition, 4, kTextLineHeightParameterRole,
@@ -996,7 +1015,9 @@ template <typename Definition>
                hasParameter(definition, 2, kTextColorParameterRole, kTextColorParameterSchemaKey,
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kTextColorParameterSchemaKey)) &&
-               hasParameterSockets(definition, 0) && !definition.layerSlotInput.has_value();
+               hasTextStylingParameters(definition) &&
+               hasParameterSockets(definition, 0, 12 + text_styling_parameters::kSocketedCount) &&
+               !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
         // Parameter ORDER is the authoring order the properties grid, the node card, and the
         // timeline all read: where the layer sits, the point it turns about, how big it is, how far
@@ -1764,6 +1785,27 @@ template <typename Definition>
     definition.parameters.push_back({std::string(kTextOverflowParameterRole),
                                      std::string(kTextOverflowParameterSchemaKey),
                                      ParameterValueKind::Integer, false, false, std::int64_t{0}});
+    // #757: the styling parameters (text_styling.hpp), optional so a node saved before them draws
+    // as it did. The animatable ones carry a socket; Markup, Outline join and Background close the
+    // list as constants.
+    for (const auto& spec : textStylingParameters()) {
+        using Kind = TextStylingParameterKind;
+        const auto valueKind = spec.kind == Kind::Color    ? ParameterValueKind::Color4d
+                               : spec.kind == Kind::Scalar ? ParameterValueKind::Float64
+                               : spec.kind == Kind::Choice ? ParameterValueKind::Integer
+                                                           : ParameterValueKind::Boolean;
+        ParameterValue value = spec.kind == Kind::Color    ? ParameterValue{spec.color}
+                               : spec.kind == Kind::Scalar ? ParameterValue{spec.value}
+                               : spec.kind == Kind::Choice
+                                   ? ParameterValue{static_cast<std::int64_t>(spec.value)}
+                                   : ParameterValue{spec.value != 0.0};
+        if (spec.animatable)
+            definition.inputs.push_back(
+                {std::string(spec.role), *socketKindForParameterValueKind(valueKind), false});
+        definition.parameters.push_back({std::string(spec.role),
+                                         "bloom.text." + std::string(spec.role), valueKind, false,
+                                         spec.animatable, std::move(value)});
+    }
     return definition;
 }
 
