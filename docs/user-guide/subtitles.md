@@ -80,3 +80,6 @@ render says when and which cues: "At 00:00:04.000 17 cues show at once (cues 3, 
 may". A cue holds at most 4,096 bytes of text.
 
 The picture is the same in the Viewer, in every export and at a reduced render scale. Frames inside one cue reuse one rendered result, so a long cue costs one frame of work.
+
+Scaling or rotating the Subtitles layer redraws the captions at the new size and angle, so they stay
+as sharp as unscaled captions instead of being enlarged as a picture.

@@ -704,8 +704,10 @@ the Subtitles budget reads.
 
 A Subtitles frame is path coverage: box rectangles, glyph outlines stroked at twice the outline
 width (Center, Round), and glyph fills, each a `PathRaster` folded source-over in that order; see
-[subtitles.md](subtitles.md), "Rendering". The CPU reference and the GPU share the geometry, so
-parity is the path coverage parity below.
+[subtitles.md](subtitles.md), "Rendering". The node is a vector leaf like Text: a transformed layer
+redraws those paths through its matrix (the affine vector coverage below), and the integer grid or
+an image reader takes the frame's own coverage image. The CPU reference and the GPU share the
+geometry, so parity is the path coverage parity below.
 
 ### Path coverage
 

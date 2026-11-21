@@ -285,23 +285,33 @@ in stack order, its layers:
    and caps, so its outer half shows around the fill;
 3. the fill: one layer per paint, in the order the paints first appear.
 
-Each layer is path geometry for the reference path coverage (`render::PathRaster`, 4x4 samples) at
-the request's proxy scale. Its pixel is the premultiplied color times Opacity times the cue's fade.
-This is the audited `prep.parameter.resolution` and `prep.font.shaping` host work; no pixel is made
-here.
+Each layer keeps its author-space paths and stroke, and their reference path coverage
+(`render::PathRaster`, 4x4 samples) at the request's proxy scale. Its pixel is the premultiplied
+color times Opacity times the cue's fade. This is the audited `prep.parameter.resolution` and
+`prep.font.shaping` host work; no pixel is made here.
 
-- **The CPU reference** fills each layer's coverage rows and folds the layers source-over in that
-  order over transparent.
-- **The GPU** emits one coverage command per layer, its bounded `PathRasterCoverageGeometry`
-  rasterized on the device, and one source-over merge folding them in the same order. The merge is
-  the node's image, read by a Layer Output, an effect or a Merge like any image. There is no
-  per-node readback and no host pixel mask.
+The node is a **vector leaf**, as Text is: the Layer Output that carries it draws it.
 
-The node's image covers only the ink window of its layers, clipped to the frame. Its content bounds
-are the composition frame, so a default layer places it exactly and the Layer transform moves every
-cue together. A frame with no active cue, a muted node or Burn in off publishes no image. A layer
-transform resamples the image, as it resamples any image; the subtitles are not redrawn as vectors
-through the layer's matrix.
+- **Through a layer transform** (a scale, a rotation, a fractional move, a parent, or an identity
+  effect between the node and its layer) the Layer Output redraws every layer's paths through the
+  full composed matrix at the proxy scales (`PathRaster::transformed`, strokes built in author units
+  and then mapped), over the layer's window, and folds them source-over in order before the layer's
+  opacity. A scaled or rotated layer therefore stays as crisp as an unscaled one; it is never a
+  resample of the node's image. On the CPU this is the Layer Output's vector arm; on the GPU it is
+  one coverage command per layer (its bounded `PathRasterCoverageGeometry` rasterized on the
+  device), one source-over merge, and one opacity pass when the opacity is not 1 (a single layer
+  carries the opacity in its own command).
+- **On the integer grid** (identity scale and rotation, a whole-pixel move, no parent) and **where
+  an image effect or a Merge reads the node as an image**, the node is its own image: each layer's
+  coverage over the cues' ink window at the frame, folded source-over in order over transparent. The
+  CPU reference fills those rows; the GPU emits the same coverage commands over the ink window and
+  one merge, then the layer's exact integer move and opacity.
+
+There is no per-node readback and no host pixel mask on either path. The node's image covers only
+the ink window of its layers, clipped to the frame, and a transformed layer's window follows that
+window through its matrix. Its content bounds are the composition frame, so a default layer places
+it exactly and the Layer transform moves every cue together. A frame with no active cue, a muted
+node or Burn in off publishes no image and its layer draws nothing.
 
 **Fades.** A cue's alpha is the smaller of `(t - start) / fadeIn` and `(end - t) / fadeOut`, each
 clamped to 0 and 1, and 1 without fades.
@@ -315,7 +325,9 @@ box, an outline, two stacked cues) and the feature axes `feature.subtitles.box`,
 when shown, placement and fade alpha), the resolved styling, the settings, the faces, the list's
 styles, the frame, the safe areas and the proxy scales. It never holds the time or the cue ids, so
 every frame inside one cue reuses one result, on the CPU and on the GPU (a warm frame dispatches
-nothing). A frame in a fade, or a frame that shows other cues, is a new result.
+nothing). A frame in a fade, or a frame that shows other cues, is a new result. A transformed
+layer's redraw adds the composed matrix and its window to that content key, so it too is reused on
+every frame of a cue while the layer holds still.
 
 **Budgets.** A frame draws at most 16 cues at once and 8,192 glyphs. A frame past either fails, on
 every route, with a diagnostic naming the time and the cues: "At 00:00:04.000 17 cues show at once
