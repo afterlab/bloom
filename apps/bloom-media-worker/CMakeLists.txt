@@ -274,6 +274,17 @@ if(APPLE)
         add_executable(bloom_media_videotoolbox_export_test
                        tests/videotoolbox_export_tests.cpp)
         target_link_libraries(bloom_media_videotoolbox_export_test PRIVATE bloom_media_worker_host)
+        if(bloom_ffmpeg_worker)
+            # #752: the embedded subtitle tracks the system encoder writes, read back by FFmpeg.
+            target_compile_definitions(bloom_media_videotoolbox_export_test
+                                       PRIVATE BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
+            target_include_directories(bloom_media_videotoolbox_export_test
+                                       PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+            target_link_libraries(bloom_media_videotoolbox_export_test
+                                  PRIVATE bloom_media_ffmpeg_subtitle_tracks)
+            set_target_properties(bloom_media_videotoolbox_export_test PROPERTIES
+                                  BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+        endif()
         bloom_enable_warnings(bloom_media_videotoolbox_export_test)
         bloom_add_test(NAME bloom.media.videotoolbox-export
                        COMMAND bloom_media_videotoolbox_export_test LABELS unit media)

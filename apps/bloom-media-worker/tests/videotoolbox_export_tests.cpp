@@ -4,6 +4,14 @@
 // here at a single low-resolution frame instead of only in the running application.
 #include <bloom/media/provider/encode.hpp>
 #include <bloom/media/provider/encode_session.hpp>
+#include <bloom/media/provider/media_workers.hpp>
+
+#if defined(BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
+#include "ffmpeg_subtitle_tracks.hpp"
+
+#include <filesystem>
+#include <fstream>
+#endif
 
 #include <cstdio>
 #include <numeric>
@@ -116,12 +124,100 @@ void exportOnce(const char* codec, const char* profile, const bool audio) {
           std::string(codec) + " artifact digest matches QC");
     check(!session.close(), std::string(codec) + " worker shutdown acknowledged");
 }
+#if defined(BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
+// #752: embedded subtitle tracks written by AVAssetWriter (the system encoder is required, so the
+// FFmpeg worker cannot stand in), then read back by FFmpeg's demuxer here as on Linux and
+// Windows: the same tracks, languages and titles, cue frames and text, neither default nor forced.
+void exportSubtitles(const char* container) {
+    using namespace bloom::media;
+    const auto name = std::string("H.264 ") + container + " subtitles";
+    provider::EncodeSettingsV1 settings;
+    settings.container = container;
+    settings.videoCodec = "h264";
+    settings.profile = "high";
+    settings.width = 64;
+    settings.height = 48;
+    settings.rate = {24000, 1001};
+    settings.frames = 48;
+    provider::SubtitleTrackV1 english;
+    english.language = "eng";
+    english.title = "English";
+    english.cues = {{0, 12, "First line"},
+                    {12, 30, "Two lines\nof text, with \\n and {\\b1} as written"},
+                    {35, 47, "\xc3\x9cn\xc3\xafc\xc3\xb6d\xc3\xa9"}};
+    provider::SubtitleTrackV1 german;
+    german.language = "deu";
+    german.title = "Deutsch";
+    german.cues = {{5, 20, "Erste Zeile"}, {33, 48, "Zweite Zeile"}};
+    settings.subtitles = {english, german};
+    provider::EncodeSessionOptionsV1 options;
+    options.platformEncoder = provider::PlatformEncoderV1::Required;
+    provider::EncodeSessionV1 session(std::move(options));
+    if (const auto error = session.begin(settings)) {
+        check(false, name + " begin: " + error->detail);
+        return;
+    }
+    check(session.provenance().provider == provider::nativeMediaProviderId(),
+          name + " is written by the system encoder: " + session.provenance().diagnostic());
+    for (std::uint64_t index = 0; index < settings.frames; ++index) {
+        auto frame = makeFrame(settings.width, settings.height, index);
+        const auto numerator = static_cast<std::int64_t>(index) * settings.rate.denominator;
+        const auto divisor = std::gcd(numerator, settings.rate.numerator);
+        frame.pts = {numerator / divisor, settings.rate.numerator / divisor};
+        if (const auto error = session.video(std::move(frame))) {
+            check(false, name + " video: " + error->detail);
+            return;
+        }
+    }
+    auto finished = session.finish();
+    if (auto* error = std::get_if<provider::Unavailable>(&finished)) {
+        check(false, name + " finish: " + error->detail);
+        return;
+    }
+    const auto qc = std::get<provider::EncodeQcV1>(finished);
+    check(provider::subtitleTrackDifference(settings.subtitles, qc.subtitles).empty(),
+          name + ": the worker's reopen check carries the tracks sent");
+    provider::Bytes artifact;
+    while (artifact.size() < qc.bytes) {
+        auto reply = session.read(artifact.size());
+        if (std::holds_alternative<provider::Unavailable>(reply))
+            break;
+        const auto& chunk = std::get<provider::EncodedChunkV1>(reply);
+        if (chunk.bytes.empty())
+            break;
+        artifact.insert(artifact.end(), chunk.bytes.begin(), chunk.bytes.end());
+    }
+    (void)session.close();
+    const auto path = std::filesystem::temp_directory_path() /
+                      (std::string("bloom-videotoolbox-subtitles.") + container);
+    {
+        std::ofstream file(path, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(artifact.data()),
+                   static_cast<std::streamsize>(artifact.size()));
+    }
+    try {
+        const auto reopened = ffmpeg::readSubtitleTracks(path.string(), settings.rate);
+        const auto difference = provider::subtitleTrackDifference(settings.subtitles, reopened);
+        check(difference.empty(), name + ": FFmpeg reads back the tracks sent: " + difference);
+        for (const auto& track : reopened)
+            std::printf("%s: track %s \"%s\" with %zu cues\n", name.c_str(), track.language.c_str(),
+                        track.title.c_str(), track.cues.size());
+    } catch (const provider::Unavailable& error) {
+        check(false, name + ": FFmpeg reads the file: " + error.detail);
+    }
+    std::filesystem::remove(path);
+}
+#endif
 } // namespace
 
 int main() {
     exportOnce("prores", "hq", false);
     exportOnce("prores", "hq", true);
     exportOnce("h264", "high", false);
+#if defined(BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
+    exportSubtitles("mov");
+    exportSubtitles("mp4");
+#endif
     if (failures == 0)
         std::printf("videotoolbox export: all checks passed\n");
     return failures;

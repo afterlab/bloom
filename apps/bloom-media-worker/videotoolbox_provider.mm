@@ -37,6 +37,7 @@
 #define AVMediaType BloomFfmpegMediaType
 #include "ffmpeg_reopen_compare.hpp"
 #include "ffmpeg_stream_color_tags.hpp"
+#include "ffmpeg_subtitle_tracks.hpp"
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -322,6 +323,99 @@ void store(std::uint8_t* at, const std::uint16_t value) { std::memcpy(at, &value
 
 bool hardwareEncodeAvailable() { return true; }
 
+namespace {
+
+// #752: the 3GPP Timed Text sample description ('tx3g', 3GPP TS 26.245) of an embedded subtitle
+// track, big-endian, as FFmpeg's mov_text encoder writes it: no display flags, centered at the
+// bottom of a frame-sized text box, white Sans-Serif on a transparent background.
+[[nodiscard]] std::vector<std::uint8_t> textSampleDescription(const std::uint32_t width,
+                                                              const std::uint32_t height) {
+    std::vector<std::uint8_t> out;
+    const auto be16 = [&](const unsigned value) {
+        out.push_back(static_cast<std::uint8_t>((value >> 8U) & 255U));
+        out.push_back(static_cast<std::uint8_t>(value & 255U));
+    };
+    const auto be32 = [&](const std::uint32_t value) {
+        be16(value >> 16U);
+        be16(value & 0xffffU);
+    };
+    const auto fourcc = [&](const char* code) {
+        for (int index = 0; index < 4; ++index)
+            out.push_back(static_cast<std::uint8_t>(code[index]));
+    };
+    constexpr std::string_view font = "Sans-Serif";
+    be32(0); // the size, set below
+    fourcc("tx3g");
+    out.insert(out.end(), 6, 0); // reserved
+    be16(1);                     // data reference index
+    be32(0);                     // display flags
+    out.push_back(1);            // horizontal justification: center
+    out.push_back(0xff);         // vertical justification: bottom
+    be32(0);                     // background RGBA: transparent
+    be16(0);                     // text box top, left, bottom, right
+    be16(0);
+    be16(std::min<std::uint32_t>(height, 0x7fffU));
+    be16(std::min<std::uint32_t>(width, 0x7fffU));
+    be16(0); // style record: start and end character, font ID 1, face, size, white
+    be16(0);
+    be16(1);
+    out.push_back(0);
+    out.push_back(static_cast<std::uint8_t>(std::clamp<std::uint32_t>(height / 18U, 16U, 255U)));
+    be32(0xffffffffU);
+    be32(static_cast<std::uint32_t>(8U + 2U + 2U + 1U + font.size())); // the font table
+    fourcc("ftab");
+    be16(1);
+    be16(1);
+    out.push_back(static_cast<std::uint8_t>(font.size()));
+    out.insert(out.end(), font.begin(), font.end());
+    const auto size = static_cast<std::uint32_t>(out.size());
+    for (int index = 0; index < 4; ++index)
+        out[static_cast<std::size_t>(index)] =
+            static_cast<std::uint8_t>((size >> (24U - 8U * static_cast<unsigned>(index))) & 255U);
+    return out;
+}
+
+// One 3GPP Timed Text sample: a 16-bit big-endian length and the UTF-8 text (an empty sample
+// fills the time between two cues), over [first, end) frames at `rate`.
+[[nodiscard]] CMSampleBufferRef textSample(CMFormatDescriptionRef format, const std::string& text,
+                                           const std::uint64_t first, const std::uint64_t end,
+                                           const provider::Rational rate) {
+    const std::size_t size = 2 + text.size();
+    CMBlockBufferRef block = nullptr;
+    if (CMBlockBufferCreateWithMemoryBlock(kCFAllocatorDefault, nullptr, size, kCFAllocatorDefault,
+                                           nullptr, 0, size, kCMBlockBufferAssureMemoryNowFlag,
+                                           &block) != kCMBlockBufferNoErr)
+        throw Unavailable{Error::Oversized, "Subtitle sample allocation"};
+    std::vector<std::uint8_t> bytes{static_cast<std::uint8_t>((text.size() >> 8U) & 255U),
+                                    static_cast<std::uint8_t>(text.size() & 255U)};
+    bytes.insert(bytes.end(), text.begin(), text.end());
+    if (CMBlockBufferReplaceDataBytes(bytes.data(), block, 0, size) != kCMBlockBufferNoErr) {
+        CFRelease(block);
+        throw Unavailable{Error::Oversized, "Subtitle sample allocation"};
+    }
+    const auto scale = static_cast<CMTimeScale>(rate.numerator);
+    CMSampleTimingInfo timing{
+        CMTimeMake(static_cast<std::int64_t>(end - first) * rate.denominator, scale),
+        CMTimeMake(static_cast<std::int64_t>(first) * rate.denominator, scale), kCMTimeInvalid};
+    CMSampleBufferRef sample = nullptr;
+    const auto status = CMSampleBufferCreate(kCFAllocatorDefault, block, true, nullptr, nullptr,
+                                             format, 1, 1, &timing, 1, &size, &sample);
+    CFRelease(block);
+    if (status != noErr || sample == nullptr)
+        throw Unavailable{Error::Oversized, "Subtitle sample allocation"};
+    return sample;
+}
+
+// One embedded subtitle track's writer input and the samples it has not taken yet.
+struct SubtitleInput final {
+    AVAssetWriterInput* input = nil;
+    CMFormatDescriptionRef format = nullptr;
+    std::deque<CMSampleBufferRef> pending;
+    bool closed = false;
+};
+
+} // namespace
+
 struct Encoder::State final {
     provider::EncodeSettingsV1 settings;
     std::string path;
@@ -348,12 +442,20 @@ struct Encoder::State final {
     std::deque<CMSampleBufferRef> pendingVideo;
     std::deque<CMSampleBufferRef> pendingAudio;
     bool videoClosed = false, audioClosed = false;
+    // #752: the embedded subtitle tracks, in settings.subtitles order.
+    std::vector<SubtitleInput> subtitleInputs;
 
     ~State() {
         for (const auto sample : pendingVideo)
             CFRelease(sample);
         for (const auto sample : pendingAudio)
             CFRelease(sample);
+        for (auto& subtitles : subtitleInputs) {
+            for (const auto sample : subtitles.pending)
+                CFRelease(sample);
+            if (subtitles.format != nullptr)
+                CFRelease(subtitles.format);
+        }
         sws_freeContext(scale);
         av_frame_free(&converted);
     }
@@ -390,6 +492,23 @@ struct Encoder::State final {
                 [audioInput markAsFinished];
                 audioClosed = progressed = true;
             }
+            // Every subtitle sample is queued at the start; the writer takes each when the
+            // interleaving reaches its time.
+            for (auto& subtitles : subtitleInputs) {
+                while (!subtitles.pending.empty() && subtitles.input.isReadyForMoreMediaData) {
+                    CMSampleBufferRef sample = subtitles.pending.front();
+                    subtitles.pending.pop_front();
+                    const bool appended = [subtitles.input appendSampleBuffer:sample];
+                    CFRelease(sample);
+                    if (!appended)
+                        throw Unavailable{Error::Io, writerFailure(writer)};
+                    progressed = true;
+                }
+                if (!subtitles.closed && subtitles.pending.empty()) {
+                    [subtitles.input markAsFinished];
+                    subtitles.closed = progressed = true;
+                }
+            }
         }
     }
     // Drains until at most `video` frames and `audio` blocks wait, for as long as `budget`.
@@ -406,6 +525,66 @@ struct Encoder::State final {
                 throw Unavailable{Error::Timeout, timeout};
             pumpRunLoop(std::chrono::milliseconds(10));
         }
+    }
+
+    // #752: one AVAssetWriter subtitle input per embedded track, with a 3GPP Timed Text format
+    // description, so the file holds the same tx3g track the FFmpeg worker writes: the track's
+    // language and title, not enabled (no player shows it unasked), all of them one alternate
+    // group with no default, on the video's frame timescale.
+    void addSubtitleTracks() {
+        if (settings.subtitles.empty())
+            return;
+        const auto description = textSampleDescription(settings.width, settings.height);
+        NSMutableArray<AVAssetWriterInput*>* inputs = [NSMutableArray array];
+        for (const auto& track : settings.subtitles) {
+            auto& subtitles = subtitleInputs.emplace_back();
+            if (CMTextFormatDescriptionCreateFromBigEndianTextDescriptionData(
+                    kCFAllocatorDefault, description.data(), description.size(), nullptr,
+                    kCMMediaType_Subtitle, &subtitles.format) != noErr ||
+                subtitles.format == nullptr)
+                throw Unavailable{Error::Unavailable,
+                                  "AVAssetWriter could not describe a subtitle track"};
+            @try {
+                subtitles.input = [[AVAssetWriterInput alloc] initWithMediaType:AVMediaTypeSubtitle
+                                                                 outputSettings:nil
+                                                               sourceFormatHint:subtitles.format];
+            } @catch (NSException*) {
+                subtitles.input = nil;
+            }
+            if (subtitles.input == nil || ![writer canAddInput:subtitles.input])
+                throw Unavailable{Error::Unavailable, "AVAssetWriter rejected a subtitle track"};
+            subtitles.input.expectsMediaDataInRealTime = NO;
+            subtitles.input.marksOutputTrackAsEnabled = NO;
+            subtitles.input.mediaTimeScale = static_cast<CMTimeScale>(settings.rate.numerator);
+            subtitles.input.languageCode = [NSString stringWithUTF8String:track.language.c_str()];
+            if (!track.title.empty()) {
+                AVMutableMetadataItem* title = [AVMutableMetadataItem metadataItem];
+                title.keySpace = AVMetadataKeySpaceQuickTimeUserData;
+                title.key = AVMetadataQuickTimeUserDataKeyFullName;
+                title.value = [NSString stringWithUTF8String:track.title.c_str()];
+                subtitles.input.metadata = @[ title ];
+            }
+            [writer addInput:subtitles.input];
+            [inputs addObject:subtitles.input];
+            // The cues, with an empty sample over each gap before one.
+            std::uint64_t cursor = 0;
+            for (const auto& cue : track.cues) {
+                if (cue.first > cursor)
+                    subtitles.pending.push_back(
+                        textSample(subtitles.format, {}, cursor, cue.first, settings.rate));
+                subtitles.pending.push_back(
+                    textSample(subtitles.format, cue.text, cue.first, cue.end, settings.rate));
+                cursor = cue.end;
+            }
+        }
+        AVAssetWriterInputGroup* group =
+            [AVAssetWriterInputGroup assetWriterInputGroupWithInputs:inputs defaultInput:nil];
+        if ([writer canAddInputGroup:group])
+            [writer addInputGroup:group];
+    }
+    [[nodiscard]] bool subtitlesClosed() const {
+        return std::ranges::all_of(subtitleInputs,
+                                   [](const SubtitleInput& subtitles) { return subtitles.closed; });
     }
 
     void begin(const provider::EncodeSettingsV1& requested);
@@ -578,6 +757,7 @@ void Encoder::State::begin(const provider::EncodeSettingsV1& requested) {
             audioInput.expectsMediaDataInRealTime = NO;
             [writer addInput:audioInput];
         }
+        addSubtitleTracks();
         if (![writer startWriting])
             throw Unavailable{Error::Unavailable, writerFailure(writer)};
         [writer startSessionAtSourceTime:kCMTimeZero];
@@ -816,6 +996,17 @@ provider::EncodeQcV1 Encoder::State::finish() {
     @autoreleasepool {
         // Everything has arrived; append what waited and close both inputs.
         drainTo(0, 0, std::chrono::seconds(30), "AVAssetWriter did not finish");
+        const auto subtitleDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(30);
+        while (true) {
+            drain();
+            if (subtitlesClosed())
+                break;
+            if (writer.status == AVAssetWriterStatusFailed)
+                throw Unavailable{Error::Unavailable, writerFailure(writer)};
+            if (std::chrono::steady_clock::now() >= subtitleDeadline)
+                throw Unavailable{Error::Timeout, "AVAssetWriter did not take the subtitle tracks"};
+            pumpRunLoop(std::chrono::milliseconds(10));
+        }
         dispatch_semaphore_t done = dispatch_semaphore_create(0);
         [writer finishWritingWithCompletionHandler:^{
           dispatch_semaphore_signal(done);
@@ -853,7 +1044,13 @@ provider::EncodeQcV1 Encoder::State::finish() {
     qc.bytes = probe->sourceBytes;
     qc.artifact = probe->sourceDigest;
     require(qc.bytes != 0, "Empty encoded artifact");
-    require(probe->streams.size() == (audioInput != nil ? 2U : 1U) &&
+    // The subtitle tracks come after the video and the audio; the reader lists them as data, if
+    // at all, and FFmpeg's demuxer checks them below.
+    const auto pictureAndSound = static_cast<std::size_t>(
+        std::ranges::count_if(probe->streams, [](const provider::StreamDescriptor& stream) {
+            return stream.kind != provider::MediaKind::Data;
+        }));
+    require(pictureAndSound == (audioInput != nil ? 2U : 1U) && !probe->streams.empty() &&
                 probe->streams[0].kind == provider::MediaKind::Video,
             "Reopened stream layout differs");
     const auto& stream = probe->streams[0];
@@ -886,6 +1083,12 @@ provider::EncodeQcV1 Encoder::State::finish() {
                        "/" + stream.codec;
     }
     qc.encoder = encoder.name + (encoder.hardware ? " (hardware)" : " (software)");
+    // #752: every embedded track, read back by FFmpeg's demuxer as on every other platform.
+    if (!settings.subtitles.empty()) {
+        qc.subtitles = ffmpeg::readSubtitleTracks(path, settings.rate);
+        const auto difference = provider::subtitleTrackDifference(settings.subtitles, qc.subtitles);
+        require(difference.empty(), difference);
+    }
     // Issue #667: the H.264 stream has to say about its color what the container says.
     if (settings.videoCodec == "h264") {
         const auto failure = ffmpeg::h264StreamTagFailure(
