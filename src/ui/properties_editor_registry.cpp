@@ -6,6 +6,7 @@
 #include "properties_subtitles.hpp"
 
 #include <bloom/document/subtitles_nodes.hpp>
+#include <bloom/document/text_styling.hpp>
 #include "properties_value_outputs.hpp"
 #include "properties_sections.hpp"
 #include <QLabel>
@@ -78,6 +79,12 @@ void PropertiesEditor::configureRegistryRows() {
         }
     }
     if (signature != registrySignature_) {
+        // #757: the Text section's styling button row is rebuilt with the rows.
+        for (auto* row : findChildren<QWidget*>(QStringLiteral("propertiesTextStylingRow"))) {
+            row->hide();
+            row->setParent(nullptr);
+            row->deleteLater();
+        }
         for (auto* row : registryRows_) {
             for (auto* section : sections_)
                 disconnect(section, nullptr, row, nullptr);
@@ -475,6 +482,34 @@ void PropertiesEditor::configureRegistryRows() {
             }
             if (!cardPlaced)
                 section->bodyLayout()->addWidget(cardWidget_);
+            // #757: a Text Source saved before the styling parameters has none bound; one button
+            // binds them at their defaults (the picture does not change) so their rows appear.
+            if (definition->lowering == document::NodeLoweringKind::Text) {
+                std::vector<std::string> missing;
+                for (const auto& spec : document::textStylingParameters())
+                    if (std::ranges::find(node->parameters, std::string(spec.role),
+                                          &document::ParameterBinding::role) ==
+                        node->parameters.end())
+                        missing.emplace_back(spec.role);
+                if (!missing.empty()) {
+                    auto* label = kit::makePropertyRowLabel(tr("Styling"), section->body());
+                    auto* show = new kit::KButton(tr("Show Styling"), section->body());
+                    show->setObjectName(QStringLiteral("propertiesTextShowStyling"));
+                    show->setToolTip(tr("Adds the Markup, accent color, outline and background "
+                                        "rows. The text draws as before until you change one."));
+                    show->setControlSize(kit::KButton::ControlSize::Compact);
+                    auto* row = new kit::KPropertyRow(label, nullptr, {show}, section->body());
+                    row->setObjectName(QStringLiteral("propertiesTextStylingRow"));
+                    row->setProperty("rowLabel", tr("Styling"));
+                    section->bodyLayout()->addWidget(row);
+                    const auto nodeId = node->id;
+                    connect(show, &kit::KButton::clicked, this, [this, nodeId, missing] {
+                        if (!session_.bindNodeParameterDefaults(nodeId, missing,
+                                                                tr("Show Text Styling")))
+                            configureRegistryRows();
+                    });
+                }
+            }
         }
     }
     if (registryPanel_)

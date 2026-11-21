@@ -260,6 +260,25 @@ struct Scenario final {
     // through its matrix (the vector leaf), never resampling the node's image.
     out["subtitles-transformed"] = out["subtitles"];
     out["subtitles-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
+    // #757: a styled Text Source (markup with an accent word, bold and italic runs, a per-line
+    // background box and an outline), the outline width keyed so a RAM preview draws a new frame
+    // every frame; and the same text on a scaled and rotated layer (the vector leaf).
+    out["text-styled"] = {
+        "bloom.text-source",
+        {{"text", std::string("Hello <c.accent1>world</c>, <b>bold</b> <i>italic</i>")},
+         {"size", 96.0},
+         {"markup", true},
+         {"outlineWidth", 4.0},
+         {"background", std::int64_t{1}},
+         {"backgroundRadius", 10.0}},
+        {},
+        {},
+        "outlineWidth",
+        2.0,
+        8.0};
+    out["text-styled"].animateSource = true;
+    out["text-styled-transformed"] = out["text-styled"];
+    out["text-styled-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",

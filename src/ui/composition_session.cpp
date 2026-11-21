@@ -1896,6 +1896,34 @@ bool CompositionSession::setNodeParameterValue(const document::NodeId nodeId, st
     return executeTransaction(std::move(transaction)).succeeded();
 }
 
+bool CompositionSession::bindNodeParameterDefaults(const document::NodeId nodeId,
+                                                   const std::vector<std::string>& roles,
+                                                   const QString& commandLabel) {
+    const auto* composition = this->composition();
+    const auto* node = composition != nullptr ? composition->graph().findNode(nodeId) : nullptr;
+    if (node == nullptr)
+        return false;
+    const auto* definition =
+        document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion);
+    if (definition == nullptr)
+        return false;
+    commands::Transaction transaction(commandLabel.toStdString(), snapshot_.revision());
+    bool any = false;
+    for (const auto& role : roles) {
+        if (std::ranges::any_of(node->parameters,
+                                [&role](const auto& binding) { return binding.role == role; }))
+            continue;
+        const auto declared =
+            std::ranges::find(definition->parameters, role, &document::ParameterDefinition::role);
+        if (declared == definition->parameters.end())
+            continue;
+        transaction.emplace<commands::SetNodeParameterValue>(compositionId_, nodeId, role,
+                                                             declared->defaultValue);
+        any = true;
+    }
+    return any && executeTransaction(std::move(transaction)).succeeded();
+}
+
 bool CompositionSession::setParameterValue(const document::ParameterId parameterId,
                                            document::ParameterValue value,
                                            const QString& commandLabel) {

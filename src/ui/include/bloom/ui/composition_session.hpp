@@ -842,6 +842,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setNodeParameterValue(document::NodeId nodeId, std::string role,
                                              document::ParameterValue value,
                                              const QString& commandLabel);
+    // #757: binds each of `roles` the node lacks at its definition default, in one undo step, so an
+    // older Text Source shows its styling rows. The picture does not change.
+    [[nodiscard]] bool bindNodeParameterDefaults(document::NodeId nodeId,
+                                                 const std::vector<std::string>& roles,
+                                                 const QString& commandLabel);
     [[nodiscard]] bool setParameterValue(document::ParameterId parameterId,
                                          document::ParameterValue value,
                                          const QString& commandLabel);
