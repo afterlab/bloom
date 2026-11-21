@@ -3213,6 +3213,40 @@
                 },
                 "naming": {
                     "$ref": "#/$defs/exportNaming-1.29"
+                },
+                "subtitles": {
+                    "type": "object",
+                    "required": [
+                        "sidecar",
+                        "embed"
+                    ],
+                    "properties": {
+                        "sidecar": {
+                            "type": "array",
+                            "uniqueItems": true,
+                            "maxItems": 3,
+                            "items": {
+                                "enum": [
+                                    "srt",
+                                    "vtt",
+                                    "ttml"
+                                ]
+                            }
+                        },
+                        "embed": {
+                            "type": "boolean"
+                        },
+                        "nodes": {
+                            "type": "array",
+                            "minItems": 1,
+                            "maxItems": 256,
+                            "uniqueItems": true,
+                            "items": {
+                                "$ref": "#/$defs/objectId"
+                            }
+                        }
+                    },
+                    "unevaluatedProperties": false
                 }
             },
             "unevaluatedProperties": false

@@ -125,6 +125,26 @@ struct ExportLoudness final {
     friend bool operator==(const ExportLoudness&, const ExportLoudness&) = default;
 };
 
+// #752: the subtitle tracks an output carries (docs/architecture/subtitles.md, "Export"). Each
+// Subtitles node with Export as track on (or each node `nodes` names) becomes one cue track that
+// shows exactly the frames the picture shows. Sidecar files are written beside every format;
+// `embed` puts the tracks inside a MOV, MP4 or WebM movie (3GPP Timed Text, or WebVTT in WebM).
+inline constexpr std::size_t kExportSubtitleMaximumNodes = 256;
+enum class ExportSubtitleFormat : std::uint8_t {
+    Srt = 1,    // "srt": SubRip
+    WebVtt = 2, // "vtt": WebVTT
+    Ttml = 3,   // "ttml": IMSC 1.1 Text
+};
+struct ExportSubtitles final {
+    // Sidecar formats, ascending and unique (srt, vtt, ttml).
+    std::vector<ExportSubtitleFormat> sidecars;
+    bool embed = false;
+    // Absent: every Subtitles node with Export as track on. Otherwise these nodes, ascending and
+    // unique, whatever their Export as track says.
+    std::optional<std::vector<NodeId>> nodes;
+    friend bool operator==(const ExportSubtitles&, const ExportSubtitles&) = default;
+};
+
 // Everything an output needs to encode, independent of any preset still existing. Empty strings
 // mean "the format's or configuration's default", never "unknown". Members that do not apply to
 // the chosen format are kept (so switching format back restores them) and ignored by the runner.
@@ -157,6 +177,8 @@ struct ExportOutputSettings final {
     std::optional<ExportLoudness> loudness;
     ExportEncoderPreference encoder = ExportEncoderPreference::Automatic;
     ExportSequenceNaming naming;
+    // #752: persisted only when set; a file without the member exports no subtitle track.
+    std::optional<ExportSubtitles> subtitles;
     friend bool operator==(const ExportOutputSettings&, const ExportOutputSettings&) = default;
 };
 
@@ -232,6 +254,11 @@ struct ExportQueue final {
 [[nodiscard]] std::string_view exportEncoderToken(ExportEncoderPreference encoder) noexcept;
 [[nodiscard]] std::optional<ExportEncoderPreference>
 parseExportEncoder(std::string_view token) noexcept;
+[[nodiscard]] std::string_view exportSubtitleFormatToken(ExportSubtitleFormat format) noexcept;
+[[nodiscard]] std::optional<ExportSubtitleFormat>
+parseExportSubtitleFormat(std::string_view token) noexcept;
+// #752: whether the format's container can carry an embedded subtitle track (MOV, MP4, WebM).
+[[nodiscard]] bool exportFormatEmbedsSubtitles(ExportFormat format) noexcept;
 [[nodiscard]] std::string_view exportOverwriteToken(ExportOverwritePolicy policy) noexcept;
 [[nodiscard]] std::optional<ExportOverwritePolicy>
 parseExportOverwrite(std::string_view token) noexcept;

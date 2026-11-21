@@ -59,7 +59,35 @@
     if (!state.ok(writer.memberName("framePadding")) ||
         !state.ok(writer.integerValue(settings.naming.framePadding)) ||
         !emitStringMember(state, "pattern", settings.naming.pattern) ||
-        !state.ok(writer.endObject()) || !state.ok(writer.endObject()))
+        !state.ok(writer.endObject()))
+        return false;
+    // Optional (#752): absent means no subtitle track, so older files stay canonical.
+    if (settings.subtitles) {
+        const auto& subtitles = *settings.subtitles;
+        if (!state.ok(writer.memberName("subtitles")) || !state.ok(writer.beginObject()) ||
+            !state.ok(writer.memberName("sidecar")) || !state.ok(writer.beginArray()))
+            return false;
+        for (const auto format : subtitles.sidecars)
+            if (!state.ok(writer.stringValue(exportSubtitleFormatToken(format))))
+                return false;
+        if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("embed")) ||
+            !state.ok(writer.booleanValue(subtitles.embed)))
+            return false;
+        if (subtitles.nodes) {
+            if (!state.ok(writer.memberName("nodes")) || !state.ok(writer.beginArray()))
+                return false;
+            for (const auto node : *subtitles.nodes) {
+                const auto text = bloom::project::formatCanonicalUInt64(node.value());
+                if (!state.ok(writer.stringValue(text.view())))
+                    return false;
+            }
+            if (!state.ok(writer.endArray()))
+                return false;
+        }
+        if (!state.ok(writer.endObject()))
+            return false;
+    }
+    if (!state.ok(writer.endObject()))
         return false;
     const auto& destination = output.destination;
     return state.ok(writer.memberName("destination")) && state.ok(writer.beginObject()) &&

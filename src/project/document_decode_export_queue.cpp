@@ -83,6 +83,51 @@ bool closed(const JsonValue& node, std::span<const std::string_view> keys, Decod
     return true;
 }
 
+// #752: {"sidecar": ["srt", "vtt", "ttml"], "embed", optional "nodes": [node ids]}. The sidecar
+// tokens are ascending and unique; the record's own rules (at least one choice, distinct ascending
+// node ids) are document validation's.
+bool decodeSubtitles(const JsonValue& node, DecodeState& state, const std::string& path,
+                     std::optional<document::ExportSubtitles>& out) {
+    std::vector<std::string_view> keys{"sidecar", "embed"};
+    const bool hasNodes = node.findMember("nodes") != nullptr;
+    if (hasNodes)
+        keys.push_back("nodes");
+    std::vector<const JsonValue*> fields;
+    if (!closed(node, keys, state, path, fields))
+        return false;
+    document::ExportSubtitles decoded;
+    const auto sidecarPath = joinPath(path, "sidecar");
+    if (fields[0]->kind() != JsonValueKind::Array)
+        return fail(state, sidecarPath, DocumentDecodeError::WrongValueKind);
+    std::size_t index = 0;
+    for (const auto& element : fields[0]->arrayElements()) {
+        document::ExportSubtitleFormat format{};
+        if (!token(element, state, joinPath(sidecarPath, std::to_string(index++)),
+                   document::parseExportSubtitleFormat, format))
+            return false;
+        decoded.sidecars.push_back(format);
+    }
+    if (!boolean(*fields[1], state, joinPath(path, "embed"), decoded.embed))
+        return false;
+    if (hasNodes) {
+        const auto nodesPath = joinPath(path, "nodes");
+        if (fields[2]->kind() != JsonValueKind::Array ||
+            fields[2]->arrayElements().size() > document::kExportSubtitleMaximumNodes)
+            return fail(state, nodesPath, DocumentDecodeError::WrongValueKind);
+        std::vector<document::NodeId> nodes;
+        index = 0;
+        for (const auto& element : fields[2]->arrayElements()) {
+            document::NodeId id;
+            if (!decodeObjectId(element, state, joinPath(nodesPath, std::to_string(index++)), id))
+                return false;
+            nodes.push_back(id);
+        }
+        decoded.nodes = std::move(nodes);
+    }
+    out = std::move(decoded);
+    return true;
+}
+
 bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string& path,
                     document::ExportOutputSettings& out) {
     std::vector<std::string_view> keys{"format", "codecProfile"};
@@ -102,6 +147,10 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
         keys.push_back("loudness");
     for (const auto* key : {"audioSampleRate", "encoder", "naming"})
         keys.push_back(key);
+    // Optional (#752): absent means no subtitle track.
+    const bool hasSubtitles = node.findMember("subtitles") != nullptr;
+    if (hasSubtitles)
+        keys.push_back("subtitles");
     std::vector<const JsonValue*> fields;
     if (!closed(node, keys, state, path, fields))
         return false;
@@ -154,6 +203,9 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
                             std::numeric_limits<std::uint32_t>::max(), out.audioSampleRate) ||
         !token(*fields[at++], state, joinPath(path, "encoder"), document::parseExportEncoder,
                out.encoder))
+        return false;
+    if (hasSubtitles && !decodeSubtitles(*fields[at + 1], state, joinPath(path, "subtitles"),
+                                         out.subtitles))
         return false;
     const auto& naming = *fields[at];
     const auto namingPath = joinPath(path, "naming");

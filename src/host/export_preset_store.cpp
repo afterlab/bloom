@@ -296,6 +296,41 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
             return std::nullopt;
         out.loudness = parsed;
     }
+    // Optional (#752): {"sidecar": ["srt", ...], "embed": bool, "nodes": ["12", ...]}.
+    if (const auto* subtitles = json.find("subtitles")) {
+        const auto* sidecar = subtitles->find("sidecar");
+        const auto* embed = boolean(*subtitles, "embed");
+        const auto* formats = sidecar ? std::get_if<JsonArray>(&sidecar->value) : nullptr;
+        if (formats == nullptr || embed == nullptr)
+            return std::nullopt;
+        document::ExportSubtitles parsed;
+        parsed.embed = *embed;
+        for (const auto& item : *formats) {
+            const auto* token = std::get_if<std::string>(&item.value);
+            const auto sidecarFormat =
+                token ? document::parseExportSubtitleFormat(*token) : std::nullopt;
+            if (!sidecarFormat)
+                return std::nullopt;
+            parsed.sidecars.push_back(*sidecarFormat);
+        }
+        if (const auto* nodes = subtitles->find("nodes")) {
+            const auto* ids = std::get_if<JsonArray>(&nodes->value);
+            if (ids == nullptr)
+                return std::nullopt;
+            std::vector<document::NodeId> list;
+            for (const auto& item : *ids) {
+                const auto* token = std::get_if<std::string>(&item.value);
+                std::uint64_t value = 0;
+                if (token == nullptr ||
+                    std::from_chars(token->data(), token->data() + token->size(), value).ec !=
+                        std::errc{})
+                    return std::nullopt;
+                list.push_back(document::NodeId::fromRaw(value));
+            }
+            parsed.nodes = std::move(list);
+        }
+        out.subtitles = std::move(parsed);
+    }
     out.audioSampleRate = static_cast<std::uint32_t>(*rate);
     out.encoder = *parsedEncoder;
     if (const auto* start = string(*naming, "startFrame")) {
@@ -351,7 +386,28 @@ std::string exportSettingsJson(const document::ExportOutputSettings& settings) {
         out += "\"startFrame\":\"" + std::to_string(*settings.naming.startFrame) + "\",";
     out += "\"framePadding\":" + std::to_string(settings.naming.framePadding) + ",\"pattern\":";
     quote(out, settings.naming.pattern);
-    out += "}}";
+    out += "}";
+    if (settings.subtitles) {
+        out += ",\"subtitles\":{\"sidecar\":[";
+        bool first = true;
+        for (const auto format : settings.subtitles->sidecars) {
+            out += first ? "" : ",";
+            first = false;
+            quote(out, document::exportSubtitleFormatToken(format));
+        }
+        out += std::string("],\"embed\":") + (settings.subtitles->embed ? "true" : "false");
+        if (settings.subtitles->nodes) {
+            out += ",\"nodes\":[";
+            first = true;
+            for (const auto node : *settings.subtitles->nodes) {
+                out += std::string(first ? "" : ",") + "\"" + std::to_string(node.value()) + "\"";
+                first = false;
+            }
+            out += "]";
+        }
+        out += "}";
+    }
+    out += "}";
     return out;
 }
 

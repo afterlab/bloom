@@ -206,6 +206,69 @@ void testLoudness() {
            "a ceiling above 0 dBTP is refused");
 }
 
+// #752: `subtitles` is an optional member of an output's settings; absent means no cue track is
+// exported, so every earlier file opens and re-saves unchanged.
+void testSubtitles() {
+    const auto plain = encode(makeDocument(true));
+    expect(plain.find("subtitles") == std::string::npos, "no subtitle export writes no member");
+
+    auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
+    auto tracks = job(1, seed.initialCompositionId);
+    tracks.outputs[0].settings.subtitles =
+        ExportSubtitles{{ExportSubtitleFormat::Srt, ExportSubtitleFormat::Ttml}, true, std::nullopt};
+    tracks.outputs[1].settings.subtitles = ExportSubtitles{
+        {ExportSubtitleFormat::WebVtt}, false,
+        std::vector<NodeId>{NodeId::fromRaw(4), NodeId::fromRaw(12)}};
+    seed.project.setExportQueue({{tracks}});
+    const Document withTracks{std::move(seed.project)};
+    const auto text = encode(withTracks);
+    expect(text.find("\"subtitles\"") != std::string::npos &&
+               text.find("\"sidecar\": [\n") != std::string::npos &&
+               text.find("\"ttml\"") != std::string::npos &&
+               text.find("\"embed\": true") != std::string::npos &&
+               text.find("\"nodes\": [\n") != std::string::npos,
+           "the subtitle settings are written");
+    const auto decoded = decodeQueue(text);
+    expect(decoded && *decoded == withTracks.snapshot().project().exportQueue(),
+           "the subtitle settings round-trip per output");
+    expect(decoded && encode(Document{[&] {
+                          auto again = makeNewProject("Export queue", "Main",
+                                                      core::RationalTime::fromInteger(2));
+                          again.project.setExportQueue(*decoded);
+                          return std::move(again.project);
+                      }()}) == text,
+           "the subtitle settings re-save byte for byte");
+    for (const auto& output : tracks.outputs)
+        expect(validateExportOutput(output).ok(), "the subtitle settings validate");
+    expect(!decodeQueue(replaceOnce(text, "\"srt\"", "\"ass\"")),
+           "an unknown sidecar format is refused");
+    expect(!decodeQueue(replaceOnce(text, "\"embed\": true", "\"embed\": 1")),
+           "a non-boolean embed is refused");
+
+    auto nothing = tracks.outputs[0];
+    nothing.settings.subtitles = ExportSubtitles{};
+    expect(!validateExportOutput(nothing).ok(), "neither a sidecar nor a track is refused");
+    auto twice = tracks.outputs[0];
+    twice.settings.subtitles->sidecars = {ExportSubtitleFormat::Srt, ExportSubtitleFormat::Srt};
+    expect(!validateExportOutput(twice).ok(), "a sidecar format given twice is refused");
+    auto unordered = tracks.outputs[1];
+    unordered.settings.subtitles->nodes = std::vector<NodeId>{NodeId::fromRaw(12),
+                                                              NodeId::fromRaw(4)};
+    expect(!validateExportOutput(unordered).ok(), "unordered nodes are refused");
+    auto none = tracks.outputs[1];
+    none.settings.subtitles->nodes = std::vector<NodeId>{};
+    expect(!validateExportOutput(none).ok(), "an empty node list is refused");
+    // Embedding is a setting of any output: a format that carries no track is a preflight issue
+    // (it names the sidecar formats), not an invalid document.
+    auto mxf = tracks.outputs[0];
+    mxf.settings.format = ExportFormat::DnxhrMxf;
+    mxf.settings.codecProfile = "hq";
+    expect(validateExportOutput(mxf).ok() && !exportFormatEmbedsSubtitles(ExportFormat::DnxhrMxf) &&
+               exportFormatEmbedsSubtitles(ExportFormat::H264Mp4) &&
+               exportFormatEmbedsSubtitles(ExportFormat::Vp9Webm),
+           "embedding is persisted for any format and applies to MOV, MP4 and WebM");
+}
+
 void testRejects() {
     const auto text = encode(makeDocument(true));
     for (const auto& [from, to, message] :
@@ -278,6 +341,7 @@ int main() {
     try {
         testRoundTrip();
         testLoudness();
+        testSubtitles();
         testRejects();
         testUseCachedFrames();
         testWebmFormats();

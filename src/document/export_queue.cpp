@@ -65,6 +65,12 @@ constexpr std::array<std::pair<ExportOverwritePolicy, std::string_view>, 3> kOve
     {ExportOverwritePolicy::Refuse, "refuse"},
 }};
 
+constexpr std::array<std::pair<ExportSubtitleFormat, std::string_view>, 3> kSubtitleFormats{{
+    {ExportSubtitleFormat::Srt, "srt"},
+    {ExportSubtitleFormat::WebVtt, "vtt"},
+    {ExportSubtitleFormat::Ttml, "ttml"},
+}};
+
 constexpr std::array<std::string_view, 6> kProResProfiles{"proxy", "lt",   "422",
                                                           "hq",    "4444", "4444xq"};
 constexpr std::array<std::string_view, 5> kDnxhrProfiles{"lb", "sq", "hq", "hqx", "444"};
@@ -133,6 +139,29 @@ std::string_view exportOverwriteToken(const ExportOverwritePolicy policy) noexce
 }
 std::optional<ExportOverwritePolicy> parseExportOverwrite(const std::string_view token) noexcept {
     return parseToken(kOverwrite, token);
+}
+
+std::string_view exportSubtitleFormatToken(const ExportSubtitleFormat format) noexcept {
+    return tokenFor(kSubtitleFormats, format);
+}
+std::optional<ExportSubtitleFormat> parseExportSubtitleFormat(const std::string_view token) noexcept {
+    return parseToken(kSubtitleFormats, token);
+}
+
+bool exportFormatEmbedsSubtitles(const ExportFormat format) noexcept {
+    switch (format) {
+    case ExportFormat::ProResMov:
+    case ExportFormat::H264Mov:
+    case ExportFormat::H264Mp4:
+    case ExportFormat::HevcMov:
+    case ExportFormat::HevcMp4:
+    case ExportFormat::Vp9Webm:
+    case ExportFormat::Av1Webm:
+    case ExportFormat::Av1Mp4:
+        return true;
+    default:
+        return false;
+    }
 }
 
 bool isImageExportFormat(const ExportFormat format) noexcept {
@@ -210,6 +239,28 @@ ValidationResult validateExportOutput(const ExportOutput& output) {
             loudness.truePeakDbtp > kExportTruePeakMaximumDbtp)
             result.add(ValidationCode::InvalidValue, "settings.loudness.truePeakDbtp",
                        "The true-peak limit must be -12..0 dBTP");
+    }
+    if (settings.subtitles) {
+        const auto& subtitles = *settings.subtitles;
+        if (subtitles.sidecars.empty() && !subtitles.embed)
+            result.add(ValidationCode::InvalidValue, "settings.subtitles",
+                       "Subtitle export needs a sidecar format or an embedded track");
+        if (!std::ranges::is_sorted(subtitles.sidecars) ||
+            std::ranges::adjacent_find(subtitles.sidecars) != subtitles.sidecars.end() ||
+            std::ranges::any_of(subtitles.sidecars, [](const ExportSubtitleFormat format) {
+                return exportSubtitleFormatToken(format).empty();
+            }))
+            result.add(ValidationCode::InvalidValue, "settings.subtitles.sidecar",
+                       "Subtitle sidecar formats are srt, vtt and ttml, each at most once");
+        if (subtitles.nodes) {
+            const auto& nodes = *subtitles.nodes;
+            if (nodes.empty() || nodes.size() > kExportSubtitleMaximumNodes ||
+                !std::ranges::is_sorted(nodes) ||
+                std::ranges::adjacent_find(nodes) != nodes.end() ||
+                std::ranges::any_of(nodes, [](const NodeId node) { return !node.isValid(); }))
+                result.add(ValidationCode::InvalidValue, "settings.subtitles.nodes",
+                           "Subtitle nodes are 1 to 256 distinct node IDs");
+        }
     }
     if (exportEncoderToken(settings.encoder).empty())
         result.add(ValidationCode::InvalidValue, "settings.encoder", "Unknown encoder preference");
