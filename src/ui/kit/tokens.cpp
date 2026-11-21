@@ -96,6 +96,8 @@ constexpr auto kColors = std::to_array<ColorEntry>({
     // #627: a pale mint at hue 110, the one hue left that is 20 degrees from Scalar (90) and
     // Channel Set (130), and far lighter than either.
     {Color::SocketNumberList, 0xB4E3ABU},
+    // #752: String's hue (47) at a far higher lightness: timed text reads as text's family.
+    {Color::SocketCueList, 0xF5E3A1U},
     // GRAPH-1 component curves: red, green, a light sky blue clearly lighter than Accent
     // (0x0C8CE9) and AccentHover (0x3AA5F0), and a neutral for the fourth channel.
     {Color::ComponentX, 0xE06C75U},

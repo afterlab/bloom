@@ -5,6 +5,9 @@
 #include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include "properties_number_list_edit.hpp"
+#include "subtitles_editing.hpp"
+#include "subtitles_inspector.hpp"
+#include <bloom/document/subtitles_nodes.hpp>
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
 #include "row_inline_controls.hpp"
@@ -1257,6 +1260,31 @@ class NodeItem final : public QGraphicsObject {
             prepareField(imageRange_);
             valueRows_.push_back({tr("Range"), imageRange_, nullptr, {}});
         }
+        // #752: a Subtitles card reads out the cue the playhead shows (its `text` output) under its
+        // cue summary, and follows the inspected file state.
+        if (node.typeId == document::kSubtitlesNodeType) {
+            readOnlyRows_.push_back({tr("Showing"), QString{}});
+            auto* value =
+                new kit::KLabel(QStringLiteral("Unavailable"), nullptr, kit::TypeRole::Value);
+            value->setObjectName(QStringLiteral("nodeSubtitlesShowing"));
+            value->setMinimumWidth(0);
+            prepareField(value);
+            readOnlyLabels_.push_back(value);
+            readOnlyDiamonds_.push_back(nullptr);
+            if (session_ != nullptr && !subtitlesFollowed_) {
+                subtitlesFollowed_ = true;
+                connect(&session_->subtitlesInspector(), &SubtitlesInspector::inspected, this,
+                        [this] {
+                            const auto* composition =
+                                session_ != nullptr ? session_->composition() : nullptr;
+                            const auto* record =
+                                composition != nullptr ? composition->graph().findNode(id_)
+                                                       : nullptr;
+                            if (record != nullptr)
+                                refreshTimeValues(*record, *composition);
+                        });
+            }
+        }
         if (node.typeId == document::kLayerBoundsNodeType) {
             for (const auto& port :
                  {document::kLayerBoundsSizePortName, document::kLayerBoundsOriginPortName,
@@ -2186,6 +2214,15 @@ class NodeItem final : public QGraphicsObject {
                 readOnlyRows_[readOnlyIndex].first == displayTypeName(binding.role)) {
                 readOnlyRows_[readOnlyIndex].second =
                     parameter == nullptr ? QString{} : parameterText(*parameter);
+                // #752: the cue list reads as its count and source, the file's state with it.
+                if (parameter != nullptr && session_ != nullptr &&
+                    parameter->schemaKey == document::kCueListValueParameterSchemaKey) {
+                    QString detail;
+                    readOnlyRows_[readOnlyIndex].second =
+                        subtitles_editing::sourceSummary(*session_, id_, &detail);
+                    if (readOnlyIndex < readOnlyLabels_.size())
+                        readOnlyLabels_[readOnlyIndex]->setToolTip(detail);
+                }
                 if (parameter != nullptr && session_ != nullptr &&
                     parameter->schemaKey == document::kVectorArtworkBlockParameterSchemaKey)
                     if (const auto* constant =
@@ -2214,6 +2251,27 @@ class NodeItem final : public QGraphicsObject {
         }
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             readOnlyLabels_[index]->setElidedText(readOnlyRows_[index].second);
+        // #752: the cues the playhead shows, read straight from the node's own list.
+        if (node.typeId == document::kSubtitlesNodeType && session_ != nullptr)
+            for (auto* label : readOnlyLabels_)
+                if (label->objectName() == QStringLiteral("nodeSubtitlesShowing")) {
+                    const auto source = subtitles_editing::cueSource(*session_, id_);
+                    QStringList shown;
+                    if (source.list != nullptr) {
+                        const auto at = session_->keyTimeAtPlayhead(source.parameter);
+                        for (const auto& cue : source.list->cues) {
+                            if (at < cue->start)
+                                break;
+                            if (at < cue->end)
+                                shown.push_back(subtitles_editing::plainCueText(*cue));
+                        }
+                    }
+                    const auto text = source.list == nullptr ? tr("From another node")
+                                      : shown.isEmpty()      ? tr("No cue at the playhead")
+                                                             : shown.join(QStringLiteral(" / "));
+                    label->setElidedText(text);
+                    label->setToolTip(text);
+                }
         if (session_) {
             // A card that shows readouts asks for them itself: without the Properties panel (or a
             // timeline row) open, nothing else would, and the rows would wait for ever. The request
@@ -2630,6 +2688,7 @@ class NodeItem final : public QGraphicsObject {
     bool authoringEnabled_ = false;
     bool timeOnly_ = false;
     bool timeVarying_ = false;
+    bool subtitlesFollowed_ = false;
     bool timeStale_ = false;
     QString valueProblem_;
     QString colorSpaceProblem_;

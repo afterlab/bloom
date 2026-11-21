@@ -107,6 +107,10 @@ enum class Color : std::uint8_t {
     // #627: a number list (docs/architecture/number-list.md). Pale mint, drawn as an ordinary
     // circular value socket.
     SocketNumberList,
+    // #752: a subtitle cue list (docs/architecture/subtitles.md). Timed text: a pale gold in the
+    // String family (no hue 20 degrees from every other socket role is left), far lighter than
+    // String, drawn as an ordinary circular value socket.
+    SocketCueList,
     // GRAPH-1: the graph editor's per-component curve strokes. X/Y/Z/W is the axis vocabulary and
     // R/G/B/A borrows it unchanged, so one colour always means "the first component" whatever the
     // parameter is. A scalar curve takes Keyframe; selection takes Accent; none of these four is

@@ -529,7 +529,7 @@ kind takes its own role here on the day it ships.
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from
 what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
-Fourteen separated hues for sixteen kinds, none of them `Accent` or `AccentHover`:
+Fourteen separated hues for seventeen kinds, none of them `Accent` or `AccentHover`:
 
 | Socket kind | Palette token | Value | Hue |
 | --- | --- | --- | --- |
@@ -549,6 +549,7 @@ Fourteen separated hues for sixteen kinds, none of them `Accent` or `AccentHover
 | Path | `SocketPath` | `#8FC0E3` | pale steel blue |
 | Number List | `SocketNumberList` | `#B4E3AB` | pale mint |
 | Space | `SocketPath` | `#8FC0E3` | pale steel blue, square socket |
+| Cue List | `SocketCueList` | `#F5E3A1` | pale gold: String's hue, far lighter (timed text) |
 
 A field socket (#525, `docs/architecture/fields.md`) is drawn as a diamond rather than a circle, and
 its links take the same ink: a field is a lazy function of position, not a value or an image, and the

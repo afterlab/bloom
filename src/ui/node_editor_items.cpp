@@ -63,9 +63,9 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     // pale steel blue (both are geometry) and is told apart by its square socket and its name.
     case runtime::SocketValueKind::Space:
         return kit::Color::SocketPath;
-    // #752: a cue list is timed text, drawn in the String hue until its own token (SB3).
+    // #752: a cue list is timed text: String's hue, far lighter.
     case runtime::SocketValueKind::CueList:
-        return kit::Color::SocketString;
+        return kit::Color::SocketCueList;
     }
     return kit::Color::SocketImage;
 }

@@ -103,7 +103,7 @@ void testLayoutSelectionAndSockets() {
         kit::Color::SocketInteger,     kit::Color::SocketBoolean,    kit::Color::SocketVector,
         kit::Color::SocketImage,       kit::Color::SocketChannelSet, kit::Color::SocketScalarField,
         kit::Color::SocketVectorField, kit::Color::SocketColorField, kit::Color::SocketPath,
-        kit::Color::SocketNumberList,  kit::Color::SocketPath};
+        kit::Color::SocketNumberList,  kit::Color::SocketPath,       kit::Color::SocketCueList};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
                "all socket palette mappings use the socket roles");

@@ -88,6 +88,7 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
     expectHex(kit::Color::SocketColorField, "#5a7cf0");
     expectHex(kit::Color::SocketPath, "#8fc0e3");
     expectHex(kit::Color::SocketNumberList, "#b4e3ab");
+    expectHex(kit::Color::SocketCueList, "#f5e3a1");
 
     const std::array sockets{
         kit::Color::SocketImage,       kit::Color::SocketAudio,       kit::Color::SocketColor,
@@ -108,6 +109,19 @@ void testEveryColorRoleResolvesToItsSpecifiedValue(Expectations& expectations) {
                                 "socket roles are separated by hue, not only by value");
         }
     }
+    // #752: the cue list is String's family (no separated hue is left): the same hue, far lighter,
+    // and no other socket role's value.
+    const auto cueList = kit::color(kit::Color::SocketCueList);
+    const auto string = kit::color(kit::Color::SocketString);
+    expectations.expect(std::abs(cueList.hslHue() - string.hslHue()) <= 2 &&
+                            cueList.lightness() - string.lightness() >= 40,
+                        "a cue list is String's hue, far lighter");
+    for (const auto socket : sockets)
+        expectations.expect(cueList != kit::color(socket),
+                            "and the cue list shares no other socket role's value");
+    expectations.expect(cueList != kit::color(kit::Color::Accent) &&
+                            cueList != kit::color(kit::Color::AccentHover),
+                        "the cue list is never Accent or AccentHover");
 }
 
 void testSurfaceLadderStepsAndClamps(Expectations& expectations) {
