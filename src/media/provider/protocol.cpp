@@ -327,6 +327,36 @@ AudioBlock audio(Reader& r) {
     require(valid(value));
     return value;
 }
+void subtitleTracks(Writer& w, const std::vector<SubtitleTrackV1>& tracks) {
+    w.count(tracks.size(), kSubtitleTracksMaximum);
+    for (const auto& track : tracks) {
+        w.text(track.language);
+        w.text(track.title);
+        w.count(track.cues.size(), Limits::indexEntries);
+        for (const auto& cue : track.cues) {
+            w.number(cue.first);
+            w.number(cue.end);
+            w.text(cue.text, kSubtitleCueTextBytes);
+        }
+    }
+}
+std::vector<SubtitleTrackV1> subtitleTracks(Reader& r) {
+    std::vector<SubtitleTrackV1> tracks(r.count(kSubtitleTracksMaximum));
+    for (auto& track : tracks) {
+        track.language = r.text();
+        track.title = r.text();
+        const auto cues = r.count(Limits::indexEntries);
+        // Each cue takes at least 20 bytes, so a count the message cannot hold is refused first.
+        require(cues <= r.bytes.size() / 20U, Error::BadLength);
+        track.cues.resize(cues);
+        for (auto& cue : track.cues) {
+            cue.first = r.number<std::uint64_t>();
+            cue.end = r.number<std::uint64_t>();
+            cue.text = r.text(kSubtitleCueTextBytes);
+        }
+    }
+    return tracks;
+}
 void settings(Writer& w, const EncodeSettingsV1& v) {
     require(valid(v));
     for (const auto* s : {&v.container, &v.videoCodec, &v.profile, &v.audioCodec})
@@ -345,6 +375,7 @@ void settings(Writer& w, const EncodeSettingsV1& v) {
     w.number(v.videoBitrateKbps);
     w.number(v.threads);
     w.text(v.vaapiDevice);
+    subtitleTracks(w, v.subtitles);
 }
 EncodeSettingsV1 settings(Reader& r) {
     EncodeSettingsV1 v;
@@ -364,6 +395,7 @@ EncodeSettingsV1 settings(Reader& r) {
     v.videoBitrateKbps = r.number<std::uint32_t>();
     v.threads = r.number<std::uint32_t>();
     v.vaapiDevice = r.text();
+    v.subtitles = subtitleTracks(r);
     require(valid(v));
     return v;
 }
@@ -388,6 +420,7 @@ void qc(Writer& w, const EncodeQcV1& v) {
     w.text(v.profile);
     w.number(v.bitDepth);
     w.text(v.encoder);
+    subtitleTracks(w, v.subtitles);
 }
 EncodeQcV1 qc(Reader& r) {
     EncodeQcV1 v;
@@ -406,6 +439,7 @@ EncodeQcV1 qc(Reader& r) {
     v.profile = r.text();
     v.bitDepth = r.number<std::uint32_t>();
     v.encoder = r.text();
+    v.subtitles = subtitleTracks(r);
     Writer validation;
     qc(validation, v);
     return v;

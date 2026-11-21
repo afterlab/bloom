@@ -179,6 +179,22 @@ struct EncodeTrack {
         avcodec_free_context(&codec);
     }
 };
+// #752: one embedded subtitle track: FFmpeg's mov_text (3GPP Timed Text) encoder in MOV and MP4,
+// its WebVTT encoder in WebM. `next` is the first cue not yet written.
+struct SubtitleOutput {
+    AVCodecContext* codec = nullptr;
+    AVStream* stream = nullptr;
+    AVPacket* packet = av_packet_alloc();
+    std::size_t next = 0;
+    bool milliseconds = false;
+    SubtitleOutput() = default;
+    SubtitleOutput(const SubtitleOutput&) = delete;
+    SubtitleOutput& operator=(const SubtitleOutput&) = delete;
+    ~SubtitleOutput() {
+        av_packet_free(&packet);
+        avcodec_free_context(&codec);
+    }
+};
 int videoProfile(const EncodeSettingsV1& s) {
     if (s.videoCodec == "prores_ks") {
         constexpr std::array<std::string_view, 6> names{"proxy", "lt",   "422",
@@ -326,6 +342,7 @@ struct Encoder::State {
     PrivateAvio io;
     AVFormatContext* format = nullptr;
     EncodeTrack videoTrack, audioTrack;
+    std::vector<std::unique_ptr<SubtitleOutput>> subtitleTracks;
     std::uint64_t frameCount = 0, sampleCount = 0;
     bool finished = false;
     Bytes firstReference, lastReference;
@@ -649,6 +666,90 @@ struct Encoder::State {
                     "PCM conversion unavailable");
         }
     }
+    // #752: one embedded subtitle track, after the video and audio streams.
+    void openSubtitles(const SubtitleTrackV1& track) {
+        require(format != nullptr && subtitleContainer(settings.container),
+                "Subtitle tracks are embedded in MOV, MP4 and WebM only", Error::Unavailable);
+        const bool webm = settings.container == "webm";
+        const auto* codec = avcodec_find_encoder(webm ? AV_CODEC_ID_WEBVTT : AV_CODEC_ID_MOV_TEXT);
+        require(codec != nullptr, "Subtitle encoder is not in the intake", Error::Unavailable);
+        auto& out = *subtitleTracks.emplace_back(std::make_unique<SubtitleOutput>());
+        out.codec = avcodec_alloc_context3(codec);
+        require(out.codec != nullptr && out.packet != nullptr, "Subtitle encoder allocation",
+                Error::Oversized);
+        out.milliseconds = webm;
+        // MOV and MP4 count the track in frames, so cue edges are frame edges; Matroska's clock is
+        // the millisecond.
+        out.codec->time_base = webm ? AVRational{1, 1000}
+                                    : AVRational{static_cast<int>(settings.rate.denominator),
+                                                 static_cast<int>(settings.rate.numerator)};
+        out.codec->width = static_cast<int>(settings.width);
+        out.codec->height = static_cast<int>(settings.height);
+        const auto header = ffmpeg::assScriptHeader(settings.width, settings.height);
+        out.codec->subtitle_header = static_cast<std::uint8_t*>(av_mallocz(header.size() + 1));
+        require(out.codec->subtitle_header != nullptr, "Subtitle encoder allocation",
+                Error::Oversized);
+        std::memcpy(out.codec->subtitle_header, header.data(), header.size());
+        out.codec->subtitle_header_size = static_cast<int>(header.size());
+        if (format->oformat->flags & AVFMT_GLOBALHEADER)
+            out.codec->flags |= AV_CODEC_FLAG_GLOBAL_HEADER;
+        require(avcodec_open2(out.codec, codec, nullptr) >= 0,
+                "Subtitle encoder refused the track", Error::Unavailable);
+        out.stream = avformat_new_stream(format, nullptr);
+        require(out.stream != nullptr, "Mux stream allocation", Error::Oversized);
+        out.stream->time_base = out.codec->time_base;
+        require(avcodec_parameters_from_context(out.stream->codecpar, out.codec) >= 0,
+                "Subtitle encoder metadata failure");
+        av_dict_set(&out.stream->metadata, "language", track.language.c_str(), 0);
+        if (!track.title.empty()) {
+            av_dict_set(&out.stream->metadata, "title", track.title.c_str(), 0);
+            // Players that read the handler's name for a track's title (MOV and MP4).
+            if (!webm)
+                av_dict_set(&out.stream->metadata, "handler_name", track.title.c_str(), 0);
+        }
+        // Neither the default nor a forced track: a player shows it only when asked.
+        out.stream->disposition = 0;
+    }
+    // Writes every cue of every subtitle track that starts at or before `frame` (all of them when
+    // `frame` is absent), so the cues reach the interleaver beside the pictures they show over.
+    void writeSubtitles(const std::optional<std::uint64_t> frame) {
+        for (std::size_t index = 0; index < subtitleTracks.size(); ++index) {
+            auto& out = *subtitleTracks[index];
+            const auto& cues = settings.subtitles[index].cues;
+            while (out.next < cues.size() && (!frame || cues[out.next].first <= *frame))
+                writeSubtitle(out, cues[out.next++]);
+        }
+    }
+    void writeSubtitle(SubtitleOutput& out, const SubtitleCueV1& cue) {
+        const auto start = ffmpeg::subtitleTrackTime(cue.first, settings.rate, out.milliseconds);
+        const auto end = ffmpeg::subtitleTrackTime(cue.end, settings.rate, out.milliseconds);
+        require(end > start, "A subtitle cue is shorter than the track's clock", Error::InvalidValue);
+        auto dialogue = "0,0,Default,,0,0,0,," + ffmpeg::assDialogueText(cue.text);
+        AVSubtitleRect rect{};
+        rect.type = SUBTITLE_ASS;
+        rect.ass = dialogue.data();
+        std::array<AVSubtitleRect*, 1> rects{&rect};
+        AVSubtitle subtitle{};
+        subtitle.num_rects = 1;
+        subtitle.rects = rects.data();
+        subtitle.pts = av_rescale_q(start, out.codec->time_base, AV_TIME_BASE_Q);
+        // The text, its style boxes and the length word fit well inside four times the text.
+        std::vector<std::uint8_t> buffer(cue.text.size() * 4 + 4096);
+        const int size = avcodec_encode_subtitle(out.codec, buffer.data(),
+                                                 static_cast<int>(buffer.size()), &subtitle);
+        require(size > 0, "Subtitle encoder refused a cue", Error::InvalidValue);
+        require(av_new_packet(out.packet, size) >= 0, "Subtitle packet allocation",
+                Error::Oversized);
+        std::memcpy(out.packet->data, buffer.data(), static_cast<std::size_t>(size));
+        out.packet->pts = start;
+        out.packet->dts = start;
+        out.packet->duration = end - start;
+        out.packet->stream_index = out.stream->index;
+        av_packet_rescale_ts(out.packet, out.codec->time_base, out.stream->time_base);
+        require(av_interleaved_write_frame(format, out.packet) >= 0,
+                "Mux failed or artifact exceeds limit", Error::Io);
+        av_packet_unref(out.packet);
+    }
     void open() {
         require(valid(settings), "Invalid encode settings", Error::InvalidValue);
         if (imageCodec(settings)) {
@@ -686,6 +787,8 @@ struct Encoder::State {
         if (!settings.audioCodec.empty())
             openTrack(audioTrack, settings.audioCodec == "opus" ? "libopus" : settings.audioCodec,
                       false);
+        for (const auto& track : settings.subtitles)
+            openSubtitles(track);
         if (lossyAudio(settings.audioCodec)) {
             require(audioTrack.codec->frame_size > 0, "Audio encoder frame size unavailable");
             aacReference = std::make_unique<PrivateMediaFile>(settings.byteLimit);
@@ -738,6 +841,7 @@ struct Encoder::State {
         if (frameCount + 1 == settings.frames)
             lastReference = product.planes[0].bytes;
         track.frame->pts = static_cast<std::int64_t>(frameCount);
+        writeSubtitles(frameCount);
         packets(track, track.frame);
         ++frameCount;
     }
@@ -884,10 +988,15 @@ struct Encoder::State {
             encodeAudio(pendingAudio);
         if (audioTrack.codec)
             packets(audioTrack, nullptr);
+        writeSubtitles(std::nullopt);
         if (format)
             require(av_write_trailer(format) >= 0, "Mux close failed", Error::Io);
         avio_flush(io.context);
         require(io.context->error >= 0, "Spool write failed", Error::Io);
+        // #752: FFmpeg's MOV muxer enables the first text track, which readers take as the default.
+        if (!subtitleTracks.empty() && settings.container != "webm")
+            require(ffmpeg::clearSubtitleTracksEnabled(file.file, file.size),
+                    "The subtitle tracks could not be marked as not default", Error::Io);
         EncodeQcV1 qc;
         qc.bytes = file.size;
         qc.artifact = file.hash();
@@ -921,6 +1030,7 @@ struct Encoder::State {
         } else {
             verifyVideo(qc);
             verifyAudio(qc);
+            verifySubtitles(qc);
         }
         qc.duration =
             settings.frames != 0
@@ -940,7 +1050,8 @@ struct Encoder::State {
                     avformat_find_stream_info(input.format, nullptr) >= 0,
                 "Reopen demux failed");
         require(input.format->nb_streams == (settings.videoCodec.empty() ? 0U : 1U) +
-                                                (settings.audioCodec.empty() ? 0U : 1U),
+                                                (settings.audioCodec.empty() ? 0U : 1U) +
+                                                settings.subtitles.size(),
                 "Reopened stream layout differs");
     }
     // Issue #667: an H.264 stream has to say about its color what the container around it says.
@@ -1018,6 +1129,18 @@ struct Encoder::State {
                     rational(static_cast<std::int64_t>(settings.frames) * settings.rate.denominator,
                              settings.rate.numerator),
             "Reopened duration differs");
+    }
+    // #752: every embedded track reopens with the language, title, cue frames and text it was
+    // sent, read back through FFmpeg's demuxer.
+    void verifySubtitles(EncodeQcV1& qc) {
+        if (settings.subtitles.empty())
+            return;
+        PrivateAvio reader(file, false);
+        Input input;
+        openInput(input, reader);
+        qc.subtitles = ffmpeg::readSubtitleTracks(*input.format, settings.rate);
+        const auto difference = subtitleTrackDifference(settings.subtitles, qc.subtitles);
+        require(difference.empty(), difference.c_str());
     }
     void verifyAudio(EncodeQcV1& qc) {
         if (settings.audioCodec.empty())

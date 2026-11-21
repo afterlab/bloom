@@ -1,6 +1,7 @@
 #include "ffmpeg_provider.hpp"
 #include "ffmpeg_reopen_compare.hpp"
 #include "ffmpeg_stream_color_tags.hpp"
+#include "ffmpeg_subtitle_tracks.hpp"
 #include "lossy_audio_compare.hpp"
 #include "platform_codec.hpp"
 #include <algorithm>

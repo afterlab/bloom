@@ -62,7 +62,65 @@ bool valid(const EncodeSettingsV1& v) {
            wire::validText(v.profile) && v.audioCodec.size() <= Limits::stringBytes &&
            wire::validText(v.audioCodec) && (!v.videoCodec.empty() || !v.audioCodec.empty()) &&
            (v.videoCodec.empty() ? v.frames == 0 : v.frames > 0) &&
-           (v.audioCodec.empty() ? v.audioSamples == 0 : v.audioSamples > 0);
+           (v.audioCodec.empty() ? v.audioSamples == 0 : v.audioSamples > 0) &&
+           v.subtitles.size() <= kSubtitleTracksMaximum &&
+           (v.subtitles.empty() || (subtitleContainer(v.container) && !v.videoCodec.empty())) &&
+           std::ranges::all_of(v.subtitles, [&](const SubtitleTrackV1& track) {
+               return valid(track, v.container, v.frames);
+           });
+}
+bool subtitleContainer(const std::string_view container) noexcept {
+    return container == "mov" || container == "mp4" || container == "webm";
+}
+bool valid(const SubtitleTrackV1& track, const std::string_view container,
+           const std::uint64_t frames) {
+    if (track.language.size() != 3 ||
+        !std::ranges::all_of(track.language, [](const char c) { return c >= 'a' && c <= 'z'; }) ||
+        track.title.size() > Limits::stringBytes || !wire::validText(track.title) ||
+        track.cues.size() > Limits::indexEntries)
+        return false;
+    const bool joined = container != "webm";
+    std::uint64_t previousFirst = 0, previousEnd = 0;
+    for (const auto& cue : track.cues) {
+        if (cue.first >= cue.end || cue.end > frames || cue.text.empty() ||
+            cue.text.size() > kSubtitleCueTextBytes || !wire::validText(cue.text) ||
+            cue.first < previousFirst || (joined && cue.first < previousEnd))
+            return false;
+        previousFirst = cue.first;
+        previousEnd = cue.end;
+    }
+    return true;
+}
+std::string subtitleTrackDifference(const std::vector<SubtitleTrackV1>& sent,
+                                    const std::vector<SubtitleTrackV1>& reopened) {
+    if (sent.size() != reopened.size())
+        return "The reopened file holds " + std::to_string(reopened.size()) +
+               " subtitle tracks, " + std::to_string(sent.size()) + " were sent";
+    for (std::size_t index = 0; index < sent.size(); ++index) {
+        const auto& expected = sent[index];
+        const auto& actual = reopened[index];
+        const auto track = "Reopened subtitle track " + std::to_string(index + 1) + " differs: ";
+        if (actual.language != expected.language)
+            return track + "its language is " + actual.language + ", sent " + expected.language;
+        if (actual.title != expected.title)
+            return track + "its title is \"" + actual.title + "\", sent \"" + expected.title +
+                   "\"";
+        if (actual.cues.size() != expected.cues.size())
+            return track + "it holds " + std::to_string(actual.cues.size()) + " cues, " +
+                   std::to_string(expected.cues.size()) + " were sent";
+        for (std::size_t at = 0; at < expected.cues.size(); ++at) {
+            const auto& want = expected.cues[at];
+            const auto& got = actual.cues[at];
+            const auto cue = track + "cue " + std::to_string(at + 1) + " ";
+            if (got.first != want.first || got.end != want.end)
+                return cue + "shows frames " + std::to_string(got.first) + "-" +
+                       std::to_string(got.end - 1) + ", sent " + std::to_string(want.first) +
+                       "-" + std::to_string(want.end - 1);
+            if (got.text != want.text)
+                return cue + "holds other text than was sent";
+        }
+    }
+    return {};
 }
 MediaDeterminismV1 encodeDeterminism(const EncodeSettingsV1& v) {
     if (v.videoCodec.empty() && v.audioCodec.starts_with("pcm_"))
@@ -115,6 +173,22 @@ Result<Digest> digest(const EncodeSettingsV1& v) {
     for (const auto code : {v.colour.primaries, v.colour.transfer, v.colour.matrix, v.colour.range})
         w.number(static_cast<std::uint32_t>(code + 1));
     w.number(v.videoBitrateKbps);
+    // #752: the embedded tracks are part of the request (a version 2 digest of a request without
+    // them is unchanged).
+    if (!v.subtitles.empty()) {
+        w.text("subtitles");
+        w.count(v.subtitles.size(), kSubtitleTracksMaximum);
+        for (const auto& track : v.subtitles) {
+            w.text(track.language);
+            w.text(track.title);
+            w.count(track.cues.size(), Limits::indexEntries);
+            for (const auto& cue : track.cues) {
+                w.number(cue.first);
+                w.number(cue.end);
+                w.text(cue.text, kSubtitleCueTextBytes);
+            }
+        }
+    }
     w.enumeration(encodeDeterminism(v), 1, 4);
     w.hash(encodeTolerance(v));
     return digestBytes(w.bytes);

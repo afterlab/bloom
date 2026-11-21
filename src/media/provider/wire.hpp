@@ -30,8 +30,8 @@ class Writer {
         require(n >= low && n <= high, Error::BadEnum);
         number(n);
     }
-    void text(const std::string& value) {
-        require(value.size() <= Limits::stringBytes, Error::Oversized);
+    void text(const std::string& value, const std::uint32_t limit = Limits::stringBytes) {
+        require(value.size() <= limit, Error::Oversized);
         require(validText(value));
         number(static_cast<std::uint32_t>(value.size()));
         for (char c : value)
@@ -75,8 +75,8 @@ class Reader {
         require(n <= limit, Error::Oversized);
         return n;
     }
-    std::string text() {
-        const auto n = count(Limits::stringBytes);
+    std::string text(const std::uint32_t limit = Limits::stringBytes) {
+        const auto n = count(limit);
         require(n <= bytes.size(), Error::BadLength);
         std::string out;
         out.reserve(n);

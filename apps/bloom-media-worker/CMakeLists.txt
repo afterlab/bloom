@@ -94,9 +94,19 @@ if(bloom_ffmpeg_worker)
     target_link_libraries(bloom_media_ffmpeg_stream_color_tags
                           PUBLIC FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
     bloom_enable_warnings(bloom_media_ffmpeg_stream_color_tags)
+    # #752: embedded subtitle tracks (ASS text for FFmpeg's encoders, the reopened tracks, the MOV
+    # text track's enabled flag), for the reopen check of both provider builds.
+    add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp)
+    target_include_directories(bloom_media_ffmpeg_subtitle_tracks
+                               PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_compile_features(bloom_media_ffmpeg_subtitle_tracks PUBLIC cxx_std_20)
+    target_link_libraries(bloom_media_ffmpeg_subtitle_tracks
+                          PUBLIC bloom_media_provider FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+    bloom_enable_warnings(bloom_media_ffmpeg_subtitle_tracks)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           bloom_media_ffmpeg_reopen_compare bloom_media_ffmpeg_stream_color_tags
+                          bloom_media_ffmpeg_subtitle_tracks
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
     if(WIN32)
         # The worker's Media Foundation generation (ADR 0035; issue #370), first in the Windows
@@ -215,7 +225,8 @@ if(APPLE)
         # The encoder's output conversion and reopen check are the FFmpeg worker's.
         target_link_libraries(bloom_media_videotoolbox_worker_provider
                               PRIVATE bloom_media_ffmpeg_reopen_compare
-                                      bloom_media_ffmpeg_stream_color_tags FFmpeg::swscale
+                                      bloom_media_ffmpeg_stream_color_tags
+                                      bloom_media_ffmpeg_subtitle_tracks FFmpeg::swscale
                                       FFmpeg::avutil)
     endif()
     bloom_enable_warnings(bloom_media_videotoolbox_worker_provider)
@@ -296,6 +307,7 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     target_compile_definitions(bloom_media_ffmpeg_fixture_worker_provider PRIVATE BLOOM_MEDIA_FIXTURE_GENERATOR)
     target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider PRIVATE bloom_media_provider bloom_platform_process
                           bloom_media_ffmpeg_reopen_compare bloom_media_ffmpeg_stream_color_tags
+                          bloom_media_ffmpeg_subtitle_tracks
                           FFmpeg::avformat FFmpeg::avcodec FFmpeg::avfilter FFmpeg::swscale FFmpeg::swresample)
     if(WIN32)
         target_link_libraries(bloom_media_ffmpeg_fixture_worker_provider
@@ -347,6 +359,20 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_add_test(NAME bloom.media.encode COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 120)
     set_tests_properties(bloom.media.encode PROPERTIES FIXTURES_SETUP media-encode)
+    # #752: embedded subtitle tracks through the FFmpeg worker, read back by FFmpeg directly.
+    add_executable(bloom_media_subtitle_encode_test tests/subtitle_encode_tests.cpp)
+    target_include_directories(bloom_media_subtitle_encode_test PRIVATE
+                               "${PROJECT_SOURCE_DIR}/src/media/provider/tests"
+                               "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(bloom_media_subtitle_encode_test PRIVATE bloom_media_worker_host
+                          bloom_media_ffmpeg_subtitle_tracks)
+    set_target_properties(bloom_media_subtitle_encode_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_subtitle_encode_test)
+    add_dependencies(bloom_media_subtitle_encode_test bloom-media-worker)
+    bloom_add_test(NAME bloom.media.subtitle-encode COMMAND bloom_media_subtitle_encode_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/subtitle-encode" LABELS unit media TIMEOUT 120)
+    set_tests_properties(bloom.media.subtitle-encode PROPERTIES SKIP_RETURN_CODE 77)
     # Issue #408: reads the software HEVC grey ramps bloom.media.encode writes, through FFmpeg
     # directly: Main 10 profile, 10-bit samples, tags, and more luma codes than 8 bits hold.
     add_executable(bloom_media_hevc_depth_test tests/hevc_depth_tests.cpp)

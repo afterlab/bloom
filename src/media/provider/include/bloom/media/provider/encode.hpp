@@ -2,6 +2,35 @@
 #include <bloom/media/provider/contract.hpp>
 
 namespace bloom::media::provider {
+// #752: one cue track an export embeds: 3GPP Timed Text (FFmpeg's mov_text) in MOV and MP4,
+// WebVTT in WebM. Cues are in output frames: a cue shows frames [first, end). `text` is the sample's
+// text: plain UTF-8 lines joined by '\n' for 3GPP Timed Text, the WebVTT cue payload (cue text
+// markup) for WebVTT. A MOV or MP4 track's cues never overlap (the host joins cues that show
+// together); a WebM track's cues are ordered by `first`. The track is neither default nor forced.
+struct SubtitleCueV1 {
+    std::uint64_t first = 0, end = 0;
+    std::string text;
+    friend bool operator==(const SubtitleCueV1&, const SubtitleCueV1&) = default;
+};
+struct SubtitleTrackV1 {
+    // ISO 639-2 three-letter code, lower case ("und" when unknown); the title may be empty.
+    std::string language = "und";
+    std::string title;
+    std::vector<SubtitleCueV1> cues;
+    friend bool operator==(const SubtitleTrackV1&, const SubtitleTrackV1&) = default;
+};
+inline constexpr std::uint32_t kSubtitleTracksMaximum = 64;
+inline constexpr std::uint32_t kSubtitleCueTextBytes = 16384;
+[[nodiscard]] bool valid(const SubtitleTrackV1& track, std::string_view container,
+                         std::uint64_t frames);
+// Whether the container carries an embedded subtitle track (mov, mp4, webm).
+[[nodiscard]] bool subtitleContainer(std::string_view container) noexcept;
+// The first difference between the tracks an encode sent and the tracks its artifact reopens with,
+// as a sentence ("Reopened subtitle track 1 differs: cue 3 shows frames 40-52, sent 40-51"); empty
+// when they are equal.
+[[nodiscard]] std::string subtitleTrackDifference(const std::vector<SubtitleTrackV1>& sent,
+                                                  const std::vector<SubtitleTrackV1>& reopened);
+
 // Closed CPU export intake. RGB is straight, display-referred RGBA16LE sRGB/Rec.709.
 // Audio blocks are planar finite float at the declared source rate; timestamps start at zero.
 struct EncodeSettingsV1 {
@@ -25,6 +54,8 @@ struct EncodeSettingsV1 {
     std::uint32_t threads = 1;
     // VA-API render node for hardware encode ("/dev/dri/renderD128" when empty).
     std::string vaapiDevice;
+    // #752: embedded cue tracks (MOV, MP4 and WebM only), written after the video and audio.
+    std::vector<SubtitleTrackV1> subtitles;
     friend bool operator==(const EncodeSettingsV1&, const EncodeSettingsV1&) = default;
 };
 // Issue #406: prores_ks is frame-threaded. Every encoder thread keeps its own 10-bit 4:4:4:4 (or
@@ -75,6 +106,11 @@ struct EncodeQcV1 {
     // encoder's name and whether it is a hardware one on macOS, the codec implementation's name
     // in the FFmpeg worker. Empty when there is no video stream.
     std::string encoder;
+    // #752: the subtitle tracks the reopened artifact holds, read back by FFmpeg's demuxer: each
+    // cue in the frames a player shows it on (the first frame whose time is at or after the cue's
+    // start, through the last before its end), its text as the sample holds it, the track's
+    // language and title. Empty samples (the gaps between cues) are left out.
+    std::vector<SubtitleTrackV1> subtitles;
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
 // v2 compared against the reference taken through the stream's declared sample format, matrix,
