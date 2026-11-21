@@ -1420,6 +1420,15 @@ pixels, `wrap` as a Boolean, `verticalAlignment`, `anchorMode`, and `overflow` a
 A zero box is point text; a non-zero box is the authored local bounds. The writer retains the
 parameter sources in their stable graph order.
 
+Text v2 then carries the twelve optional styling parameters of #757, in this order: `accent1` ..
+`accent4`, `outlineColor`, `outlineWidth`, `backgroundColor`, `backgroundPadding`,
+`backgroundRadius`, `markup`, `outlineJoin` and `background`, with schema keys `bloom.text.<role>`
+([the layer and graph model](layer-graph-model.md#text-and-mute-lowering)). They are optional
+roles, so the node stays version 2: a version-2 node saved without them opens unchanged and draws as
+it did, and no migration rewrites it (the version rule above forbids silent upgrades). The reader
+validates each bound role's value kind, its domain and, for the three constants, that it is a
+constant.
+
 ## Asset Organization
 
 Organization metadata never changes media identity or evaluation. Each asset carries `name`,

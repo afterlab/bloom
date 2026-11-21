@@ -976,6 +976,28 @@ SCENARIOS["subtitles-2k"] = {
     ],
 }
 
+# #757: a styled caption over a plate: markup with an accent word and bold and italic runs, an
+# outline with a keyed width and a per-line background box. The keyed width makes every frame new,
+# so each frame costs one styled layout and the box, outline and fill coverage passes. Written, not
+# run: it has no recorded numbers and no budget.
+SCENARIOS["text-styled-2k"] = {
+    "description": "A PNG16 plate under a two-line styled caption: an accent word, bold and italic "
+                   "runs, a keyed outline width and a per-line background box.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16"},
+        {"name": "Caption",
+         "text": {
+             "text": "The <c.accent1>quick</c> brown <b>fox</b> jumps\n"
+                     "over the <i>lazy</i> <c.#33ccff>dog</c>",
+             "args": {"size": 96.0, "position": [960.0, 880.0], "markup": True,
+                      "outlineWidth": 4.0, "outlineJoin": "round", "background": "per-line",
+                      "backgroundRadius": 12.0}},
+         "keys": {"outlineWidth": [[0, 2.0], [23, 8.0]]}},
+    ],
+}
+
 # #509: Alpha Contour over a keyed plate matte: Luma Key makes the alpha, and the contour's keyed
 # width makes every frame new and its distance transform reach the widest band the domains allow
 # (the costly case). Written, not run: it has no recorded numbers and no budget.

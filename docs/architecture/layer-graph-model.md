@@ -746,6 +746,25 @@ content bounds whatever they said), so they keep `c` at the bounds centre. New T
 (`AddTextLayer` and the Text node's default) stores 3. An effect that rebuilds its bounds (instead of
 passing its input's through) drops `pivotX` and keeps the bounds centre.
 
+Text version 2 then appends twelve optional styling parameters (#757; `text_styling.hpp` is the
+one table the definition, validation, presentation and automation read): accent1..accent4 (Color4d),
+outlineColor (Color4d), outlineWidth (Scalar pixels, 0..256), backgroundColor (Color4d),
+backgroundPadding (Scalar em, 0..4) and backgroundRadius (Scalar pixels), which are animatable and
+socketed, then markup (Boolean), outlineJoin (Round/Miter/Bevel) and background (Off/Per line/Block)
+as constants. Schema keys are `bloom.text.<role>`. An unbound role lowers at its default, so a node
+saved before them draws, and keys its cache, exactly as before. `AddTextLayer` binds all of them at
+their defaults (or the values `bloom.layer.add-text` passes); Properties offers a button that binds
+an older node's missing roles, and `bloom.node.set-parameter-value` binds one on its first edit.
+
+A text lowers *styled* (`CompiledText::style`) only when markup is on, background is not Off, or
+outline width is not the constant 0; anything else takes the plain Text path unchanged. A styled
+text is drawn by the styled text layout Subtitles uses (`render/styled_text.hpp`) from runs that the
+cue-text tokenizer (`document/cue_markup.hpp`) reads, placed by the Text Source's own box, wrap,
+alignment, anchor, vertical alignment and overflow, as box, outline and fill path layers; see
+[evaluation-primitives.md](evaluation-primitives.md), "Styled Text Source". Its content bounds, the
+Layer Bounds node and align-layers include the outline and box; Text Outline reads the glyph outlines
+of the same layout (its glyph path only).
+
 Source rows are projected from the current registry in Nodes and Timeline. The color role
 is node-local and shared with Solid; the text color schema retains its distinct global identity.
 

@@ -31,3 +31,51 @@ saved before Follow alignment existed carry: they keep Position at the centre of
 old project looks exactly as it did when you reopen it, with no jump. Nothing is rewritten when you
 open a project; switch a text layer to Follow alignment when you want its Position to follow the
 alignment. Changing it moves the text, because Position then names a different point of the block.
+
+## Markup, accent colors, outline and background
+
+A Text node draws plain text until you turn one of these on, so a project saved before them draws
+exactly as it did. In an older project, select the Text node and click **Show Styling** in Properties to add the
+rows; the picture does not change until you edit one.
+
+**Markup** reads inline tags in the text, the same cue-text markup [Subtitles](subtitles.md) reads,
+parsed by the same code:
+
+| Tag | Draws |
+| --- | --- |
+| `<b>word</b>` | bold |
+| `<i>word</i>` | italic |
+| `<u>word</u>` | underlined |
+| `<c.accent1>word</c>` .. `<c.accent4>word</c>` | in **Accent 1** .. **Accent 4** |
+| `<c.#ff8800>word</c>` | in a literal color (`#RGB`, `#RRGGBB` or `#RRGGBBAA`, sRGB) |
+
+The four accent colors are ordinary animatable color parameters, so a word's color keys through its
+accent: key **Accent 1** and every `<c.accent1>` span follows it. A tag Bloom cannot read is drawn as
+written, and the node shows a warning naming it. With Markup off, `<b>` is just text. When the font
+has no bold or italic face, bold draws the regular face with the font-missing warning and italic
+draws a synthesized oblique, as Subtitles does.
+
+**Outline width** (pixels, animatable) draws an outline of **Outline color** outside the glyphs, so
+the letters keep their full weight. **Outline join** is Round, Miter or Bevel: how the outline turns
+at the corners of letters such as V and W.
+
+**Background** draws a box behind the text: **Per line** gives each line its own box, **Block** one
+box around every line (or the text's Box, when it has one). **Background color**, **Background
+padding** (in em, so it grows with the size) and **Background corner radius** (pixels) shape it.
+
+The paint order is box, outline, fill. The layer's bounds, the Layer Bounds node and Composition >
+Align include the outline and the box, so an outlined caption aligns by what is drawn. Text Outline
+still reads the glyph outlines.
+
+Other outlines:
+
+- **Alpha Contour** after the layer traces the drawn image instead of the letters. Set it to Under
+  with Offset at half the Width for an outline outside the letters that also follows effects.
+- **Stroke Text** on a text layer's node menu in the node editor (`bloom.layer.stroke-outline` in
+  MCP, Python and bloom-cli) adds a stroked path layer above the text that follows it: Text Outline,
+  Path Stroke and a Shape Source, ready for Trim Path and dashes. **Stroke Masks** does the same for
+  a layer's path masks.
+
+Driving the text: connect a String to the Text node's text input. A counter is an animated value
+through **Scalar To String** (its Decimals and Pad Width keep the digits steady); a type-on is
+**Substring** with an animated Length.

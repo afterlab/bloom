@@ -666,6 +666,15 @@ class Builder:
         self.set_values(node, "bloom.subtitles", spec.get("values") or {})
         self.set_keys(node, layer.get("keys") or {})
 
+    def text(self, layer):
+        """#757: a styled text layer through one bloom.layer.add-text (its markup, accents,
+        outline and background as arguments), then its keys."""
+        spec = layer["text"]
+        added = self.transact("bloom.layer.add-text", composition=self.composition,
+                              name=layer.get("name", "Text"), text=spec["text"],
+                              **(spec.get("args") or {}))
+        self.set_keys(added["textNode"], layer.get("keys") or {})
+
     def generator(self, layer, output_merge):
         """A procedural source node (a Fields generator) whose `port` raster, through the
         layer's effects, is one layer of the output Merge."""
@@ -857,6 +866,8 @@ class Builder:
                 self.audio(layer)
             elif "subtitles" in layer:
                 self.subtitles(layer)
+            elif "text" in layer:
+                self.text(layer)
             elif "adjustment" in layer:
                 merge = merge or self.output_merge()
                 added = self.transact("bloom.merge.add-adjustment-layer",

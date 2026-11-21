@@ -709,6 +709,37 @@ redraws those paths through its matrix (the affine vector coverage below), and t
 an image reader takes the frame's own coverage image. The CPU reference and the GPU share the
 geometry, so parity is the path coverage parity below.
 
+### Styled Text Source
+
+A Text Source with markup, an outline or a background box (#757; [the layer and graph
+model](layer-graph-model.md#text-and-mute-lowering)) is drawn by the Subtitles machinery instead of
+Text's glyph bitmap. `runtime/text_markup.cpp` turns the content into styled runs: with markup off,
+one literal run; with markup on, the cue-text tokenizer's tree, where `<b>`, `<i>` and `<u>` set the
+face and underline and a class names the paint (`accent1`..`accent4`, a `#RGB`/`#RRGGBB`/`#RRGGBBAA`
+sRGB literal, or a WebVTT color class). A tag the cue-text rules ignore has its `<` escaped and is
+drawn as written, with a `bloom.runtime.compile.text-markup` warning for constant content. Faces
+resolve as Subtitles' do: a missing bold draws the regular face with the font-missing warning, a
+missing italic a synthesized oblique.
+
+`runtime/text_styled_frame.cpp` lays the runs out with `layoutStyledText` (Greedy wrap within the
+box width when the text wraps in a box), aligns each line within the box or the widest line, applies
+the anchor mode's shift for point text and the vertical alignment within a box, then builds the
+frame's `SubtitlesLayer`s in paint order: the background (Per line: one rounded rectangle per line's
+advance box, grown by the padding at the sides and at the block's top and bottom so the lines'
+boxes meet; Block: one around the widest extent of the lines, or the text box when there is one),
+the outline (the glyph outlines stroked Center at twice the width with the outline join, so the
+outside half shows past the fill), and one fill layer per paint. With a box and Clip overflow, every
+layer is clipped to the box grown by the outline width and padding. The frame's bounds are its ink,
+with `pivotX` from `textBlockPivotX`, so the Layer Output places it as plain Text.
+
+The CPU reference and the GPU scene builder call the same preparation, so both draw the same
+geometry: the CPU folds the layers through `PathRaster` (or redraws them through a transformed
+layer's matrix as the vector arm does); the GPU emits them as native path coverage commands. A text
+draws at most 8,192 glyphs on this path; more fails the node with a message naming the count. The
+frame key holds the content, faces, layout and the resolved colors of only the paints the runs use,
+so editing an unused accent keeps the identity warm. Preparation checks cancellation in the layout,
+the outline building and each layer's coverage.
+
 ### Path coverage
 
 `src/render/path_raster.cpp` owns the Qt-free path reference primitive. Coordinates stay in
