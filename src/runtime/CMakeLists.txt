@@ -333,6 +333,7 @@ target_sources(
         subtitles_frame.hpp
         gpu_scene_subtitles_emission.hpp
         subtitles_layout.cpp
+        subtitle_tracks.cpp
         function_body.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp

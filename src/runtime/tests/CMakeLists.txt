@@ -419,6 +419,14 @@ bloom_enable_warnings(bloom_runtime_layer_time_test)
 bloom_enable_strict_floating_point(bloom_runtime_layer_time_test)
 bloom_add_test(NAME bloom.runtime.layer-time COMMAND bloom_runtime_layer_time_test LABELS unit runtime TIMEOUT 60)
 
+# #752: the export track pass against the CPU picture, frame by frame (offset, trimmed with Time
+# Remap, nested at twice the speed), with the node list, progress and cancellation.
+add_executable(bloom_runtime_subtitle_tracks_test ${PROJECT_SOURCE_DIR}/tests/integration/subtitle_tracks_tests.cpp)
+target_link_libraries(bloom_runtime_subtitle_tracks_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
+bloom_enable_warnings(bloom_runtime_subtitle_tracks_test)
+bloom_enable_strict_floating_point(bloom_runtime_subtitle_tracks_test)
+bloom_add_test(NAME bloom.runtime.subtitle-tracks COMMAND bloom_runtime_subtitle_tracks_test LABELS unit runtime text TIMEOUT 120)
+
 add_executable(bloom_runtime_layer_mask_test ${PROJECT_SOURCE_DIR}/tests/integration/layer_mask_tests.cpp)
 target_link_libraries(bloom_runtime_layer_mask_test PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_commands)
 bloom_enable_warnings(bloom_runtime_layer_mask_test)
