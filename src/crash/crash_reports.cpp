@@ -264,6 +264,15 @@ std::string composeTextReport(const std::string_view session, const CrashFacts& 
         if (facts.summary->crashedThreadId)
             text += " on thread " + std::to_string(*facts.summary->crashedThreadId);
         text += ", " + std::to_string(facts.summary->threads.size()) + " threads\n";
+        // #756: a thread that was exiting at the crash has no stack in the minidump; the report
+        // says so rather than leaving a reader to take it for a capture that failed.
+        if (const auto exited = exitedThreads(*facts.summary); !exited.empty()) {
+            text += "Exited at the crash (no stack): thread";
+            text += exited.size() == 1 ? " " : "s ";
+            for (std::size_t index = 0; index < exited.size(); ++index)
+                text += (index == 0 ? "" : ", ") + std::to_string(exited[index]);
+            text += "\n";
+        }
         if (facts.helperProcess && facts.summary->processId)
             text += "Crashed process: " + std::to_string(*facts.summary->processId) + "\n";
     } else {

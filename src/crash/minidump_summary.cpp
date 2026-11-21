@@ -191,7 +191,17 @@ std::optional<MinidumpSummary> readMinidumpSummary(const std::filesystem::path& 
                 summary.processId = reader.u32(std::size_t{*location} + 8);
         }
     }
+    for (auto& thread : summary.threads)
+        thread.exited = thread.stackBytes == 0 && thread.id != summary.crashedThreadId;
     return summary;
+}
+
+std::vector<std::uint32_t> exitedThreads(const MinidumpSummary& summary) {
+    std::vector<std::uint32_t> ids;
+    for (const auto& thread : summary.threads)
+        if (thread.exited)
+            ids.push_back(thread.id);
+    return ids;
 }
 
 std::string describeException(const MinidumpSummary& summary) {

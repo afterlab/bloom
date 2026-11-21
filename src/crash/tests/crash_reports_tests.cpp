@@ -39,9 +39,16 @@ void put32(std::vector<unsigned char>& bytes, const std::size_t offset, const st
         bytes[offset + index] = static_cast<unsigned char>(value >> (8 * index));
 }
 
-// A minidump with a thread list of two threads, an exception on the second, Linux system
-// information and process 4321.
-std::vector<unsigned char> syntheticMinidump() {
+struct SyntheticThread final {
+    std::uint32_t id = 0;
+    std::uint32_t stackBytes = 0;
+};
+
+// A minidump with the given thread list, an exception on `crashed`, Linux system information and
+// process 4321. By default two threads, 100 and 101, and the exception on 101.
+std::vector<unsigned char> syntheticMinidump(
+    const std::vector<SyntheticThread>& list = {{100, 4096}, {101, 8192}},
+    const std::uint32_t crashed = 101) {
     std::vector<unsigned char> bytes(32, 0);
     put32(bytes, 0, 0x504d444dU);
     put32(bytes, 4, 0xa793U);
@@ -49,7 +56,7 @@ std::vector<unsigned char> syntheticMinidump() {
     put32(bytes, 12, 32); // directory
     const std::size_t directory = 32;
     const std::size_t threads = directory + 4 * 12;
-    const std::size_t exception = threads + 4 + 2 * 48;
+    const std::size_t exception = threads + 4 + list.size() * 48;
     const std::size_t system = exception + 168;
     const std::size_t misc = system + 56;
     const std::size_t end = misc + 24;
@@ -60,22 +67,28 @@ std::vector<unsigned char> syntheticMinidump() {
         put32(bytes, directory + index * 12 + 4, size);
         put32(bytes, directory + index * 12 + 8, static_cast<std::uint32_t>(at));
     };
-    entry(0, 3, 4 + 2 * 48, threads);
+    entry(0, 3, static_cast<std::uint32_t>(4 + list.size() * 48), threads);
     entry(1, 6, 168, exception);
     entry(2, 7, 56, system);
     entry(3, 15, 24, misc);
-    put32(bytes, threads, 2);
-    put32(bytes, threads + 4, 100);       // thread 100
-    put32(bytes, threads + 4 + 32, 4096); // its stack bytes
-    put32(bytes, threads + 4 + 48, 101);  // thread 101
-    put32(bytes, threads + 4 + 48 + 32, 8192);
-    put32(bytes, exception, 101);
+    put32(bytes, threads, static_cast<std::uint32_t>(list.size()));
+    for (std::size_t index = 0; index < list.size(); ++index) {
+        put32(bytes, threads + 4 + index * 48, list[index].id);
+        put32(bytes, threads + 4 + index * 48 + 32, list[index].stackBytes); // its stack bytes
+    }
+    put32(bytes, exception, crashed);
     put32(bytes, exception + 8, 11);   // SIGSEGV
     put32(bytes, system + 20, 0x8201); // Linux
     put32(bytes, misc, 24);
     put32(bytes, misc + 4, 1); // the process id is valid
     put32(bytes, misc + 8, 4321);
     return bytes;
+}
+
+void writeBytes(const std::filesystem::path& file, const std::vector<unsigned char>& bytes) {
+    std::ofstream stream(file, std::ios::binary | std::ios::trunc);
+    stream.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
 }
 
 void write(const std::filesystem::path& file, const std::string_view content) {
@@ -97,11 +110,7 @@ std::filesystem::path makeReport(const std::filesystem::path& folder, const Cloc
 void minidumps(const std::filesystem::path& scratch) {
     const auto file = scratch / "synthetic.dmp";
     const auto bytes = syntheticMinidump();
-    {
-        std::ofstream stream(file, std::ios::binary);
-        stream.write(reinterpret_cast<const char*>(bytes.data()),
-                     static_cast<std::streamsize>(bytes.size()));
-    }
+    writeBytes(file, bytes);
     const auto summary = bloom::crash::readMinidumpSummary(file);
     expect(summary.has_value(), "minidump: a well-formed minidump is read");
     if (!summary)
@@ -115,14 +124,31 @@ void minidumps(const std::filesystem::path& scratch) {
            "minidump: the platform and the process");
     expect(bloom::crash::describeException(*summary) == "SIGSEGV (0x0000000b)",
            "minidump: the exception's name");
+    expect(!summary->threads[0].exited && !summary->threads[1].exited &&
+               bloom::crash::exitedThreads(*summary).empty(),
+           "minidump: a thread with its stack is not recorded as exited");
+
+    // #756: a thread exiting at the crash has no stack in the minidump. It is recorded as exited,
+    // and the live threads keep their stacks; the crashed thread is never recorded as exited.
+    writeBytes(file, syntheticMinidump({{100, 4096}, {102, 0}, {101, 8192}, {103, 0}}));
+    const auto exiting = bloom::crash::readMinidumpSummary(file);
+    expect(exiting && exiting->threads.size() == 4 && !exiting->threads[0].exited &&
+               exiting->threads[1].exited && !exiting->threads[2].exited &&
+               exiting->threads[3].exited,
+           "minidump: the threads with no stack are recorded as exited, the others are not");
+    expect(exiting && bloom::crash::exitedThreads(*exiting) == std::vector<std::uint32_t>{102, 103},
+           "minidump: the exited threads in the minidump's order");
+    writeBytes(file, syntheticMinidump({{100, 4096}, {101, 0}}));
+    const auto crashedWithout = bloom::crash::readMinidumpSummary(file);
+    expect(crashedWithout && crashedWithout->threads.size() == 2 &&
+               !crashedWithout->threads[1].exited &&
+               bloom::crash::exitedThreads(*crashedWithout).empty(),
+           "minidump: the crashed thread is not recorded as exited, even without a stack");
+    writeBytes(file, bytes);
 
     auto truncated = bytes;
     truncated.resize(bytes.size() - 30);
-    {
-        std::ofstream stream(file, std::ios::binary | std::ios::trunc);
-        stream.write(reinterpret_cast<const char*>(truncated.data()),
-                     static_cast<std::streamsize>(truncated.size()));
-    }
+    writeBytes(file, truncated);
     expect(!bloom::crash::readMinidumpSummary(file),
            "minidump: a stream that lies outside the file is refused");
     write(file, "not a minidump at all, just some text that is long enough");
@@ -145,6 +171,34 @@ void textReports() {
                text.find("line 50\n") != std::string::npos &&
                text.find("line 149\n") != std::string::npos,
            "text report: the last 100 log lines are kept");
+    const auto thread = [](const std::uint32_t id, const std::uint32_t stackBytes,
+                           const bool exited = false) {
+        bloom::crash::MinidumpThread record;
+        record.id = id;
+        record.stackBytes = stackBytes;
+        record.exited = exited;
+        return record;
+    };
+    facts.summary.emplace();
+    facts.summary->threads = {thread(100, 4096), thread(101, 8192)};
+    facts.summary->crashedThreadId = 101;
+    facts.summary->exceptionCode = 11;
+    facts.summary->platform = "linux";
+    const std::string live = bloom::crash::detail::composeTextReport(session, facts);
+    expect(live.find("\nCrash: SIGSEGV (0x0000000b) on thread 101, 2 threads\n") !=
+                   std::string::npos &&
+               live.find("Exited at the crash") == std::string::npos,
+           "text report: the crash, its thread and the thread count; no thread exited");
+    facts.summary->threads = {thread(100, 4096), thread(102, 0, true), thread(101, 8192)};
+    expect(bloom::crash::detail::composeTextReport(session, facts)
+                   .find("on thread 101, 3 threads\nExited at the crash (no stack): thread 102\n") !=
+               std::string::npos,
+           "text report: a thread exiting at the crash is recorded as exited");
+    facts.summary->threads.push_back(thread(103, 0, true));
+    expect(bloom::crash::detail::composeTextReport(session, facts)
+                   .find("Exited at the crash (no stack): threads 102, 103\n") != std::string::npos,
+           "text report: every exited thread is named");
+    facts.summary.reset();
     facts.helperProcess = true;
     expect(bloom::crash::detail::composeTextReport("", facts).starts_with(
                "A process Bloom started quit unexpectedly\n\nProgram: unknown"),
