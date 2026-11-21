@@ -423,6 +423,22 @@ SCENARIOS["camera-shake-2k"] = {
     ],
 }
 
+# #742: the filtered affine resample. Three layers shrink a plate 4x and rotate it 30 degrees through
+# Transform 2D, one at each filter (0 Bilinear, the baseline; 2 Trilinear; 3 Anisotropic), so the cost of
+# the mip levels and of the anisotropic taps shows against the plain resample. Written, not run.
+SCENARIOS["filtered-resample-2k"] = {
+    "description": "A PNG16 plate shrunk 4x and rotated 30 degrees through Transform 2D at Bilinear, "
+                   "Trilinear and Anisotropic.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": f"Plate {label}", "media": "png16",
+         "effects": [["bloom.transform-2d",
+                      {"scale": [0.25, 0.25], "rotation": 30.0, "filter": filter_value}]]}
+        for label, filter_value in (("Bilinear", 0), ("Trilinear", 2), ("Anisotropic", 3))
+    ],
+}
+
 # #563: Codec Degrade over a plate with the default GOP, coarse blocks and its quality keyed: each frame
 # renders its chain from the last keyframe (the optical flow of every step included), so this is the
 # node's heavy case.

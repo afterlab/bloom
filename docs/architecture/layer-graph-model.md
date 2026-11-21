@@ -369,6 +369,14 @@ The Layer Output boundary also owns how the layer combines with what is beneath 
 | Role | Schema key | Type | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `blendMode` | `bloom.layer.blend-mode` | Int64 | `0` (`Normal`) | How this layer's color combines with the layers beneath it |
+| `filter` | `bloom.layer.filter` | Int64, optional | absent (Bilinear) | How the layer transform samples its picture (#742) |
+
+`filter` is an optional, non-animatable integer, role `filter`: `0` Bilinear, `1` Nearest, `2` Trilinear,
+`3` Anisotropic, `4` Automatic (the compiler resolves Automatic to Trilinear). A layer saved without it
+is Bilinear, so older projects are unchanged. Add Layer and Add Node bind it Automatic on a new layer.
+A Merge entry layer never creates it automatically; setting it with `bloom.merge.set-entry-parameter`
+(role `filter`) or `bloom.layer.set-filter` creates it. The filtering model is in
+[`evaluation-primitives.md`](evaluation-primitives.md), "Filtered Sampling".
 
 The value is an enumeration stored as a small integer under one closed, durable mapping — `Normal`,
 `Add`, `Multiply`, `Screen`, `Overlay`, `Darken`, `Lighten`, `Difference`, `Subtract`, `Divide`,

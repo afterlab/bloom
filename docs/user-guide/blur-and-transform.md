@@ -26,3 +26,22 @@ verticals lean, with 90 the horizontals do. It applies before scale and rotation
 Skew and opacity work with the Transform 2D **Motion blur** on or off. With motion blur on, each point of the shutter
 is resampled with the skew and the opacity the animation has at that moment, so a skew that animates smears along
 its shear and an opacity that fades through the shutter fades the blur with it.
+
+## Transform 2D, Resize and Fit: Filter
+
+**Filter** is how the picture is sampled when it is moved, rotated or resized.
+
+- **Bilinear** blends the four nearest pixels. It is smooth when the picture stays the same size or grows, but a picture
+  shrunk by half or more shimmers and shows jagged edges, especially when it moves.
+- **Nearest** takes each pixel from one source pixel, so it looks blocky when enlarged and never blends values. Use it
+  for depth, ID and other data pictures.
+- **Trilinear** averages the source down to the size it is being drawn at first, so a shrunk picture is smooth and stable
+  while it moves. Use it for pictures that shrink. When the picture does not shrink it looks the same as Bilinear.
+- **Anisotropic** is Trilinear that also copes with a picture shrunk more in one direction than the other, such as a
+  receding floor or a strong squash. It keeps detail along the long direction instead of blurring it, and costs a little
+  more. When the picture does not shrink it looks the same as Bilinear.
+- **Automatic** (the default for a new node) lets Bloom choose; today it uses Trilinear.
+
+Projects made before these choices keep the Bilinear or Nearest they had and render exactly as before. With Transform 2D's
+**Motion blur** on, each point of the shutter is sampled with the same filter. Layers have the same **Filter** choice for
+their own transform; a new layer uses Automatic and a layer from an older project stays Bilinear.

@@ -308,6 +308,15 @@ kernel in the stage; the translate-only case is a path inside this one.
   same pixels. Before version 8 the CPU used `LayerTransform::inverseMap()` in binary64 and a
   sample whose factor was exactly 0 there could come out tiny but nonzero on the GPU and pick up a
   neighbouring tap's near-zero alpha.
+- **Filtered sampling (#742).** The Layer Output node's optional, non-animatable integer parameter
+  `filter` (role `filter`, schema key `bloom.layer.filter`) picks the resample filter with the values
+  below. A layer saved without it is Bilinear, so older projects are unchanged. A layer created by Add
+  Layer or Add Node binds it Automatic. A Merge entry layer never creates it on its own (absent is
+  Bilinear); setting it through `bloom.merge.set-entry-parameter` with role `filter`, or through
+  `bloom.layer.set-filter` {composition, layer, filter} (or merge and slot for an entry), creates it.
+  The filter model is under "Filtered Sampling" after "Resize And Fit". A layer that only moves keeps
+  Bilinear's pure-move path; a Trilinear or Anisotropic map that does not shrink the image is
+  exactly Bilinear.
 - **Pure moves.** A layer that only moves keeps the translate-only `layerTransformBilinearRow()` path
   below and the GPU's exact TranslationOpacity pass.
 - **Quarter turns are exact.** A rotation that is an exact multiple of 90 degrees resolves to exact
@@ -354,7 +363,11 @@ sampling coordinates; they do not redefine the source display canvas.
 Both nodes expose constant width, height, pixel-aspect numerator/denominator, a filter selector,
 and bypass. Fit also exposes Fit/Fill. Dimensions and ratio terms are positive integers up to
 32768; zero, negative, unsupported filter/policy values, and driven/animated geometry are rejected.
-The filter is **Bilinear** (0, default) or **Nearest** (1, #480). Nearest copies the one source
+The filter is **Bilinear** (0), **Nearest** (1, #480), **Trilinear** (2), **Anisotropic** (3) or
+**Automatic** (4, the default of a new node; #742). Stored 0 and 1 keep their meaning and render bit
+for bit as before. Automatic is a document value only: the compiler resolves it to Trilinear.
+Trilinear and Anisotropic prefilter a shrinking map through a mip pyramid (see "Filtered Sampling").
+Nearest copies the one source
 tap whose centre is nearest each output sample (on an exact half-way factor, the upper tap), so a
 depth, normal, motion-vector, ID or Cryptomatte image keeps its stored values exactly; with a
 transparent-black tap outside the source data window it never blends two values. The generic registered-node commands provide
@@ -366,12 +379,13 @@ extent with ceiling and derives its exact PAR to preserve the authored physical 
 Composition Output still chooses the composition render extent. Fit letterboxes with transparent
 black; Fill clips to the target canvas. The existing inverse-mapped affine primitive interpolates
 premultiplied RGBA directly, preserving finite signed/HDR RGB and alpha, with transparent-black
-taps outside the source data window. Neither filter has a downsampling antialiasing prefilter.
+taps outside the source data window. Bilinear and Nearest have no downsampling antialiasing
+prefilter; Trilinear and Anisotropic are that prefilter.
 
 CPU and GPU share checked geometry. The CPU uses the existing parented affine row reference (its
 nearest tap for Nearest), which since #545 is the GPU kernel's own double-float coordinate rule; GPU preparation emits resident `GpuSceneAffineCommand` work using
 `AffineBilinearV1`, whose `sampling` push word selects the nearest tap (the Required coverage axis
-`feature.resample.nearest`, shared with Transform 2D), including for
+`feature.resample.nearest`, shared with Transform 2D), Trilinear (2) or Anisotropic (3), including for
 preview and final-render evaluation. An optional checked output descriptor on individual and batched
 affine work carries the new display canvas/PAR without a pixel readback. Deferred vector inputs
 materialize through existing native coverage before this resample. No CPU-rendered Resize/Fit
@@ -384,6 +398,44 @@ reports row progress, and refuses invalid geometry or output-budget exhaustion. 
 the existing executor allocation, cancellation, cache pin and proven-retirement ownership. Native
 numeric parity, warm-cache and batch checks are included in the existing harnesses and remain
 subject to their device qualification; macOS/Windows retain the explicit CPU fallback contract.
+
+### Filtered Sampling
+
+Transform 2D, Resize, Fit and the Layer transform share one filter set (#742), stored as an integer:
+0 Bilinear, 1 Nearest, 2 Trilinear, 3 Anisotropic, 4 Automatic. Automatic is a document value only: the
+compiler resolves it to Trilinear. New Transform 2D and Resize/Fit nodes default to Automatic; a layer's
+default is described under "Layer Transform Resampling". Bilinear and Nearest, and their cache keys, are
+unchanged. Trilinear and Anisotropic exist to stop a shrinking map from aliasing; where the map does not
+shrink the image they are exactly Bilinear.
+
+- **Mip pyramid.** Level 0 is the source. Level n+1 is a premultiplied 2x2 box reduction of level n,
+  defined as the Bilinear composed-matrix resample of level n through the reduction matrix (scale 0.5,
+  offset -0.25 in each axis), so each output sample lands exactly between four texels and averages
+  them. Level sizes are `ceil(w/2)` by `ceil(h/2)`; at an odd size the last column or row averages with
+  transparent zero outside the image. The chain stops at 1x1. Levels are built only when the resolved
+  plan reads one (the map shrinks the image), and only up to the deepest level the plan reads. On the
+  GPU route the levels are ordinary affine commands keyed by the source identity, so the scene cache
+  retains them per source and the frame budget is charged for them. The CPU reference builds them per
+  evaluation, charged against the operation's pixel budget, checks cancellation per row and publishes
+  nothing partial.
+- **Footprint plan.** The map is affine, so its Jacobian is constant over the output. The plan is
+  computed once per command on the host in binary64, using only correctly rounded operations. Let
+  sigma1 >= sigma2 be the singular values of the inverse map's Jacobian: the source pixels per output
+  pixel along the major and minor axes. If sigma1 <= 1 (no shrink), Trilinear and Anisotropic are
+  exactly Bilinear. Trilinear uses rho = sigma1. Anisotropic takes `N = min(ceil(sigma1 / sigma2), 16)`
+  taps spaced `sigma1 / N` apart along the major axis and centred on the sample, each a trilinear
+  sample at rho = `sigma1 / N`, averaged with equal weight `1 / N`.
+- **Level selection.** `lower = floor(log2 rho)`, `upper = lower + 1`, and the upper weight is
+  `rho / 2^lower - 1` (linear across the octave), clamped at the deepest (1x1) level. A tap reads the
+  two levels with the same double-float bilinear coordinate rule as the Bilinear resample, at level
+  coordinate `(x + 0.5) / 2^n - 0.5`, blends them, and then opacity applies.
+- **One arithmetic on both routes.** CPU and GPU share this arithmetic: the same `AffineBilinearV1`
+  shader, extended, not the hardware sampler, because hardware anisotropy differs by vendor and under
+  MoltenVK. The command key includes the filter, the resolved levels, the weight bits, the tap count and
+  steps, and the upper level's key. The Required coverage axes are `feature.resample.trilinear`,
+  `feature.resample.anisotropic` and `feature.resample.mip-pyramid`.
+- **Known limit.** The output's support window is still the Bilinear support of the transformed
+  source, so at content edges a filtered footprint can be clipped by up to about one output pixel.
 
 ### Transform 2D
 
@@ -436,20 +488,26 @@ places the same frame and the authored movement stays visible. A zero scale, or 
 the selected extent, publishes no image without a diagnostic, as a collapsed Layer does. Support
 beyond the +/-2^24 device coordinate range, or a non-finite value, fails with an explicit diagnostic.
 An identity transform (no translation, unit scale, a whole-turn rotation) with the Transformed or
-Input extent is an exact passthrough. `filter` is **Bilinear** (0, default) or **Nearest** (1,
-#480), with the Resize/Fit meaning; neither has a downsampling prefilter. Nearest resamples on the
+Input extent is an exact passthrough. `filter` is **Bilinear** (0), **Nearest** (1,
+#480), **Trilinear** (2), **Anisotropic** (3) or **Automatic** (4, the default of a new node; #742),
+with the Resize/Fit meaning, and a node saved with 0 or 1 renders bit for bit as before. Nearest resamples on the
 CPU with the parented affine row over the same author-space matrix the GPU command uses, so both
-routes pick the same tap.
+routes pick the same tap. With the node's motion blur on, the shutter samples use the same filter
+choice: each shutter sample's footprint is planned from that sample's own map, and read through the
+motion kernel's mip levels.
 
 GPU preparation emits the Layer stage's raster commands for the same geometry. A pure Bilinear move
 becomes the exact TranslationOpacity pass, and every other map, and every Nearest map, becomes a
-resident `GpuSceneAffineCommand` (`AffineBilinearV1`, its nearest sampling for Nearest) built from
+resident `GpuSceneAffineCommand` (`AffineBilinearV1`, its nearest sampling for Nearest, its
+trilinear and anisotropic sampling for those filters) built from
 the same author-space matrix. A collapsed or fully clipped transform
 emits no command. Preview and every final route go through the same production scene executor, and
 no CPU-rendered output is uploaded. The CPU and GPU routes share the double-float coordinate rule,
-so they agree bit for bit on all four components; a Nearest tap is copied bit for bit.
+so Bilinear agrees bit for bit on all four components and a Nearest tap is copied bit for bit;
+Trilinear and Anisotropic run the same arithmetic on both routes and are held to the 2e-6
+abs-or-rel gate with exact alpha.
 
-Cache identity covers the sampled values, the input content-bounds centre, extent, filter, input
+Cache identity covers the sampled values, the input content-bounds centre, extent, the filter, input
 identity, windows/PAR, proxy and ROI. The executor independently keys the actual matrix or
 translation, the windows and the shader artifact. Animated or driven values make the operation and
 everything downstream time dependent. The effect input keeps full support for ROI requests. CPU

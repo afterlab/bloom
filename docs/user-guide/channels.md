@@ -107,7 +107,10 @@ Bloom refuses the cycle.
 
 **Resize, Fit and Transform 2D** have a **Filter** choice. Use **Nearest** for data and ID images:
 it takes each pixel from one source pixel, so depth or ID values are never blended. **Bilinear**
-(the default) is for pictures.
+smooths between neighboring pixels and is right when the picture is not shrinking much. **Trilinear**
+and **Anisotropic** are for pictures that shrink; see Transform 2D and Resize in
+[Gaussian Blur and Transform 2D extras](blur-and-transform.md). **Automatic** (the default for a new
+node) lets Bloom choose.
 
 ## Colour value nodes
 

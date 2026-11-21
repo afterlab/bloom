@@ -187,7 +187,7 @@ resample uses, runs the same probe, the same Float32 (hi, lo) split and the same
 two-sum/two-product steps, so CPU and GPU frames agree bit for bit on all four components, alpha
 included, on every platform. A binary64 device path would not be portable (Metal through MoltenVK
 has no float64, and consumer GPUs run it slowly). The LayerTransform form, which no production
-route uses, keeps the binary64 `layerTransformBilinearRow()` oracle and the 2e-6 abs-or-rel gate. `GpuBlend` runs `BlendV1`
+route uses, keeps the binary64 `layerTransformBilinearRow()` oracle and the 2e-6 abs-or-rel gate. `AffineBilinearV1`'s `sampling` push word also selects 2 Trilinear and 3 Anisotropic (#742): binding 4 is the upper mip level image, the push constant block is 84 bytes, and the footprint plan, level weights and tap steps come from the host in the command. The shader runs this arithmetic itself rather than the hardware sampler, because hardware anisotropy differs by vendor and under MoltenVK; the mip levels are ordinary affine commands the scene cache keeps per source (see [`evaluation-primitives.md`](evaluation-primitives.md), "Filtered Sampling"). `GpuBlend` runs `BlendV1`
 for any `core::BlendMode` over two resident images, and `GpuPointResample` runs `PointResampleV1`,
 the bit-exact nearest-neighbour gather the media-image proxy path uses. `GpuImageUpload` also
 uploads data channels (`render::ChannelSetImage`, #549): up to four planes become the R, G, B and A
