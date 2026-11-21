@@ -6,6 +6,7 @@ import json
 import math
 import pathlib
 import queue
+import socket
 import struct
 import subprocess
 import sys
@@ -613,6 +614,89 @@ class Protocol(unittest.TestCase):
         self.assertTrue(all('error' in response for response in responses[1:-1]))
         self.assertEqual(responses[-1]['result']['structuredContent']['revision'], 0)
         self.assertEqual(responses[-1]['result']['structuredContent']['project']['name'], 'Untitled')
+
+    @unittest.skipIf(sys.platform == 'win32',
+                     'WinHTTP takes the system proxy settings, not https_proxy, and sees a '
+                     'cancellation between the stages of a transfer (docs/architecture/fonts.md)')
+    def test_exit_while_a_font_download_waits_in_its_tls_handshake(self):
+        """#750: at end of input the server exits although a Google font download is waiting in its
+        TLS handshake. It once hung for ever there: OpenSSL's exit handler tore down the library
+        under the transfer and the font resolver's exit-time destructor waited for it. A loopback
+        proxy opens the tunnel and then never answers the client hello, so the download is held
+        in the handshake while the input closes; nothing reaches the network."""
+        listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        listener.bind(('127.0.0.1', 0))
+        listener.listen(4)
+        tunnel = {}
+        handshaking = threading.Event()
+
+        def serve():
+            try:
+                connection, _ = listener.accept()
+            except OSError:
+                return
+            tunnel['connection'] = connection
+            request = b''
+            while b'\r\n\r\n' not in request:
+                data = connection.recv(4096)
+                if not data:
+                    return
+                request += data
+            tunnel['request'] = request.split(b'\r\n', 1)[0].decode(errors='replace')
+            connection.sendall(b'HTTP/1.1 200 Connection established\r\n\r\n')
+            hello = connection.recv(1)
+            # 22: a TLS handshake record, the client hello. It is never answered.
+            if hello == b'\x16':
+                handshaking.set()
+
+        server = threading.Thread(target=serve, daemon=True)
+        server.start()
+        cache = tempfile.TemporaryDirectory(prefix='bloom-mcp-font-cache-')
+        environment = {key: value for key, value in os.environ.items()
+                       if key.lower() not in ('no_proxy', 'all_proxy', 'https_proxy')}
+        proxy = f'http://127.0.0.1:{listener.getsockname()[1]}'
+        environment.update({'https_proxy': proxy, 'HTTPS_PROXY': proxy,
+                            'XDG_CACHE_HOME': cache.name})
+        process = stdio_child.start([MCP], env=environment)
+        ended = False
+        try:
+            def call(line):
+                process.stdin.write((line + '\n').encode())
+                process.stdin.flush()
+                answer = process.stdout.readline()
+                if not answer:
+                    raise AssertionError(stdio_child.errors(process))
+                return json.loads(answer)
+
+            def content(line):
+                return call(line)['result']['structuredContent']
+
+            self.assertEqual(call(INIT)['id'], 1)
+            process.stdin.write((READY + '\n').encode())
+            added = content(tool(2, 'transact', {'expectedRevision': 0, 'operations': [
+                {'op': 'bloom.layer.add-text', 'args': {'composition': 1, 'name': 'T',
+                                                        'text': 'Hi'}}]}))
+            self.assertTrue(added['succeeded'], added)
+            nodes = content(tool(3, 'query', {'kind': 'nodes', 'composition': 1}))['records']
+            font = [node['parameters']['font'] for node in nodes if 'font' in node['parameters']][0]
+            google = 'source=google;family=Roboto;style=Bold;weight=700;italic=false'
+            chosen = content(tool(4, 'transact', {'expectedRevision': added['revision'], 'operations': [
+                {'op': 'bloom.parameter.set-source',
+                 'args': {'composition': 1, 'parameter': font, 'value': google}}]}))
+            self.assertTrue(chosen['succeeded'], chosen)
+            self.assertTrue(handshaking.wait(60), 'the font download reached the proxy\'s tunnel '
+                            f'and sent its client hello (proxy saw {tunnel.get("request")!r})')
+            self.assertIn('fonts.googleapis.com:443', tunnel['request'])
+            ended = True
+            stdio_child.end(process, 60, expect_status=0)
+        finally:
+            if not ended:
+                stdio_child.kill(process)
+            listener.close()
+            if 'connection' in tunnel:
+                tunnel['connection'].close()
+            server.join(10)
+            cache.cleanup()
 
     def test_cancel_active_render(self):
         with tempfile.TemporaryDirectory(prefix='bloom-mcp-cancel-') as directory:
