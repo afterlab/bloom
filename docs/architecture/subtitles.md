@@ -6,7 +6,7 @@ Updated: 2026-11-21
 
 Issue #752. A Subtitles node (`bloom.subtitles`) draws a list of timed cues. This document is the
 specification of the cue list value, the file formats Bloom reads and writes, the edits, the linked
-file, and how agents and scripts reach all of them. The project file arm is in
+file, the node's layout, rendering and checks, and how agents and scripts reach all of them. The project file arm is in
 [project-format.md](project-format.md), "Cue Lists".
 
 ## Module Boundary
@@ -189,6 +189,173 @@ changed, is missing or cannot be read is warned as `bloom.subtitles.linked-file-
 render uses the cues saved in the project. In the export queue it is a preflight warning that never
 blocks Start.
 
+## The Node
+
+`bloom.subtitles` (schema 1, `bloom/document/subtitles_nodes.hpp`) holds a cue list in its `cues`
+parameter or reads one on its `cues` input. Its outputs are:
+
+- `image`, the cues active at the frame;
+- `cues`, the resolved list, so one source can feed several differently styled nodes;
+- `text`, the active cues' plain text in list order, joined by line feeds, with the speaker prefix
+  when Show speaker is Name prefix; empty when no cue shows;
+- `index`, the sorted index of the first active cue, or -1;
+- `progress`, 0 to 1 through the first active cue.
+
+The value outputs are evaluated on every frame, also when Burn in is off.
+
+| Group | Parameters (animatable in italics) |
+| --- | --- |
+| Style | Font; *Size* (em pixels); *Fill*; *Outline color*, *Outline width* (pixels); Box (Off, Per line, Block), *Box color*, Box padding (em), Box radius (em); *Line height*; *Letter spacing* (pixels); *Opacity* |
+| Layout | Safe area (Title safe, Action safe, Full frame, Custom with margins as fractions of the width and height); Anchor (nine points); *Offset* (pixels); Max width (fraction of the safe area); Wrap (Balanced, Greedy, Explicit only); Max lines; Overflow (Shrink to fit, Show all lines); Text alignment; Use cue positions; Use file styles |
+| Timing | Fade in, Fade out (seconds); Show speaker (Off, Name prefix) |
+| Track | Burn in; Export as track; Language; Track name |
+| Checks | Max characters per line; Max reading speed (characters per second); Min duration (seconds); Min gap (frames) |
+
+Title safe and Action safe are the composition's safe areas (Composition Settings).
+
+## Layout
+
+One cue is laid out by `runtime::layoutSubtitleCues` (`bloom/runtime/subtitles_layout.hpp`) over
+the shared styled text layout (`bloom/render/styled_text.hpp`), which a later shaping engine will
+upgrade for Subtitles and Text alike. The Text node's own layout and pixels do not change.
+
+**Styled runs.** The cue's markup becomes runs. Each run has a face, a paint and an underline:
+
+- `<b>`, `<i>` and `<u>` pick the bold, italic or bold italic face and the underline. The four faces
+  are resolved once per plan from the node's font, through the font resolver (weight 700 and italic
+  variants of the same family).
+- A style the font lacks is drawn by the upright face. A missing italic is a synthesized 12-degree
+  oblique of the upright outlines (`kSyntheticObliqueSlant`, the same geometry on every route). A
+  missing bold draws at the regular weight. The built-in DejaVu Sans has neither, so it always
+  synthesizes the italic.
+- `<c.name>` colors its run when Use file styles is on: the eight WebVTT color classes, `bg_` classes
+  for the box, and the list's own styles by name. The cue's whole-cue style sets its color, outline,
+  box color, size and faces.
+- A file's colors are sRGB-encoded display values; the layout decodes them to linear values. The
+  node's own colors are working-space values. A style size is a fraction of the frame height.
+- `<v Name>`, `<lang>` and timestamp tags draw their text; `<ruby>` draws its base text and drops
+  its annotation.
+- Underline is a rectangle 0.12 em below the baseline, max(0.06 em, 0.5 px) thick.
+
+**Line breaking** follows Unicode UAX #14, revision 16.0.0: the line-break classes are a table
+generated from the Unicode Character Database (`tools/text/generate_unicode_text_tables.py`;
+provenance in `src/render/UNICODE-PROVENANCE.md`). CJK text breaks between ideographs, no-break
+spaces and closing punctuation hold, and a line feed in the text is always a break. A word wider
+than the line breaks between characters.
+
+**Wrap.** Every wrap mode measures the line at Max width times the safe area's width (or the cue's
+own width when Use cue positions is on and the cue names one).
+
+- **Greedy** fills each line in turn, as the Text node wraps.
+- **Balanced** keeps the Greedy line count and picks the breaks that make the widest line as
+  narrow as possible. Of equally narrow choices, it keeps the longer line at the bottom.
+- **Explicit only** breaks only at line feeds.
+
+**Max lines.** With Shrink to fit, a cue that wraps to more lines than Max lines is laid out again
+at 95 %, 90 % and so on of its size, down to 70 %. Past 70 % it draws at 70 % with every line, and
+the checks flag it. Show all lines never scales.
+
+**Placement.** The block, with its box padding, is placed in the safe area at the anchor point
+(the nine points of the safe area's corners, edges and center), then moved by Offset. With Use cue
+positions on, a cue's placement from its file overrides the node's:
+
+- `anchor` picks the point of the block that is placed;
+- `positionX` and `positionY` place that point at fractions of the frame (a WebVTT `position` and
+  `line` percentage, an ASS `\pos` or margin, a TTML region's origin and extent);
+- `lineOffset` moves the block by whole lines away from its anchored edge (a WebVTT line number);
+- `width` is the line's width as a fraction of the frame;
+- `textAlign` aligns the lines in the block.
+
+**Stacking.** Cues shown together at one anchor stack away from the anchored edge in list order
+(start, end, id): the earliest sits on the edge. A cue placed at an explicit position stands alone.
+
+## Rendering
+
+`runtime::CompiledSubtitles` (`bloom/runtime/compiled_plan.hpp`) is the node's compiled
+operation. Its operands are the compiled cue list (or the value output that drives it), the styling
+operands, the constant settings, the four resolved faces and the composition's frame size and safe
+areas.
+
+**Host preparation** (`src/runtime/subtitles_frame.cpp`, shared by every route) selects the cues
+active at the operation's time (`start <= t < end`), lays them out together and builds, for each cue
+in stack order, its layers:
+
+1. the box: one rounded rectangle around the block (Block) or one per line (Per line);
+2. the outline: every glyph's outline stroked at twice Outline width, centered, with round joins
+   and caps, so its outer half shows around the fill;
+3. the fill: one layer per paint, in the order the paints first appear.
+
+Each layer is path geometry for the reference path coverage (`render::PathRaster`, 4x4 samples) at
+the request's proxy scale. Its pixel is the premultiplied color times Opacity times the cue's fade.
+This is the audited `prep.parameter.resolution` and `prep.font.shaping` host work; no pixel is made
+here.
+
+- **The CPU reference** fills each layer's coverage rows and folds the layers source-over in that
+  order over transparent.
+- **The GPU** emits one coverage command per layer, its bounded `PathRasterCoverageGeometry`
+  rasterized on the device, and one source-over merge folding them in the same order. The merge is
+  the node's image, read by a Layer Output, an effect or a Merge like any image. There is no
+  per-node readback and no host pixel mask.
+
+The node's image covers only the ink window of its layers, clipped to the frame. Its content bounds
+are the composition frame, so a default layer places it exactly and the Layer transform moves every
+cue together. A frame with no active cue, a muted node or Burn in off publishes no image. A layer
+transform resamples the image, as it resamples any image; the subtitles are not redrawn as vectors
+through the layer's matrix.
+
+**Fades.** A cue's alpha is the smaller of `(t - start) / fadeIn` and `(end - t) / fadeOut`, each
+clamped to 0 and 1, and 1 without fades.
+
+**Coverage.** `CompiledSubtitles` is a Required operation in `gpu_coverage_contract.hpp`, with the
+`operation.CompiledSubtitles` and `node.bloom.subtitles` fixtures (italic and colored runs, a block
+box, an outline, two stacked cues) and the feature axes `feature.subtitles.box`,
+`feature.subtitles.outline` and `feature.subtitles.fade`. There is no exception.
+
+**Cache identity.** The operation key holds the content of the active cues (text, style, speaker
+when shown, placement and fade alpha), the resolved styling, the settings, the faces, the list's
+styles, the frame, the safe areas and the proxy scales. It never holds the time or the cue ids, so
+every frame inside one cue reuses one result, on the CPU and on the GPU (a warm frame dispatches
+nothing). A frame in a fade, or a frame that shows other cues, is a new result.
+
+**Budgets.** A frame draws at most 16 cues at once and 8,192 glyphs. A frame past either fails, on
+every route, with a diagnostic naming the time and the cues: "At 00:00:04.000 17 cues show at once
+(cues 3, 4, ...); at most 16 may", or "At 00:00:04.000 the subtitles draw 9000 glyphs (cues 1, 2);
+at most 8192 may". An edit never leaves more than 16 cues on screen at once, so the first can only
+come from a list another node supplies.
+
+**Cancellation.** Host preparation and every coverage row check cancellation. A cancelled frame
+publishes nothing.
+
+**Warnings.**
+
+- A cue holding text in a script that needs shaping (Arabic, Hebrew, the Indic scripts, Thai and
+  the others the Unicode Script property names) is a compile warning naming the cue: "Cue 4
+  contains Arabic text; Bloom lays text out without shaping, so it will not read correctly". A list
+  with more than 16 such cues names the first 16 and counts the rest. Bloom draws such text
+  unshaped and left to right.
+- A font that cannot be found is the font-missing warning, and the Viewer highlights the layer, as
+  for Text.
+
+## Checks
+
+`runtime::checkSubtitleCues` reads each cue against the node's Checks settings. A check is a
+readout: it never changes the render. Each cue is laid out on its own at the node's constant
+styling (an animated value reads its authored value).
+
+| Code | Flags a cue that |
+| --- | --- |
+| `characters-per-line` | has a line longer than Max characters per line |
+| `lines` | shows more lines than Max lines (after Shrink to fit) |
+| `reading-speed` | shows more characters per second than Max reading speed |
+| `duration` | shows for less than Min duration |
+| `gap` | ends fewer than Min gap frames before the next cue starts |
+| `overlap` | overlaps the next or the previous cue |
+| `outside-composition` | reaches past the composition's end |
+| `unshaped-script` | holds text in a script that needs shaping |
+
+The `subtitles` read adds each check's message to the cue's warnings. The checks need the node as
+the composition compiles it, so a node that does not reach the composition's output shows none.
+
 ## Automation
 
 **Time forms.** Every cue time takes Bloom's forms: an integer is a whole frame of the composition
@@ -219,7 +386,7 @@ Python `bloom.data.subtitles`.
   (`none`, `in-sync`, `changed`, `missing` or `unreadable`) and the styles.
 - It then gives a page of cues. Each has its id and index, start, end and duration as
   `{frames, seconds}`, a display timestamp, text and plain text, speaker, style, placement, and
-  warnings: an undefined style, or more than 16 cues showing at once.
+  warnings: an undefined style, more than 16 cues showing at once, and the cue's checks.
 - `at` keeps the cues showing at a time, and `from` and `to` keep those overlapping `[from, to)`.
 - A cursor is valid only at the revision it came from.
 - `format` `srt` or `vtt` answers the whole list as that file's text.

@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-01
+Updated: 2026-11-21
 
 ## Purpose And Scope
 
@@ -688,6 +688,24 @@ placement-clock time) with no pixel change. TEXT-2 moved the plan version for th
 moved the evaluator and primitive versions for path rasterization; the two lanes landed together, so
 all three steps are reflected in one set of re-derived identity goldens. Existing point-text pixels
 remain pinned because the zero-box defaults take the old path; only new box-layout pins were added.
+
+### Styled Text And Subtitles
+
+`src/render/styled_text.cpp` (`bloom/render/styled_text.hpp`) is the styled text layout the
+Subtitles node draws with (#752); the Text node keeps its own layout and its pixels. A block is a
+list of runs, each with a face, a paint and an underline flag. Advances, kerning within one face and
+letter spacing join the runs as Text joins its glyphs. Lines break at Unicode UAX #14 opportunities
+from a table generated from the Unicode Character Database 16.0.0 (`unicode_text_tables.inc`;
+`src/render/UNICODE-PROVENANCE.md`), with mandatory breaks at line feeds. Greedy fills lines;
+Balanced keeps the Greedy line count and minimizes the widest line, preferring a longer last line.
+A synthesized oblique shears outlines by tan(12 degrees) about the baseline. Outlines come from the
+same font adapter as Text (`text_font_access.hpp`), and the layout reports its glyph count, which
+the Subtitles budget reads.
+
+A Subtitles frame is path coverage: box rectangles, glyph outlines stroked at twice the outline
+width (Center, Round), and glyph fills, each a `PathRaster` folded source-over in that order; see
+[subtitles.md](subtitles.md), "Rendering". The CPU reference and the GPU share the geometry, so
+parity is the path coverage parity below.
 
 ### Path coverage
 
