@@ -854,6 +854,310 @@ void testHomography(Expectations& e) {
              "a position beyond any texel index reads transparent, not the edge pixel");
 }
 
+// #742 filtered reads: Trilinear and Anisotropic Image reads against an independent binary64 mip
+// pyramid and sampler; magnification equal to Bilinear bit for bit; the Homography's closed-form
+// Jacobian, the output-pixel Offset, the Jacobian Derivative and the level count a slot needs.
+struct LevelImages final {
+    std::vector<TestImage> levels;
+};
+
+std::array<float, 4> fetchLevels(const void* context, const int slot, const int x, const int y) {
+    const auto* images = static_cast<const LevelImages*>(context);
+    const auto& image = images->levels[static_cast<std::size_t>(slot / 4)];
+    return image.texels[static_cast<std::size_t>(y * image.width + x)];
+}
+
+// The binary64 levels: each the 2x2 box of the previous, transparent beyond an odd edge.
+std::vector<std::vector<std::array<double, 4>>> referencePyramid(const TestImage& source,
+                                                                 std::vector<int>& widths,
+                                                                 std::vector<int>& heights) {
+    std::vector<std::vector<std::array<double, 4>>> out;
+    std::vector<std::array<double, 4>> level;
+    for (const auto& t : source.texels)
+        level.push_back({static_cast<double>(t[0]), static_cast<double>(t[1]), static_cast<double>(t[2]), static_cast<double>(t[3])});
+    int w = source.width;
+    int h = source.height;
+    widths = {w};
+    heights = {h};
+    out.push_back(level);
+    while (w > 1 || h > 1) {
+        const int nw = (w + 1) / 2;
+        const int nh = (h + 1) / 2;
+        std::vector<std::array<double, 4>> next(static_cast<std::size_t>(nw * nh));
+        for (int y = 0; y < nh; ++y)
+            for (int x = 0; x < nw; ++x)
+                for (int c = 0; c < 4; ++c) {
+                    double sum = 0.0;
+                    for (int dy = 0; dy < 2; ++dy)
+                        for (int dx = 0; dx < 2; ++dx) {
+                            const int sx = 2 * x + dx;
+                            const int sy = 2 * y + dy;
+                            if (sx < w && sy < h)
+                                sum += out.back()[static_cast<std::size_t>(sy * w + sx)]
+                                                 [static_cast<std::size_t>(c)];
+                        }
+                    next[static_cast<std::size_t>(y * nw + x)][static_cast<std::size_t>(c)] =
+                        sum / 4.0;
+                }
+        out.push_back(next);
+        w = nw;
+        h = nh;
+        widths.push_back(w);
+        heights.push_back(h);
+    }
+    return out;
+}
+
+std::array<double, 4> referenceBilinear(const std::vector<std::array<double, 4>>& level,
+                                        const int w, const int h, const double u,
+                                        const double v) {
+    const double su = u - 0.5;
+    const double sv = v - 0.5;
+    const double iu = std::floor(su);
+    const double iv = std::floor(sv);
+    const double tu = su - iu;
+    const double tv = sv - iv;
+    std::array<double, 4> out{};
+    for (int dy = 0; dy < 2; ++dy)
+        for (int dx = 0; dx < 2; ++dx) {
+            const int x = static_cast<int>(iu) + dx;
+            const int y = static_cast<int>(iv) + dy;
+            if (x < 0 || y < 0 || x >= w || y >= h)
+                continue;
+            const double weight = (dx ? tu : 1.0 - tu) * (dy ? tv : 1.0 - tv);
+            for (std::size_t c = 0; c < 4; ++c)
+                out[c] += weight * level[static_cast<std::size_t>(y * w + x)][c];
+        }
+    return out;
+}
+
+std::array<double, 4> referenceTrilinear(const std::vector<std::vector<std::array<double, 4>>>& p,
+                                         const std::vector<int>& widths,
+                                         const std::vector<int>& heights, const double u,
+                                         const double v, const double rho) {
+    const auto at = [&](const std::size_t n) {
+        const double scale = std::ldexp(1.0, -static_cast<int>(n));
+        return referenceBilinear(p[n], widths[n], heights[n], u * scale, v * scale);
+    };
+    if (!(rho > 1.0))
+        return at(0);
+    const auto lower = static_cast<std::size_t>(std::floor(std::log2(rho)));
+    const auto deepest = p.size() - 1;
+    if (lower >= deepest)
+        return at(deepest);
+    const double weight = rho / std::ldexp(1.0, static_cast<int>(lower)) - 1.0;
+    const auto lo = at(lower);
+    const auto hi = at(lower + 1);
+    std::array<double, 4> out{};
+    for (std::size_t c = 0; c < 4; ++c)
+        out[c] = lo[c] + weight * (hi[c] - lo[c]);
+    return out;
+}
+
+void testFilteredReads(Expectations& e) {
+    // A 64 x 64 picture of fine stripes and a ramp, its pyramid built twice: in binary32 for the
+    // kernel (the box of each level, as the runtime builds it) and in binary64 for the reference.
+    TestImage source{64, 64, {}};
+    for (int y = 0; y < 64; ++y)
+        for (int x = 0; x < 64; ++x) {
+            const float stripe = ((x + y) % 2 == 0) ? 1.0F : 0.0F;
+            const float ramp = static_cast<float>(x) / 63.0F;
+            source.texels.push_back({stripe, ramp, 0.25F * stripe + 0.5F, 1.0F});
+        }
+    std::vector<int> widths;
+    std::vector<int> heights;
+    const auto pyramid = referencePyramid(source, widths, heights);
+    LevelImages levels;
+    for (std::size_t n = 0; n < pyramid.size(); ++n) {
+        TestImage level{widths[n], heights[n], {}};
+        for (const auto& t : pyramid[n])
+            level.texels.push_back({static_cast<float>(t[0]), static_cast<float>(t[1]),
+                                    static_cast<float>(t[2]), static_cast<float>(t[3])});
+        levels.levels.push_back(std::move(level));
+    }
+    const field::FieldImages images{&levels, &fetchLevels};
+    e.expect(field::fieldMipDeepestLevel(64, 64) == 6 && field::fieldMipDeepestLevel(5, 3) == 3 &&
+                 field::fieldMipLevelExtent(5, 3, 1) == std::array<std::int64_t, 2>{3, 2},
+             "the level chain halves each size up to 1 x 1");
+
+    const auto geometryFor = [&](const std::uint32_t built) {
+        auto geometry = field::fieldRasterGeometry(0, 0, 64, 64, 64.0, 64.0, 1.0, 1.0, 1);
+        geometry.slots[0] = field::fieldImageSlot(0, 0, 64, 64, 64.0, 64.0, 1.0, 1.0);
+        geometry.slots[0].levels = built;
+        for (std::uint32_t n = 1; n <= built; ++n)
+            geometry.slots[0].levelPlaces[n - 1] = {0, 0, widths[n], heights[n]};
+        return geometry;
+    };
+    // r0 coordinate, r1 the similarity's read position, r2 its Jacobian, r3 the read.
+    const auto similarityRead = [&](const double angle, const double scale,
+                                    const field::FieldImageFilter filter,
+                                    const field::FieldLevelPolicy policy) {
+        auto map = field::similarityHomography(0.0, 0.0, angle, scale, 0.0, 0.0);
+        field::FieldProgramBuilder builder;
+        builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+        builder.emit(FieldOp::Homography, 1, {0, -1, -1, -1}, *field::encodeHomography(map));
+        map.jacobian = true;
+        builder.emit(FieldOp::Homography, 2, {0, -1, -1, -1}, *field::encodeHomography(map));
+        field::ImageParameters read;
+        read.selector = 3;
+        read.edge = field::FieldImageEdge::Transparent;
+        read.filter = filter;
+        read.levels = policy;
+        builder.emit(FieldOp::Image, 3, {1, 2, -1, -1}, field::encodeImage(read));
+        return builder.finish(3, field::FieldResultKind::Premultiplied, field::FieldOutputMode::Raw)
+            .value_or(std::vector<float>{});
+    };
+    const auto worstAgainst = [&](std::vector<float> table, const double shrink,
+                                  const double angle, const bool anisotropicAxis) {
+        e.expect(field::applyFieldRasterGeometry(table, geometryFor(6)), "the levels place");
+        e.expect(field::validFieldTable(table), "a filtered table is valid");
+        double worst = 0.0;
+        for (int j = 28; j < 36; ++j)
+            for (int i = 28; i < 36; ++i) {
+                const auto pixel = field::fieldPixel(table, images, i, j);
+                const double x = static_cast<double>(i) + 0.5 - 32.0;
+                const double y = 32.0 - (static_cast<double>(j) + 0.5);
+                // The read position: R(-angle) p / scale (field, y up), as texels.
+                const double radians = -angle * std::numbers::pi / 180.0;
+                const double qx = (std::cos(radians) * x - std::sin(radians) * y) * shrink;
+                const double qy = (std::sin(radians) * x + std::cos(radians) * y) * shrink;
+                const auto want = referenceTrilinear(pyramid, widths, heights, qx + 32.0,
+                                                     32.0 - qy, shrink);
+                static_cast<void>(anisotropicAxis);
+                for (std::size_t c = 0; c < 4; ++c)
+                    worst = std::max(worst, std::fabs(static_cast<double>(pixel[c]) - want[c]));
+            }
+        return worst;
+    };
+    for (const double shrink : {1.5, 4.0, 8.0, 16.0})
+        for (const double angle : {0.0, 30.0}) {
+            const auto table = similarityRead(angle, 1.0 / shrink, field::FieldImageFilter::Trilinear,
+                                              field::FieldLevelPolicy::HomographyBound);
+            e.expect(worstAgainst(table, shrink, angle, false) < 2.0e-5,
+                     "a Trilinear read matches the binary64 pyramid and sampler");
+        }
+    // A uniform shrink has s1 = s2: Anisotropic takes one tap, the Trilinear read.
+    {
+        auto aniso = similarityRead(30.0, 0.125, field::FieldImageFilter::Anisotropic,
+                                    field::FieldLevelPolicy::HomographyBound);
+        e.expect(worstAgainst(aniso, 8.0, 30.0, true) < 2.0e-5,
+                 "an Anisotropic read of a uniform shrink is the Trilinear read");
+    }
+    // Magnification (and no shrink) is Bilinear bit for bit, Trilinear and Anisotropic alike.
+    for (const auto filter : {field::FieldImageFilter::Trilinear, field::FieldImageFilter::Anisotropic}) {
+        auto filtered = similarityRead(30.0, 2.0, filter, field::FieldLevelPolicy::HomographyBound);
+        auto plain = similarityRead(30.0, 2.0, field::FieldImageFilter::Bilinear,
+                                    field::FieldLevelPolicy::WholeChain);
+        e.expect(field::applyFieldRasterGeometry(filtered, geometryFor(6)) &&
+                     field::applyFieldRasterGeometry(plain, geometryFor(0)),
+                 "the magnified geometry applies");
+        bool same = true;
+        for (int j = 20; j < 44; ++j)
+            for (int i = 20; i < 44; ++i)
+                same = same && field::fieldPixel(filtered, images, i, j) ==
+                                   field::fieldPixel(plain, images, i, j);
+        e.expect(same, "a filtered read that does not shrink is Bilinear bit for bit");
+    }
+
+    // The closed-form Jacobian: a similarity at 1/8 reads 8 texels per output pixel on each axis.
+    {
+        auto map = field::similarityHomography(0.0, 0.0, 0.0, 0.125, 0.0, 0.0);
+        map.jacobian = true;
+        auto jacobian = homographyTable(map, field::FieldResultKind::Premultiplied);
+        auto geometry = field::fieldRasterGeometry(0, 0, 8, 8, 8.0, 8.0, 0.5, 0.5, 1);
+        e.expect(field::applyFieldRasterGeometry(jacobian, geometry), "the Jacobian geometry applies");
+        // The register itself (a raster's alpha would clamp): at half resolution an output pixel
+        // is two field pixels, so dq/di = 16 and dq/dj = -16 (+j is down).
+        const auto j = field::evaluateField(jacobian, kNoImages, 1.0F, -1.0F);
+        e.expect(j[0] == 16.0F && j[1] == 0.0F && j[2] == 0.0F && j[3] == -16.0F,
+                 "the Homography's Jacobian is per output pixel of the raster");
+    }
+    // An Offset in output pixels moves by 1 / scale field pixels.
+    {
+        auto moved = single(FieldOp::Offset, field::encodeOffset(1.0, 1.0, true),
+                            field::FieldResultKind::Premultiplied);
+        auto geometry = field::fieldRasterGeometry(0, 0, 8, 8, 8.0, 8.0, 0.5, 0.5, 1);
+        e.expect(field::applyFieldRasterGeometry(moved, geometry), "the Offset geometry applies");
+        const auto at00 = field::fieldPixel(moved, kNoImages, 0, 0);
+        // Pixel (0, 0) at scale 0.5 is field (-3, 3); one output pixel is two field pixels.
+        e.expect(at00[0] == -1.0F && at00[1] == 1.0F,
+                 "an output-pixel Offset moves by whole raster pixels at any scale");
+    }
+    // Anisotropic along a squashed axis: x shrinks 16 times, y 2 times. The footprint comes from
+    // the program's own one-sided differences (Offset, Derivative Jacobian), as a map with no closed
+    // form takes it.
+    {
+        field::FieldProgramBuilder builder;
+        field::SwizzleParameters squash;
+        squash.scales = {16.0, 2.0, 1.0, 1.0};
+        builder.emit(FieldOp::Coordinate, 0, field::kNoFieldInputs, {});
+        builder.emit(FieldOp::Swizzle, 1, {0, -1, -1, -1}, field::encodeSwizzle(squash));
+        builder.emit(FieldOp::Offset, 2, {0, -1, -1, -1}, field::encodeOffset(1.0, 0.0, true));
+        builder.emit(FieldOp::Swizzle, 3, {2, -1, -1, -1}, field::encodeSwizzle(squash));
+        builder.emit(FieldOp::Offset, 4, {0, -1, -1, -1}, field::encodeOffset(0.0, 1.0, true));
+        builder.emit(FieldOp::Swizzle, 5, {4, -1, -1, -1}, field::encodeSwizzle(squash));
+        builder.emit(FieldOp::Offset, 6, {0, -1, -1, -1}, field::encodeOffset(-1.0, 0.0, true));
+        builder.emit(FieldOp::Swizzle, 7, {6, -1, -1, -1}, field::encodeSwizzle(squash));
+        builder.emit(FieldOp::Offset, 8, {0, -1, -1, -1}, field::encodeOffset(0.0, -1.0, true));
+        builder.emit(FieldOp::Swizzle, 9, {8, -1, -1, -1}, field::encodeSwizzle(squash));
+        builder.emit(FieldOp::Derivative, 10, {3, 1, 5, 1},
+                     field::encodeDerivative(field::FieldDerivativeMode::Jacobian, 1.0, 2.0));
+        builder.emit(FieldOp::Derivative, 11, {1, 7, 1, 9},
+                     field::encodeDerivative(field::FieldDerivativeMode::Jacobian, 1.0, 2.0));
+        field::ImageParameters read;
+        read.selector = 3;
+        read.edge = field::FieldImageEdge::Transparent;
+        read.filter = field::FieldImageFilter::Anisotropic;
+        builder.emit(FieldOp::Image, 12, {1, 10, 11, -1}, field::encodeImage(read));
+        auto table = builder.finish(12, field::FieldResultKind::Premultiplied,
+                                    field::FieldOutputMode::Raw)
+                         .value_or(std::vector<float>{});
+        e.expect(field::applyFieldRasterGeometry(table, geometryFor(6)), "the squash places");
+        e.expect(field::fieldImageLevels(table, geometryFor(0))[0] == 6,
+                 "a read with no closed-form footprint builds the whole chain");
+        double worst = 0.0;
+        for (int j = 30; j < 34; ++j)
+            for (int i = 30; i < 34; ++i) {
+                const auto pixel = field::fieldPixel(table, images, i, j);
+                const double x = (static_cast<double>(i) + 0.5 - 32.0) * 16.0;
+                const double y = (32.0 - (static_cast<double>(j) + 0.5)) * 2.0;
+                // N = 8 taps at rho = 2 spaced 2 texels along u, centred.
+                std::array<double, 4> want{};
+                for (int k = 0; k < 8; ++k) {
+                    const auto tap = referenceTrilinear(pyramid, widths, heights,
+                                                        x + 32.0 + (k - 3.5) * 2.0, 32.0 - y, 2.0);
+                    for (std::size_t c = 0; c < 4; ++c)
+                        want[c] += tap[c] / 8.0;
+                }
+                for (std::size_t c = 0; c < 4; ++c)
+                    worst = std::max(worst, std::fabs(static_cast<double>(pixel[c]) - want[c]));
+            }
+        e.expect(worst < 2.0e-5, "an Anisotropic read averages eight taps along the major axis");
+    }
+    // The levels a slot needs: none for a map that never shrinks, as deep as a Homography shrinks
+    // it (plus one level), the whole chain otherwise.
+    {
+        auto none = similarityRead(0.0, 2.0, field::FieldImageFilter::Trilinear,
+                                   field::FieldLevelPolicy::HomographyBound);
+        auto eight = similarityRead(0.0, 0.125, field::FieldImageFilter::Trilinear,
+                                    field::FieldLevelPolicy::HomographyBound);
+        auto whole = similarityRead(0.0, 2.0, field::FieldImageFilter::Trilinear,
+                                    field::FieldLevelPolicy::WholeChain);
+        auto plain = similarityRead(0.0, 0.125, field::FieldImageFilter::Bilinear,
+                                    field::FieldLevelPolicy::WholeChain);
+        for (auto* table : {&none, &eight, &whole, &plain})
+            e.expect(field::applyFieldRasterGeometry(*table, geometryFor(0)), "the reads place");
+        e.expect(field::fieldImageLevels(none, geometryFor(0))[0] == 0,
+                 "a Homography that magnifies needs no level");
+        e.expect(field::fieldImageLevels(eight, geometryFor(0))[0] == 5,
+                 "a Homography shrinking 8 times needs levels 1 to 5");
+        e.expect(field::fieldImageLevels(whole, geometryFor(0))[0] == 6,
+                 "a whole-chain read needs every level");
+        e.expect(field::fieldImageLevels(plain, geometryFor(0))[0] == 0,
+                 "a Bilinear read needs no level");
+    }
+}
+
 // #738: a Corner Pin quad seen almost edge-on. The report's repro: a 30 x 80 picture pinned so two
 // of its long edges nearly coincide. When they cross (a twisted quad, which an edge-on face becomes
 // as it turns past edge-on), the map used to send the wedge beyond the crossing back onto the
@@ -1477,6 +1781,7 @@ int main() {
     testImagesAndRaster(expectations);
     testLensWarp(expectations);
     testHomography(expectations);
+    testFilteredReads(expectations);
     testCornerPinEdgeOn(expectations);
     testTestCard(expectations);
     testRays(expectations);

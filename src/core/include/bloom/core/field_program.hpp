@@ -292,8 +292,18 @@ struct ShapeParameters final {
     bool invert = false;
 };
 
-enum class FieldImageFilter : std::uint8_t { Bilinear, Nearest, Bicubic };
+// #742: Trilinear and Anisotropic prefilter a shrinking read through the slot image's mip pyramid
+// (field_kernel.glsl, "Filtered reads"); the instruction then takes its footprint (the read
+// position's change per output pixel) from its second and third inputs.
+enum class FieldImageFilter : std::uint8_t { Bilinear, Nearest, Bicubic, Trilinear, Anisotropic };
 enum class FieldImageEdge : std::uint8_t { Clamp, Transparent, Repeat, Mirror };
+// How many mip levels a filtered read's slot needs: the whole chain (its footprint is known only
+// per pixel), or as deep as the program's Homography maps shrink the image anywhere they draw.
+enum class FieldLevelPolicy : std::uint8_t { WholeChain, HomographyBound };
+inline constexpr std::size_t kMaxFieldImageLevels = 16;
+[[nodiscard]] constexpr bool isFilteredFieldImage(const FieldImageFilter filter) noexcept {
+    return filter == FieldImageFilter::Trilinear || filter == FieldImageFilter::Anisotropic;
+}
 struct ImageParameters final {
     std::uint8_t slot = 0;
     FieldImageFilter filter = FieldImageFilter::Bilinear;
@@ -302,6 +312,7 @@ struct ImageParameters final {
     std::uint8_t channel = 4;  // 0..3 red..alpha, 4 luma
     std::uint8_t first = 0;
     std::uint8_t second = 1;
+    FieldLevelPolicy levels = FieldLevelPolicy::WholeChain;
 };
 
 // A Fritsch-Carlson monotone cubic, as runtime::GradeCurveShape prepares the Curves master curve:
@@ -456,6 +467,8 @@ struct HomographyParameters final {
     int windowSlot = -1;
     bool windowCentred = false;
     std::array<double, 8> offsets{};
+    // #742: the instruction returns the map's Jacobian per output pixel instead of the position.
+    bool jacobian = false;
 };
 
 // #738: the narrowest quad a Corner Pin draws, in field pixels across (its area over its longest
@@ -586,7 +599,14 @@ struct ProceduralWarpParameters final {
     std::int64_t seed = 1;
 };
 
-enum class FieldDerivativeMode : std::uint8_t { Gradient, CurlOfScalar, CurlOfVector, Divergence };
+// Jacobian (#742, compiler only): the Jacobian of a vector, a filtered Image read's footprint.
+enum class FieldDerivativeMode : std::uint8_t {
+    Gradient,
+    CurlOfScalar,
+    CurlOfVector,
+    Divergence,
+    Jacobian
+};
 
 // A lane of a Swizzle: 0..3 a component of the input, 4 zero, 5 one.
 struct SwizzleParameters final {
@@ -656,7 +676,9 @@ class FieldProgramBuilder final {
 // The field Noise operation Turbulent runs for one of its two streams (0 x, 1 y): the instruction's
 // block carries both noise blocks after its own four vec4.
 [[nodiscard]] NoiseParameters turbulentNoise(const ProceduralWarpParameters&, std::uint32_t stream);
-[[nodiscard]] std::vector<float> encodeOffset(double dx, double dy);
+// With `outputPixels` the move is (dx, dy) output pixels of the raster (+x right, +y down), at any
+// evaluation scale (#742, a footprint's neighbours); otherwise field pixels.
+[[nodiscard]] std::vector<float> encodeOffset(double dx, double dy, bool outputPixels = false);
 [[nodiscard]] std::vector<float> encodeDerivative(FieldDerivativeMode mode, double step,
                                                   double strength);
 [[nodiscard]] std::vector<float> encodeCellCentre(double spacing);
@@ -682,6 +704,11 @@ struct FieldImageSlot final {
     std::int64_t originY = 0;
     std::int64_t width = 0;
     std::int64_t height = 0;
+    // #742: the mip levels built for the slot's filtered reads (fieldImageLevels), each placed in
+    // the dispatched image like the slot ([x, y, width, height]; 0 on the CPU, which reads level n
+    // of slot s as image slot s + 4 n).
+    std::uint32_t levels = 0;
+    std::array<std::array<std::int64_t, 4>, kMaxFieldImageLevels> levelPlaces{};
 };
 
 struct FieldRasterGeometry final {
@@ -717,6 +744,21 @@ struct FieldRasterGeometry final {
 // Writes the geometry into a finished table. False when a value cannot be represented.
 [[nodiscard]] bool applyFieldRasterGeometry(std::vector<float>& table,
                                             const FieldRasterGeometry& geometry);
+
+// #742: how many mip levels each image slot's filtered reads need (0 for a slot no Trilinear or
+// Anisotropic read takes, or that the maps never shrink), at most the slot's chain down to 1x1 and
+// kMaxFieldImageLevels. `table` has its geometry applied (the Homography windows placed). A
+// HomographyBound read takes the largest footprint of the program's Homography maps at the corners
+// of where they draw, plus one level of margin; a footprint the levels do not reach clamps at the
+// deepest, the same on both hosts.
+[[nodiscard]] std::array<std::uint32_t, kMaxFieldImages>
+fieldImageLevels(std::span<const float> table, const FieldRasterGeometry& geometry) noexcept;
+// The extent of mip level `level` of a width x height image (level 0 the image): each level halves
+// the previous, rounding up, down to 1x1; and the first 1x1 level.
+[[nodiscard]] std::array<std::int64_t, 2> fieldMipLevelExtent(std::int64_t width,
+                                                              std::int64_t height,
+                                                              std::uint32_t level) noexcept;
+[[nodiscard]] std::uint32_t fieldMipDeepestLevel(std::int64_t width, std::int64_t height) noexcept;
 
 // Sets every mask Shape Distance's field pixels per texel of its distance image.
 void setFieldTexelScale(std::vector<float>& table, double unitsPerTexel) noexcept;

@@ -912,6 +912,189 @@ BFK_FN vec4 bfk_sample(BFK_CTX, int slot, float x, float y, int filt, int edge) 
     return r;
 }
 
+// --- #742 Filtered reads --------------------------------------------------------------------------
+// An Image read with filter 3 (Trilinear) or 4 (Anisotropic) prefilters a shrinking read through
+// its slot image's mip pyramid (docs/architecture/fields.md, "Filtered reads"). Its block is 19
+// vec4: [slot, filter, edge, selector] [channel, first, second, levels] [policy, 0, 0, 0], then the
+// place [x, y, width, height] in the dispatched image of levels 1 to 16 (the host writes the level
+// count and the places when it places the raster). Level n + 1 is the premultiplied 2x2 box
+// reduction of level n (each size halved up, an odd edge averaged with transparent zero), so a
+// level-n texel coordinate is the level-0 one times 2^-n. The CPU host reads level n of slot s as
+// image slot s + 4 n; the GPU reads every level in its one atlas.
+
+const int BFK_MAX_LEVELS = 16;
+
+// Texel (x, y) of level `level` of slot `slot` (0 the slot image itself), wrapped by `edge`.
+BFK_FN vec4 bfk_level_tap(BFK_CTX, int slot, int base, int level, int x, int y, int edge) {
+    vec4 place = level == 0 ? bfk_data(BFK_CTXA, BFK_SLOTS + 2 * slot + 1)
+                            : bfk_data(BFK_CTXA, base + 2 + level);
+    int w = int(place.z);
+    int h = int(place.w);
+    int ix = bfk_edge(x, w, edge);
+    int iy = bfk_edge(y, h, edge);
+    if (ix < 0 || iy < 0)
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    return bfk_texel(BFK_CTXA, slot + 4 * level, int(place.x) + ix, int(place.y) + iy);
+}
+
+// The bilinear sample of level `level` at the level-0 texel coordinate (u, v). At level 0 it is
+// exactly bfk_sample's Bilinear.
+BFK_FN vec4 bfk_level_bilinear(BFK_CTX, int slot, int base, int level, float u, float v,
+                               int edge) {
+    BFK_P float lu = ldexp(u, -level);
+    BFK_P float lv = ldexp(v, -level);
+    BFK_P float su = lu - 0.5f;
+    BFK_P float sv = lv - 0.5f;
+    BFK_P float iu = floor(su);
+    BFK_P float iv = floor(sv);
+    BFK_P float tu = su - iu;
+    BFK_P float tv = sv - iv;
+    int x0 = int(iu);
+    int y0 = int(iv);
+    vec4 a = bfk_level_tap(BFK_CTXA, slot, base, level, x0, y0, edge);
+    vec4 b = bfk_level_tap(BFK_CTXA, slot, base, level, x0 + 1, y0, edge);
+    vec4 c = bfk_level_tap(BFK_CTXA, slot, base, level, x0, y0 + 1, edge);
+    vec4 d = bfk_level_tap(BFK_CTXA, slot, base, level, x0 + 1, y0 + 1, edge);
+    vec4 top = bfk_mix4(a, b, tu);
+    vec4 bottom = bfk_mix4(c, d, tu);
+    vec4 r = bfk_mix4(top, bottom, tv);
+    return r;
+}
+
+// The trilinear sample of footprint length `rho` (level-0 texels per output pixel) at (u, v):
+// rho = m 2^e (m in [0.5, 1)) reads level e - 1 and blends towards level e by 2 m - 1 (linear
+// across the octave, exact in binary32); both clamp at the deepest level built, a zero weight reads
+// one level, and rho <= 1 is level 0's bilinear.
+BFK_FN vec4 bfk_trilinear(BFK_CTX, int slot, int base, int levels, float u, float v, float rho,
+                          int edge) {
+    if (!(rho > 1.0f) || levels <= 0)
+        return bfk_level_bilinear(BFK_CTXA, slot, base, 0, u, v, edge);
+    int e = 0;
+    BFK_P float m = frexp(rho, e);
+    int lower = e - 1;
+    if (lower >= levels)
+        return bfk_level_bilinear(BFK_CTXA, slot, base, levels, u, v, edge);
+    BFK_P float twice = m * 2.0f;
+    BFK_P float weight = twice - 1.0f;
+    vec4 lo = bfk_level_bilinear(BFK_CTXA, slot, base, lower, u, v, edge);
+    if (!(weight > 0.0f))
+        return lo;
+    vec4 hi = bfk_level_bilinear(BFK_CTXA, slot, base, lower + 1, u, v, edge);
+    vec4 r = bfk_mix4(lo, hi, weight);
+    return r;
+}
+
+// One column of a footprint: whichever of the two one-sided differences is shorter (L1), so a read
+// whose position jumps beside the pixel (a tile seam, a mirror line) keeps the footprint of its own
+// side. `j` is 0 for the column of i (lanes x, y), 1 for j (lanes z, w).
+BFK_FN vec4 bfk_footprint(vec4 forward, vec4 backward, bool twoSided) {
+    if (!twoSided)
+        return forward;
+    BFK_P float fi = abs(forward.x) + abs(forward.y);
+    BFK_P float bi = abs(backward.x) + abs(backward.y);
+    BFK_P float fj = abs(forward.z) + abs(forward.w);
+    BFK_P float bj = abs(backward.z) + abs(backward.w);
+    BFK_P float ix = bi < fi ? backward.x : forward.x;
+    BFK_P float iy = bi < fi ? backward.y : forward.y;
+    BFK_P float jx = bj < fj ? backward.z : forward.z;
+    BFK_P float jy = bj < fj ? backward.w : forward.w;
+    return vec4(ix, iy, jx, jy);
+}
+
+// A Trilinear (filt 3) or Anisotropic (filt 4) sample of slot `slot` at field position (x, y),
+// the Image block at `base`; `jac` is the read position's change per output pixel, [dx/di, dy/di,
+// dx/dj, dy/dj] in field pixels. With s1 >= s2 the singular values of the footprint in level-0
+// texels (2x2 closed form: s1 = q + r, s2 = |q - r|), s1 <= 1 is exactly Bilinear; Trilinear reads
+// rho = s1; Anisotropic averages N = min(ceil(s1 / s2), 16) trilinear taps at rho = s1 / N, spaced
+// s1 / N apart along the major axis and centred on the sample.
+BFK_FN vec4 bfk_sample_filtered(BFK_CTX, int base, int slot, float x, float y, int filt, int edge,
+                                vec4 jac) {
+    vec4 map = bfk_data(BFK_CTXA, BFK_SLOTS + 2 * slot);
+    vec4 place = bfk_data(BFK_CTXA, BFK_SLOTS + 2 * slot + 1);
+    if (!(place.z > 0.0f) || !(place.w > 0.0f))
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    BFK_P float u = fma(x, map.x, map.y);
+    BFK_P float v = fma(y, map.z, map.w);
+    if (!(abs(u) < 1.0e9f) || !(abs(v) < 1.0e9f))
+        return vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    vec4 h1 = bfk_data(BFK_CTXA, base + 1);
+    int levels = min(int(h1.w), BFK_MAX_LEVELS);
+    BFK_P float a = jac.x * map.x;
+    BFK_P float c = jac.y * map.z;
+    BFK_P float b = jac.z * map.x;
+    BFK_P float d = jac.w * map.z;
+    BFK_P float ad = a + d;
+    BFK_P float am = a - d;
+    BFK_P float cb = c + b;
+    BFK_P float cm = c - b;
+    BFK_P float e1 = ad * 0.5f;
+    BFK_P float f1 = am * 0.5f;
+    BFK_P float g1 = cb * 0.5f;
+    BFK_P float k1 = cm * 0.5f;
+    BFK_P float kk = k1 * k1;
+    BFK_P float q2 = fma(e1, e1, kk);
+    BFK_P float gg = g1 * g1;
+    BFK_P float r2 = fma(f1, f1, gg);
+    BFK_P float q = bfk_sqrt(q2);
+    BFK_P float r = bfk_sqrt(r2);
+    BFK_P float s1 = q + r;
+    BFK_P float qr = q - r;
+    BFK_P float s2 = abs(qr);
+    if (!(s1 > 1.0f) || !(s1 < 1.0e30f))
+        return bfk_level_bilinear(BFK_CTXA, slot, base, 0, u, v, edge);
+    if (filt == 3)
+        return bfk_trilinear(BFK_CTXA, slot, base, levels, u, v, s1, edge);
+    int n = BFK_MAX_LEVELS;
+    BFK_P float s2x16 = s2 * 16.0f;
+    if (s2x16 > s1) {
+        BFK_P float ratio = bfk_div(s1, s2);
+        BFK_P float whole = floor(ratio);
+        n = int(whole);
+        if (whole < ratio)
+            n = n + 1;
+        n = max(n, 1);
+    }
+    BFK_P float rho = bfk_div(s1, float(n));
+    // The major axis: the eigenvector of A A^T for s1^2, A = [[a, b], [c, d]].
+    BFK_P float bb = b * b;
+    BFK_P float p = fma(a, a, bb);
+    BFK_P float bd = b * d;
+    BFK_P float k = fma(a, c, bd);
+    BFK_P float dd = d * d;
+    BFK_P float t = fma(c, c, dd);
+    BFK_P float lambda = s1 * s1;
+    BFK_P float lp = lambda - p;
+    BFK_P float lt = lambda - t;
+    BFK_P float kk2 = k * k;
+    BFK_P float n1 = fma(lp, lp, kk2);
+    BFK_P float n2 = fma(lt, lt, kk2);
+    BFK_P float vx = n1 >= n2 ? k : lt;
+    BFK_P float vy = n1 >= n2 ? lp : k;
+    BFK_P float nn = n1 >= n2 ? n1 : n2;
+    BFK_P float len = bfk_sqrt(nn);
+    BFK_P float dx = 1.0f;
+    BFK_P float dy = 0.0f;
+    if (len > 0.0f) {
+        dx = bfk_div(vx, len);
+        dy = bfk_div(vy, len);
+    }
+    BFK_P float stepU = dx * rho;
+    BFK_P float stepV = dy * rho;
+    BFK_P float mid = float(n - 1) * 0.5f;
+    BFK_P float weight = bfk_div(1.0f, float(n));
+    vec4 acc = vec4(0.0f, 0.0f, 0.0f, 0.0f);
+    for (int i = 0; i < BFK_MAX_LEVELS; ++i) {
+        if (i >= n)
+            break;
+        BFK_P float tk = float(i) - mid;
+        BFK_P float tu = fma(tk, stepU, u);
+        BFK_P float tv = fma(tk, stepV, v);
+        vec4 tap = bfk_trilinear(BFK_CTXA, slot, base, levels, tu, tv, rho, edge);
+        acc = bfk_madd4(acc, tap, weight);
+    }
+    return acc;
+}
+
 // One stored channel of a premultiplied texel: 0 red, 1 green, 2 blue, 3 alpha, 4 Rec. 709 luma.
 BFK_FN BFK_P float bfk_channel(vec4 t, int channel) {
     if (channel == 0)
@@ -1781,11 +1964,18 @@ BFK_FN vec4 bfk_op_shape(BFK_CTX, int base, float px, float py) {
 // [slot, filter, edge, selector] [channel, pair first, pair second, 0]. Selector 0 [stored channel,
 // 0, 0, 0], 1 [first, second, 0, 0], 2 the straight colour [r, g, b, a], 3 the filtered texel as
 // stored, premultiplied [r a, g a, b a, a] (a result of kind 3 keeps it whole, even where alpha is 0).
+// #742: a Trilinear or Anisotropic read takes its footprint from in1 (and in2, the other one-sided
+// difference, when present; see bfk_footprint): the read position's change per output pixel. Without
+// one the footprint is zero, which is Bilinear.
 
-BFK_FN vec4 bfk_op_image(BFK_CTX, int base, float px, float py) {
+BFK_FN vec4 bfk_op_image(BFK_CTX, int base, float px, float py, vec4 forward, vec4 backward,
+                         bool twoSided) {
     vec4 h0 = bfk_data(BFK_CTXA, base);
     vec4 h1 = bfk_data(BFK_CTXA, base + 1);
-    vec4 t = bfk_sample(BFK_CTXA, int(h0.x), px, py, int(h0.y), int(h0.z));
+    int filt = int(h0.y);
+    vec4 t = filt >= 3 ? bfk_sample_filtered(BFK_CTXA, base, int(h0.x), px, py, filt, int(h0.z),
+                                             bfk_footprint(forward, backward, twoSided))
+                       : bfk_sample(BFK_CTXA, int(h0.x), px, py, filt, int(h0.z));
     int selector = int(h0.w);
     if (selector == 0)
         return vec4(bfk_channel(t, int(h1.x)), 0.0f, 0.0f, 0.0f);
@@ -3320,28 +3510,51 @@ BFK_FN vec4 bfk_op_rays(BFK_CTX, int base, vec4 p) {
 // the bounds (the pinned quad's bounding box, #738) read 1e20, a position no image reaches, so the
 // sample is transparent.
 
+// #742: with the flag in the block's first vec4 (lane 3) the instruction returns the map's Jacobian
+// at p instead, in closed form, per output pixel of the raster: [dqx/di, dqy/di, dqx/dj, dqy/dj]
+// with dq/dd = (M - q (m20, m21)) / w (the footprint a filtered Image read takes); zero wherever the
+// position is the far one.
+
 BFK_FN vec4 bfk_op_homography(BFK_CTX, int base, vec4 p) {
+    vec4 hh = bfk_data(BFK_CTXA, base);
     vec4 h0 = bfk_data(BFK_CTXA, base + 3);
     vec4 h1 = bfk_data(BFK_CTXA, base + 4);
     vec4 h2 = bfk_data(BFK_CTXA, base + 5);
     vec4 h3 = bfk_data(BFK_CTXA, base + 6);
+    bool jacobian = hh.w > 0.5f;
+    vec4 outside = jacobian ? vec4(0.0f, 0.0f, 0.0f, 0.0f) : vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
     if (!(h2.z > 0.5f))
-        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+        return outside;
     if (h2.w > 0.5f && !(p.x >= h3.x && p.x <= h3.z && p.y >= h3.y && p.y <= h3.w))
-        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+        return outside;
     BFK_P float dx = p.x - h2.x;
     BFK_P float dy = p.y - h2.y;
     BFK_P float wy = fma(h1.w, dy, 1.0f);
     BFK_P float w = fma(h1.z, dx, wy);
     if (!(w > 1.0e-6f))
-        return vec4(1.0e20f, 1.0e20f, 0.0f, 0.0f);
+        return outside;
     BFK_P float ax = fma(h0.y, dy, h0.z);
     BFK_P float nx = fma(h0.x, dx, ax);
     BFK_P float ay = fma(h1.x, dy, h1.y);
     BFK_P float ny = fma(h0.w, dx, ay);
     BFK_P float qx = bfk_div(nx, w);
     BFK_P float qy = bfk_div(ny, w);
-    return vec4(qx, qy, 0.0f, 0.0f);
+    if (!jacobian)
+        return vec4(qx, qy, 0.0f, 0.0f);
+    vec4 mp = bfk_data(BFK_CTXA, BFK_MAPPING);
+    BFK_P float rxx = fma(-qx, h1.z, h0.x);
+    BFK_P float rxy = fma(-qx, h1.w, h0.y);
+    BFK_P float ryx = fma(-qy, h1.z, h0.w);
+    BFK_P float ryy = fma(-qy, h1.w, h1.x);
+    BFK_P float jxx = bfk_div(rxx, w);
+    BFK_P float jxy = bfk_div(rxy, w);
+    BFK_P float jyx = bfk_div(ryx, w);
+    BFK_P float jyy = bfk_div(ryy, w);
+    BFK_P float ix = jxx * mp.x;
+    BFK_P float iy = jyx * mp.x;
+    BFK_P float jx = jxy * mp.z;
+    BFK_P float jy = jyy * mp.z;
+    return vec4(ix, iy, jx, jy);
 }
 
 // --- Procedural warp ------------------------------------------------------------------------------
@@ -3969,11 +4182,23 @@ BFK_FN vec4 bfk_op_swizzle(BFK_CTX, int base, vec4 a) {
 
 // [mode, 1 / (2 step), strength, 0], inputs f(p + h x), f(p - h x), f(p + h y), f(p - h y).
 // Modes 0 Gradient of a scalar, 1 Curl of a scalar (Bridson et al. 2007: (d/dy, -d/dx)),
-// 2 Curl of a vector (d vy/dx - d vx/dy), 3 Divergence (d vx/dx + d vy/dy).
+// 2 Curl of a vector (d vy/dx - d vx/dy), 3 Divergence (d vx/dx + d vy/dy), 4 (#742, compiler
+// only) the Jacobian of a vector, [d vx/dx, d vy/dx, d vx/dy, d vy/dy].
 BFK_FN vec4 bfk_op_derivative(BFK_CTX, int base, vec4 xp, vec4 xm, vec4 yp, vec4 ym) {
     vec4 h0 = bfk_data(BFK_CTXA, base);
     BFK_P float k = h0.y * h0.z;
     int mode = int(h0.x);
+    if (mode == 4) {
+        BFK_P float ex = xp.x - xm.x;
+        BFK_P float ey = xp.y - xm.y;
+        BFK_P float fx = yp.x - ym.x;
+        BFK_P float fy = yp.y - ym.y;
+        BFK_P float jxx = ex * k;
+        BFK_P float jyx = ey * k;
+        BFK_P float jxy = fx * k;
+        BFK_P float jyy = fy * k;
+        return vec4(jxx, jyx, jxy, jyy);
+    }
     if (mode == 0 || mode == 1) {
         BFK_P float ex = xp.x - xm.x;
         BFK_P float ey = yp.x - ym.x;
@@ -4177,7 +4402,7 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
 #endif
 #if (BFK_OPS >> 8) & 1
         case 8:
-            v = bfk_op_image(BFK_CTXA, base, x0.x, x0.y);
+            v = bfk_op_image(BFK_CTXA, base, x0.x, x0.y, x1, x2, i2 >= 0);
             break;
 #endif
 #if (BFK_OPS >> 9) & 1
@@ -4219,9 +4444,18 @@ BFK_FN vec4 bfk_run(BFK_CTX, float px, float py) {
 #if (BFK_OPS >> 15) & 1
         case 15: {
             vec4 d = bfk_data(BFK_CTXA, base);
-            BFK_P float ox = x0.x + d.x;
-            BFK_P float oy = x0.y + d.y;
-            v = vec4(ox, oy, 0.0f, 0.0f);
+            if (d.z > 0.5f) {
+                // #742: [di, dj, 1, 0] moves by output pixels of the raster (a footprint's
+                // neighbours), at any evaluation scale.
+                vec4 mp = bfk_data(BFK_CTXA, BFK_MAPPING);
+                BFK_P float ox = fma(d.x, mp.x, x0.x);
+                BFK_P float oy = fma(d.y, mp.z, x0.y);
+                v = vec4(ox, oy, 0.0f, 0.0f);
+            } else {
+                BFK_P float ox = x0.x + d.x;
+                BFK_P float oy = x0.y + d.y;
+                v = vec4(ox, oy, 0.0f, 0.0f);
+            }
             break;
         }
 #endif

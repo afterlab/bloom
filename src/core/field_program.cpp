@@ -525,6 +525,13 @@ std::vector<float> encodeImage(const ImageParameters& p) {
          static_cast<double>(p.selector));
     push(out, static_cast<double>(p.channel), static_cast<double>(p.first),
          static_cast<double>(p.second), 0.0);
+    // #742: a filtered read carries its level policy and room for the places of its slot's mip
+    // levels, which applyFieldRasterGeometry writes (no level until then: Bilinear at level 0).
+    if (isFilteredFieldImage(p.filter)) {
+        push(out, static_cast<double>(p.levels), 0.0, 0.0, 0.0);
+        for (std::size_t level = 0; level < kMaxFieldImageLevels; ++level)
+            push(out, 0.0, 0.0, 0.0, 0.0);
+    }
     return out;
 }
 
@@ -1005,7 +1012,7 @@ std::optional<std::vector<float>> encodeHomography(const HomographyParameters& p
         valid = valid && std::fabs(p.m[i]) < 1.0e15;
     std::vector<float> out;
     push(out, p.windowSlot >= 0 ? 1.0 : 0.0, static_cast<double>(std::max(p.windowSlot, 0)),
-         p.windowSlot >= 0 && p.windowCentred ? 1.0 : 0.0, 0.0);
+         p.windowSlot >= 0 && p.windowCentred ? 1.0 : 0.0, p.jacobian ? 1.0 : 0.0);
     push(out, p.offsets[0], p.offsets[1], p.offsets[2], p.offsets[3]);
     push(out, p.offsets[4], p.offsets[5], p.offsets[6], p.offsets[7]);
     const bool bounded = p.bounded && std::ranges::all_of(p.bounds, [](const double v) {
@@ -1039,9 +1046,9 @@ std::vector<float> encodeSwizzle(const SwizzleParameters& p) {
     return out;
 }
 
-std::vector<float> encodeOffset(const double dx, const double dy) {
+std::vector<float> encodeOffset(const double dx, const double dy, const bool outputPixels) {
     std::vector<float> out;
-    push(out, dx, dy, 0.0, 0.0);
+    push(out, dx, dy, outputPixels ? 1.0 : 0.0, 0.0);
     return out;
 }
 
@@ -1262,6 +1269,44 @@ void placeHomographyWindows(std::vector<float>& table, const FieldRasterGeometry
 
 } // namespace
 
+namespace {
+
+// #742: writes each filtered Image read's level count and its slot's level places. False when a
+// place cannot be represented.
+[[nodiscard]] bool placeImageLevels(std::vector<float>& table, const FieldRasterGeometry& geometry) {
+    const auto limit = 16777216.0;
+    const auto count = static_cast<std::size_t>(std::max(table[2], 0.0F));
+    for (std::size_t i = 0; i < count && (kFieldTableCode + 2U * i + 2U) * 4U <= table.size();
+         ++i) {
+        const auto* a = &table[(kFieldTableCode + 2U * i) * 4U];
+        if (a[0] != static_cast<float>(FieldOp::Image))
+            continue;
+        const auto base = static_cast<std::size_t>(std::max(a[6], 0.0F));
+        if ((base + 3U + kMaxFieldImageLevels) * 4U > table.size())
+            continue;
+        float* block = &table[base * 4U];
+        if (!(block[1] >= 3.0F) || !(block[0] >= 0.0F) ||
+            block[0] >= static_cast<float>(kMaxFieldImages))
+            continue;
+        const auto& slot = geometry.slots[static_cast<std::size_t>(block[0])];
+        const auto levels = std::min<std::uint32_t>(slot.levels, kMaxFieldImageLevels);
+        block[7] = static_cast<float>(slot.width > 0 ? levels : 0U);
+        for (std::size_t level = 0; level < kMaxFieldImageLevels; ++level) {
+            float* place = &block[(3U + level) * 4U];
+            const bool present = slot.width > 0 && level < levels;
+            for (std::size_t k = 0; k < 4; ++k) {
+                const auto value = present ? slot.levelPlaces[level][k] : 0;
+                if (value < 0 || static_cast<double>(value) >= limit)
+                    return false;
+                place[k] = static_cast<float>(value);
+            }
+        }
+    }
+    return true;
+}
+
+} // namespace
+
 bool applyFieldRasterGeometry(std::vector<float>& table, const FieldRasterGeometry& geometry) {
     if (table.size() < kFieldTableCode * 4U)
         return false;
@@ -1308,7 +1353,116 @@ bool applyFieldRasterGeometry(std::vector<float>& table, const FieldRasterGeomet
             static_cast<double>(slot.height));
     }
     placeHomographyWindows(table, geometry);
+    if (!placeImageLevels(table, geometry))
+        return false;
     return allFinite(table);
+}
+
+std::array<std::int64_t, 2> fieldMipLevelExtent(std::int64_t width, std::int64_t height,
+                                                const std::uint32_t level) noexcept {
+    for (std::uint32_t index = 0; index < level && (width > 1 || height > 1); ++index) {
+        width = width / 2 + width % 2;
+        height = height / 2 + height % 2;
+    }
+    return {width, height};
+}
+
+std::uint32_t fieldMipDeepestLevel(std::int64_t width, std::int64_t height) noexcept {
+    std::uint32_t level = 0;
+    while (width > 1 || height > 1) {
+        width = width / 2 + width % 2;
+        height = height / 2 + height % 2;
+        ++level;
+    }
+    return level;
+}
+
+std::array<std::uint32_t, kMaxFieldImages>
+fieldImageLevels(const std::span<const float> table, const FieldRasterGeometry& geometry) noexcept {
+    std::array<std::uint32_t, kMaxFieldImages> out{};
+    if (table.size() < kFieldTableCode * 4U)
+        return out;
+    const auto count = static_cast<std::size_t>(std::max(table[2], 0.0F));
+    const auto instruction = [&](const std::size_t i) -> const float* {
+        return (kFieldTableCode + 2U * i + 2U) * 4U <= table.size()
+                   ? &table[(kFieldTableCode + 2U * i) * 4U]
+                   : nullptr;
+    };
+    const auto block = [&](const float* a, const std::size_t vec4s) -> const float* {
+        const auto base = static_cast<std::size_t>(std::max(a[6], 0.0F));
+        return (base + vec4s) * 4U <= table.size() ? &table[base * 4U] : nullptr;
+    };
+    // The largest footprint (level-0 texels per output pixel) any Homography map of the program
+    // reads slot `slot` with, at the corners of the box it draws in (its centre for a map with no
+    // bound); infinity when a corner lies at or beyond the map's horizon.
+    const auto homographyFootprint = [&](const FieldImageSlot& slot) {
+        double largest = 0.0;
+        for (std::size_t i = 0; i < count; ++i) {
+            const auto* op = instruction(i);
+            if (op == nullptr || op[0] != static_cast<float>(FieldOp::Homography))
+                continue;
+            const auto* h = block(op, 7);
+            if (h == nullptr || !(h[22] > 0.5F))
+                continue;
+            const auto f = [h](const std::size_t k) { return static_cast<double>(h[k]); };
+            const double m00 = f(12), m01 = f(13), m02 = f(14), m10 = f(15), m11 = f(16),
+                         m12 = f(17), m20 = f(18), m21 = f(19);
+            const double cx = f(20), cy = f(21);
+            const bool bounded = h[23] > 0.5F;
+            const std::array<std::array<double, 2>, 4> corners{
+                std::array<double, 2>{f(24), f(25)}, std::array<double, 2>{f(26), f(25)},
+                std::array<double, 2>{f(26), f(27)}, std::array<double, 2>{f(24), f(27)}};
+            const std::size_t points = bounded ? 4U : 1U;
+            for (std::size_t k = 0; k < points; ++k) {
+                const double dx = bounded ? corners[k][0] - cx : 0.0;
+                const double dy = bounded ? corners[k][1] - cy : 0.0;
+                const double w = m20 * dx + m21 * dy + 1.0;
+                if (!(w > 1.0e-6))
+                    return std::numeric_limits<double>::infinity();
+                const double qx = (m00 * dx + m01 * dy + m02) / w;
+                const double qy = (m10 * dx + m11 * dy + m12) / w;
+                // Texels per output pixel: [[a, b], [c, d]].
+                const double a = (m00 - qx * m20) / w * geometry.ax * slot.kx;
+                const double b = (m01 - qx * m21) / w * geometry.ay * slot.kx;
+                const double c = (m10 - qy * m20) / w * geometry.ax * slot.ky;
+                const double d = (m11 - qy * m21) / w * geometry.ay * slot.ky;
+                const double q = std::hypot(0.5 * (a + d), 0.5 * (c - b));
+                const double r = std::hypot(0.5 * (a - d), 0.5 * (c + b));
+                largest = std::max(largest, q + r);
+            }
+        }
+        return largest;
+    };
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto* read = instruction(i);
+        if (read == nullptr || read[0] != static_cast<float>(FieldOp::Image))
+            continue;
+        const auto* h = block(read, 3U + kMaxFieldImageLevels);
+        if (h == nullptr || !(h[1] >= 3.0F) || !(h[0] >= 0.0F) ||
+            h[0] >= static_cast<float>(kMaxFieldImages))
+            continue;
+        const auto index = static_cast<std::size_t>(h[0]);
+        const auto& slot = geometry.slots[index];
+        if (slot.width <= 0 || slot.height <= 0)
+            continue;
+        const auto deepest = std::min<std::uint32_t>(fieldMipDeepestLevel(slot.width, slot.height),
+                                                     kMaxFieldImageLevels);
+        std::uint32_t need = deepest;
+        if (h[8] == static_cast<float>(FieldLevelPolicy::HomographyBound)) {
+            const double footprint = homographyFootprint(slot);
+            if (!(footprint > 1.0)) {
+                need = 0;
+            } else if (std::isfinite(footprint)) {
+                int exponent = 0;
+                static_cast<void>(std::frexp(footprint, &exponent));
+                // floor(log2 footprint) is exponent - 1; the blend reads one level more, and one
+                // more is margin for a footprint inside the box larger than at its corners.
+                need = std::min<std::uint32_t>(deepest, static_cast<std::uint32_t>(exponent + 1));
+            }
+        }
+        out[index] = std::max(out[index], need);
+    }
+    return out;
 }
 
 void setFieldTexelScale(std::vector<float>& table, const double unitsPerTexel) noexcept {
@@ -1376,7 +1530,10 @@ std::size_t blockSize(const std::span<const float> table, const FieldOp op,
     case FieldOp::Shape:
         return at(4, 0) >= 0.0F && at(4, 0) < static_cast<float>(kMaxFieldImages) ? 5U : 0U;
     case FieldOp::Image:
-        return at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages) ? 2U : 0U;
+        // #742: a Trilinear or Anisotropic read carries its policy and level places.
+        if (!(at(0, 0) >= 0.0F && at(0, 0) < static_cast<float>(kMaxFieldImages)))
+            return 0U;
+        return at(0, 1) >= 3.0F ? 3U + kMaxFieldImageLevels : 2U;
     case FieldOp::Force: {
         const auto falloff = at(0, 1);
         const auto offset = at(1, 3);
