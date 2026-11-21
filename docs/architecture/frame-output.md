@@ -1334,8 +1334,8 @@ frame is still approved with its own attempt's digest.
 **Verification.** After publication each output carries an `ExportOutputVerification`: the accepted
 facet states and digest, an artifact summary (count, first and last path, bytes, digest, worst
 publication outcome), device provenance, and typed `ExportCheckResult`s for Reopen, FrameCount,
-Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication and DeviceProvenance with
-expected and observed values. A frame evaluated on the CPU reference path is a DeviceProvenance
+Timing, ColourTags, Container, Audio, Naming, ArtifactDigest, Publication, DeviceProvenance and
+(when the output exports subtitle tracks) Subtitles with expected and observed values. A frame evaluated on the CPU reference path is a DeviceProvenance
 warning, so it is never presented as a GPU frame. Movies are checked against the worker's reopen
 evidence, including the color tags and `<container>/<codec>` it read back. Timing passes only when
 the reopened duration equals the requested one (frames over the frame rate, or samples over the
@@ -1353,6 +1353,33 @@ published for that output. At Preparing the run re-samples authoritatively: an u
 changed destination fails with `PublicationConflict`, and the external-modification guard still
 applies at publication. The same re-sample creates missing destination folders and removes that
 target's stale `.bloom-stage-` files whose owner process is gone.
+
+**Subtitle tracks (#752).** An output whose settings carry `subtitles`
+([subtitles.md](subtitles.md), "Export") is driven in three more steps by the same driver
+(`src/host/export_output_drivers.cpp`, `src/host/export_subtitles.cpp`):
+
+1. *Preparation*, on a task before the first frame renders: the snapshot is compiled, the track
+   pass runs over the export's range with progress and cancellation, and each sidecar is written
+   and parsed back in memory. A sidecar that already exists and would not be replaced (Don't
+   render, or Ask first without a confirmed replace) fails the output here with
+   `PublicationConflict`, before any frame is rendered. The embedded tracks go into the
+   encode request.
+2. *Encoding*: the media worker muxes the embedded tracks and its reopen check reads them back
+   ([media-io.md](media-io.md), "Subtitle tracks"); the sequence runner compares the reopened
+   tracks with the request again and fails at Verification on a difference.
+3. *Sidecar publication*, on a blocking-I/O task after the output's own files are published: each
+   sidecar goes through the same admission, preflight, staging, read-back and atomic publication
+   as an image (`PublicationCoordinator`, `StagedArtifactCoordinator`), and the staged bytes are
+   parsed and compared with the track once more before it is published. The policy is the
+   output's: Replace and a confirmed Ask first replace an existing sidecar, otherwise one is
+   created only where none is.
+
+The output's Subtitles check lists every sidecar (path, format, cue count, bytes, SHA-256) and
+every embedded track (language, title, cues), and the export log has one line for each. A
+sidecar that cannot be published or does not read back as its track fails the output; the movie
+or the frames published before it stay published, as do the sidecars before it. Asking to embed in
+a format without a subtitle track (MXF, an image sequence, WAV) is the blocking preflight issue
+`SubtitleEmbedUnsupported`, whose reason names the sidecar formats.
 
 ## Transient jobs from MCP
 

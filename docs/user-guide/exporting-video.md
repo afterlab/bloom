@@ -241,11 +241,45 @@ a sequence as a sequence, a still as an image, a WAV as audio) with one undoable
 already in Assets is refreshed rather than duplicated. A failed import never fails the export; the
 job's **Details…** say "Couldn't add to Assets" and why, on their own line.
 
+## Subtitles
+
+Subtitles you burn in are part of the picture and export like any layer. An output can also deliver
+them as tracks a player can turn on and off. In the Output Module, the **Subtitles** row has:
+
+- **SRT**, **WebVTT** and **TTML**: a sidecar file of each kind beside the export, for every
+  format, image sequences and WAV included. A file is named after the export and the track's
+  language, `Shot010.en.srt`; when two tracks share a language they are numbered,
+  `Shot010.en.1.srt` and `Shot010.en.2.srt`.
+- **Embed in the movie**: a subtitle track inside an MP4, MOV or WebM movie, with its language and
+  the node's **Track name** as its title. A player does not show it unless the viewer turns it on.
+  MXF, image sequences and WAV carry no subtitle track, so the choice is unavailable for them with
+  that reason; use the sidecar files instead.
+
+Each Subtitles node with **Export as track** on becomes one track (a script can name the nodes
+instead). The track shows exactly the frames the picture shows them on: a layer that starts late,
+is trimmed, has a time remap or sits in a nested composition moves its cues with it, and a cue that
+is cut by a trim ends where the layer does. A muted node, or one that never shows in the range,
+exports nothing. The job's log lists each track it wrote, and names a node that reached the export
+but showed no cue, or a node the script named that does not reach it. SRT and WebVTT store times in milliseconds, so a cue
+starts on its first frame and is off on the frame after its last at any frame rate; TTML stores
+whole frames.
+
+The sidecar files follow **If a file is there** like the export itself. Under **Ask first** an
+existing sidecar is replaced only when you confirmed replacing the export's own files; otherwise
+the job stops before it renders and says which file is in the way.
+
+After the export, Bloom reads every sidecar and every track in the movie back and compares each
+cue, its frames and its text with what it wrote. **Details…** then read **Subtitles match the
+picture**, with each file in the tooltip; a file or track that differs fails the job with what
+differed. The job's log lists every file with its SHA-256.
+
 ## Scripting and the command line
 
 `bloom-cli export --project shot.bloom --all` renders the saved queue headlessly and prints the
 verification and import results as JSON; `--job <id>` selects jobs, `--replace` confirms existing
-destinations, and `--save` writes asset imports back to the project. See
+destinations, and `--save` writes asset imports back to the project. `bloom-cli render` and
+`export` take `--subtitles srt,vtt,ttml`, `--embed-subtitles` and `--subtitle-nodes` for the
+subtitle tracks. See
 [headless scripting](scripting.md) and [MCP](mcp.md). **Copy as bloom-cli Command** and **Copy as Python** on a job's context
 menu produce a script that recreates the job and starts it.
 

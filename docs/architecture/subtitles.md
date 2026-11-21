@@ -2,7 +2,7 @@
 
 Status: canonical
 
-Updated: 2026-11-21
+Updated: 2026-11-22
 
 Issue #752. A Subtitles node (`bloom.subtitles`) draws a list of timed cues. This document is the
 specification of the cue list value, the file formats Bloom reads and writes, the edits, the linked
@@ -372,6 +372,66 @@ styling (an animated value reads its authored value).
 
 The `subtitles` read adds each check's message to the cue's warnings. The checks need the node as
 the composition compiles it, so a node that does not reach the composition's output shows none.
+
+## Export
+
+Burned-in subtitles are pixels and go through every render route like any layer. An export can
+also carry the cues as **subtitle tracks**: sidecar files beside the output, and tracks inside the
+movie. The output's `ExportOutputSettings::subtitles` (`document::ExportSubtitles`) asks for them:
+
+- `sidecars`: any of SRT, WebVTT and TTML (IMSC 1.1 Text), written for every format, image
+  sequences and WAV included;
+- `embed`: tracks inside a MOV, MP4 or WebM movie;
+- `nodes`: absent for every Subtitles node with Export as track on, or the chosen nodes (whatever
+  their Export as track says).
+
+It is absent by default and saved only when set ([project-format.md](project-format.md), "Export
+Queue"). The Export panel's Output Module has a Subtitles row (SRT, WebVTT, TTML, Embed in the movie);
+MCP `render` and `export` take `subtitles {sidecar, embed, nodes}`; `bloom-cli render` and `export`
+take `--subtitles srt,vtt[,ttml]`, `--embed-subtitles` and `--subtitle-nodes`; Python takes the same
+arguments; and `export.script` reproduces the setting.
+
+**The track pass.** `runtime::collectSubtitleTracks` (`src/runtime/subtitle_tracks.hpp`) walks the
+compiled plan of each output frame in the export's range, with no pixel evaluated, and finds which
+cues of which nodes the picture shows: it follows the layer's range, enabled, solo and mute state,
+its clock and speed, Time Remap and nested compositions, the same way the render reaches the node.
+Each cue's run of output frames becomes a track cue `[first, end)` in output frames; a run that is
+interrupted (a trimmed layer, a remap that leaves and comes back) becomes two cues. A track
+therefore shows exactly the frames the picture shows. The pass runs on a task, before the first
+frame renders, reports progress in frames and stops on cancellation. A muted node, or one that never
+shows in the range, exports no track. The export log lists each track, and names a node that
+reaches the output but shows no cue in the range, and a named node that does not reach it.
+
+**Sidecars.** `<base>.<lang>.srt|vtt|ttml` beside the output, where `<base>` is the destination's
+name without its extension (for a sequence, without its frame number) and `<lang>` is the node's
+BCP 47 language. When two exported tracks share a language each gets `.<n>` (1, 2, ...) before the
+extension. SRT and WebVTT times are truncated to the millisecond, which keeps a cue on its first
+frame and off the frame after its last at any rate; TTML writes exact frame expressions (`<n>f`)
+with `ttp:frameRate` and, for a fractional rate, `ttp:frameRateMultiplier`. Each file is written
+and parsed straight back in memory before the first frame renders, then, after the output's own
+files are published, staged beside the export, read back from the disk, parsed and compared with
+its track again, and published atomically under the output's overwrite policy: Replace replaces an existing sidecar,
+Don't render never does, and Ask first replaces one only when the output's own files were
+confirmed for replacing. A sidecar that would not be replaced fails the output with
+`PublicationConflict` before the first frame renders. Each sidecar is listed in the export log and the results with its path, cue count, bytes and
+SHA-256 digest.
+
+**Embedded tracks.** MOV and MP4 carry 3GPP Timed Text (`tx3g`), WebM carries WebVTT
+(`D_WEBVTT/SUBTITLES`). Each track has the language as ISO 639-2 (the terminology code for MOV and
+MP4, the bibliographic code for WebM, `und` for a language Bloom does not know) and the node's
+track name as its title, is neither default nor forced (players do not show it over burned-in text
+unless asked), and is timed on the video's exact frame rate in MOV and MP4 (Matroska's clock is
+milliseconds, truncated as in a sidecar). A `tx3g` sample shows the cues active together as one
+text, joined by a line break. The media worker reopens the finished file, reads every track back
+and compares the count, languages, titles, cue frames and text with what it was sent; any difference
+fails the output. The macOS system encoder writes the same `tx3g` tracks through AVAssetWriter, and
+Windows' Media Foundation route muxes through the same FFmpeg code; see
+[media-io.md](media-io.md), "Subtitle tracks".
+
+**Preflight.** Asking to embed in MXF, an image sequence or WAV is a blocking preflight issue
+(`SubtitleEmbedUnsupported`) that names the sidecar formats instead. The export's results carry a
+Subtitles check (`ExportCheck::Subtitles`, `subtitles` in scripting and MCP) with every sidecar and
+embedded track, and it fails the output when any of them did not read back as its track.
 
 ## Automation
 

@@ -2,7 +2,7 @@
 
 Status: working; image, video, audio and export are implemented, and the sections marked as research are not
 
-Updated: 2026-11-16
+Updated: 2026-11-22
 
 ## v0 implemented boundary
 
@@ -417,6 +417,49 @@ be equal bit for bit; a source it refuses must be refused with a typed reason.
 
 The Windows and macOS branches are not compiled or run in Linux validation; each is built and
 tested on its own system.
+
+### Subtitle tracks (issue #752)
+
+An encode can carry embedded subtitle tracks: `EncodeSettingsV1::subtitles`, a list of
+`SubtitleTrackV1` (an ISO 639-2 language, a title, and cues `[first, end)` in output frames with
+their plain UTF-8 text), at most 64 tracks and 16 KiB of text per cue. Only MOV, MP4 and WebM with a video
+stream take them; a request with tracks for any other container is invalid. Provider schema 12
+carries the list in the begin request and the reopened list in `EncodeQcV1::subtitles`; the
+settings digest includes the tracks only when there are any, so the digest of a request without
+them is unchanged. The host builds the tracks ([subtitles.md](subtitles.md), "Export"); the
+worker writes and checks them.
+
+- **MOV and MP4.** FFmpeg's `mov_text` encoder writes 3GPP Timed Text (`tx3g`); one sample per
+  run of frames on which the same cues show, with an empty sample over each gap. The track's
+  timescale is the frame rate's numerator and every sample's time and duration are whole frames.
+  The muxer's own handling is finished after the trailer by
+  `ffmpeg::finishSubtitleTrackHeaders`: it clears the enabled flag the muxer sets on the first
+  text track (readers take an enabled text track as shown by default) and writes each track's
+  ISO 639-2 code into its media header, which the QuickTime muxer otherwise only fills for the
+  older Macintosh language codes. The title is the track's user-data name and its handler name.
+- **WebM.** FFmpeg's `webvtt` encoder writes WebVTT (`D_WEBVTT/SUBTITLES`), one block per cue in
+  Matroska's millisecond clock (truncated, so a cue starts on its first frame and is off on the
+  frame after its last), with the ISO 639-2/B language and the title. No track is default or
+  forced.
+- **Reopen check.** After the trailer the worker reads every subtitle track back through FFmpeg's
+  demuxer (`ffmpeg::readSubtitleTracks`, which reads each sample's bytes; no subtitle decoder is
+  involved) and compares the count, languages, titles, each cue's frames and its text with what
+  it was sent (`subtitleTrackDifference`). Any difference fails the encode with a sentence naming
+  the first one. The host compares the worker's reopened list with its request again before it
+  accepts the output.
+- **macOS.** The system encoder adds one AVAssetWriter subtitle input per track, with a `tx3g`
+  format description (`CMTextFormatDescriptionCreateFromBigEndianTextDescriptionData`), the
+  language code, the title as QuickTime user-data full name, `marksOutputTrackAsEnabled` off, the
+  frame-rate time scale, and all tracks in one input group with no default; the cues are queued
+  as the same samples. Its reopen check reads the tracks back with FFmpeg's demuxer like every
+  other route, and `bloom.media.videotoolbox-export` reads them back again independently.
+- **Windows.** The Media Foundation generation codes only pictures; its packets, the subtitle
+  tracks and the reopen check are libavformat's and the software generation's, unchanged.
+
+The two encoders are enabled in the FFmpeg configuration; see
+[dependency-intake.md](dependency-intake.md). `bloom.media.subtitle-encode` covers H.264 MP4
+and MOV, ProRes MOV and VP9 WebM: the frame time base, languages, titles, the enabled flag and the
+reopen check; it is skipped (exit 77) by a prefix built without the encoders.
 
 ## FFmpeg dependency intake (2026-09-17)
 

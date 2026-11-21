@@ -1924,9 +1924,15 @@ never reused.
 | job | `id`, `composition`, `name`, `range`, `outputs`, `enabled`, optional `labelColor` |
 | range | `kind` (`"work-area"`, `"composition"`, `"custom"`, `"frame"`), `first`, and `last` only for `custom` (decimal strings) |
 | output | `id`, `preset`, `settings`, `destination`, `enabled`, `importIntoAssets` |
-| settings | `format`, `codecProfile`, optional `videoBitrateKbps`, `compression`, `outputColorSpace`, `display`, `view`, `bakeLook`, `includeAudio`, optional `useCachedFrames` (only `false` is written), optional `loudness`, `audioSampleRate`, `encoder` (`"automatic"`, `"software"`, `"hardware"`), `naming` |
+| settings | `format`, `codecProfile`, optional `videoBitrateKbps`, `compression`, `outputColorSpace`, `display`, `view`, `bakeLook`, `includeAudio`, optional `useCachedFrames` (only `false` is written), optional `loudness`, `audioSampleRate`, `encoder` (`"automatic"`, `"software"`, `"hardware"`), `naming`, optional `subtitles` |
 | naming | optional `startFrame` (decimal string), `framePadding`, `pattern` |
+| subtitles | `sidecar` (`"srt"`, `"vtt"`, `"ttml"`, ascending and unique), `embed`, optional `nodes` (1 to 256 node ids, ascending and unique) |
 | destination | `portability` (`"project-relative"`, `"external"`), `path`, `overwrite` (`"ask"`, `"replace"`, `"refuse"`) |
+
+`subtitles` (optional, #752) is present only when the output exports subtitle tracks: the sidecar
+files to write beside it, whether its movie embeds the tracks, and `nodes`, the Subtitles nodes to
+export (absent: every node with Export as track on). An output without it exports none, so earlier
+documents and presets re-save unchanged. See [subtitles.md](subtitles.md), "Export".
 
 `loudness` (optional, #570) is present only when the output normalizes its programme loudness:
 `targetLufs` (Float64, `-40..-5`, EBU R128 integrated loudness) and `truePeakDbtp` (Float64,
