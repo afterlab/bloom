@@ -15,7 +15,7 @@
 #include <bloom/document/export_queue.hpp>
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
-#include <bloom/media/provider/encode.hpp>
+#include <bloom/output/media_output.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/cancellation.hpp>
 

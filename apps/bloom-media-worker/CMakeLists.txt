@@ -279,7 +279,8 @@ if(APPLE)
             target_compile_definitions(bloom_media_videotoolbox_export_test
                                        PRIVATE BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
             target_include_directories(bloom_media_videotoolbox_export_test
-                                       PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+                                       PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}"
+                                               "${PROJECT_SOURCE_DIR}/tests/support")
             target_link_libraries(bloom_media_videotoolbox_export_test
                                   PRIVATE bloom_media_ffmpeg_subtitle_tracks)
             set_target_properties(bloom_media_videotoolbox_export_test PROPERTIES

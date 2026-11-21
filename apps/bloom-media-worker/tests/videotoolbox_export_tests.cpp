@@ -8,6 +8,7 @@
 
 #if defined(BLOOM_VIDEOTOOLBOX_SUBTITLE_READBACK)
 #include "ffmpeg_subtitle_tracks.hpp"
+#include "unique_temp_dir.hpp"
 
 #include <filesystem>
 #include <fstream>
@@ -195,8 +196,8 @@ void exportSubtitles(const char* container) {
         artifact.insert(artifact.end(), chunk.bytes.begin(), chunk.bytes.end());
     }
     (void)session.close();
-    const auto path = std::filesystem::temp_directory_path() /
-                      (std::string("bloom-videotoolbox-subtitles.") + container);
+    const bloom::test_support::UniqueTempDir directory("bloom-videotoolbox-subtitles");
+    const auto path = directory.path() / (std::string("subtitles.") + container);
     {
         std::ofstream file(path, std::ios::binary);
         file.write(reinterpret_cast<const char*>(artifact.data()),
@@ -212,7 +213,6 @@ void exportSubtitles(const char* container) {
     } catch (const provider::Unavailable& error) {
         check(false, name + ": FFmpeg reads the file: " + error.detail);
     }
-    std::filesystem::remove(path);
 }
 #endif
 } // namespace
