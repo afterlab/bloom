@@ -111,10 +111,28 @@ void testIdentityAndPrepare() {
                                      values({std::numeric_limits<double>::quiet_NaN(), 0}));
     expect(nan.diagnostic.has_value(), "non-finite parameters refuse with a diagnostic");
     auto badFilter = effect;
-    std::get<runtime::Transform2DKernel>(badFilter.kernel).filter = 2;
+    std::get<runtime::Transform2DKernel>(badFilter.kernel).filter = 5;
     expect(context.prepare(badFilter, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({1, 0}))
                .diagnostic.has_value(),
            "an unknown filter refuses with a diagnostic");
+    auto unresolved = effect;
+    std::get<runtime::Transform2DKernel>(unresolved.kernel).filter =
+        runtime::kResampleFilterAutomatic;
+    expect(context.prepare(unresolved, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({1, 0}))
+               .diagnostic.has_value(),
+           "Automatic is a document value the compiler resolves; a kernel never accepts it");
+    for (const auto filter :
+         {runtime::kResampleFilterTrilinear, runtime::kResampleFilterAnisotropic}) {
+        auto filtered = effect;
+        std::get<runtime::Transform2DKernel>(filtered.kernel).filter = filter;
+        const auto prepared =
+            context.prepare(filtered, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({1, 0}));
+        expect(!prepared.diagnostic &&
+                   prepared.cacheIdentity !=
+                       context.prepare(effect, {}, {}, {}, {}, {}, 1.0, 1.0, {}, {}, values({1, 0}))
+                           .cacheIdentity,
+               "#742 Trilinear and Anisotropic prepare, and the filter enters the cache identity");
+    }
     auto nearest = effect;
     std::get<runtime::Transform2DKernel>(nearest.kernel).filter = runtime::kResampleFilterNearest;
     const auto nearestPrepared =

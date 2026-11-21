@@ -22,6 +22,7 @@
 
 #include <bloom/document/drill_levels.hpp>
 #include <bloom/document/parameter_activity.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
 #include <bloom/document/animation.hpp>
 #include <bloom/document/colorize_nodes.hpp>

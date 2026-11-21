@@ -1272,7 +1272,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         commandForOperation[chain->source], keyOf[chain->source], chainWindow,
                         *chainLayerWindow, concatenatedMatrix, hScale, vScale, concatenatedOpacity,
                         fullPixelAspect, operationIndex, chargeTransient, emit,
-                        commandForOperation[index], keyOf[index])) {
+                        commandForOperation[index], keyOf[index],
+                        detail::gpuAffineFilterOf(layer->filter))) {
                     return fail(error->code, error->message);
                 }
                 continue;
@@ -1281,7 +1282,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // retained when it applies; every other affine appears on the accepted GpuAffine
             // command so rotation, nonuniform/signed scale, anchor and any parent-composed shear
             // are exact.
-            if (!layer->parent && !scaledContent) {
+            // #742: a Nearest layer copies taps, so even its pure move takes the affine command
+            // (Trilinear and Anisotropic are Bilinear for a move, which never shrinks).
+            if (!layer->parent && !scaledContent && layer->filter != kResampleFilterNearest) {
                 if (const auto delta = detail::translationOnlyDeviceDelta(
                         transformValue, sourceWindow, *layerWindow)) {
                     if (const auto error = detail::emitTranslationOpacityCommand(
@@ -1297,7 +1300,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             if (const auto error = detail::emitAffineLayerCommand(
                     inputIndex, keyOf[inputIndexValue], sourceWindow, *layerWindow, contentComposed,
                     hScale, vScale, opacity->value, fullPixelAspect, operationIndex,
-                    chargeTransient, emit, commandForOperation[index], keyOf[index])) {
+                    chargeTransient, emit, commandForOperation[index], keyOf[index],
+                    detail::gpuAffineFilterOf(layer->filter))) {
                 return fail(error->code, error->message);
             }
             continue;

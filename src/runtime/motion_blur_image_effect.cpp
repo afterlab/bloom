@@ -143,7 +143,7 @@ ImageEffectResult failed(const EvaluationDiagnosticCode code, const char* text) 
     return result;
 }
 
-constexpr int kLastPass = 26;
+constexpr int kLastPass = 27;
 
 // One evaluated pixel as the GPU wrapper stores it: finite with alpha in [0, 1], else invalid;
 // alpha 0 stored as zero.

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "affine_mip_levels.hpp"
 #include <algorithm>
 #include <array>
 #include <bloom/document/parameter.hpp>
@@ -128,8 +129,19 @@ class ParentedLayerTransform {
   public:
     ParentedLayerTransform(LayerMatrix matrix, render::ImageWindow window, double sx, double sy,
                            float opacity, bool nearest = false)
+        : ParentedLayerTransform(matrix, window, sx, sy, opacity,
+                                 nearest ? render::GpuAffineFilter::Nearest
+                                         : render::GpuAffineFilter::Bilinear) {}
+    // #742: any filter. Trilinear and Anisotropic resolve through render::planAffineFilter() of
+    // the device matrix, exactly as the GPU command's emission does.
+    ParentedLayerTransform(LayerMatrix matrix, render::ImageWindow window, double sx, double sy,
+                           float opacity, render::GpuAffineFilter filter)
         : matrix_(matrix), window_(window), sx_(sx), sy_(sy), opacity_(opacity),
-          determinant_(matrix.a * matrix.d - matrix.b * matrix.c), nearest_(nearest) {}
+          determinant_(matrix.a * matrix.d - matrix.b * matrix.c),
+          plan_(render::planAffineFilter(toGpuAffineMatrix(matrix, window, sx, sy), filter,
+                                         window.extent().width(), window.extent().height())) {}
+    // The resolved sampling: Bilinear or Nearest, or a filtered plan reading mip levels.
+    [[nodiscard]] const render::GpuAffineFilterPlan& filterPlan() const noexcept { return plan_; }
     [[nodiscard]] bool finite() const {
         return std::isfinite(determinant_) && std::isfinite(matrix_.a) &&
                std::isfinite(matrix_.b) && std::isfinite(matrix_.c) && std::isfinite(matrix_.d) &&
@@ -176,19 +188,30 @@ class ParentedLayerTransform {
     // GPU command agree bit for bit. `latticeWindow` is the window the GPU command covers: the
     // layer's unclipped support. A region-of-interest clip passes its smaller `outputWindow` and
     // gets the same pixels the full window has there.
+    // A filtered plan (#742) reads `levels`, the mip levels of `source` built for filterPlan()
+    // (AffineMipLevels); it is refused without them.
     [[nodiscard]] render::ImageStatus row(render::Rgba32fImageView source,
                                           render::ImageWindow latticeWindow,
                                           render::ImageWindow outputWindow, std::int64_t outputY,
-                                          std::span<render::Rgba32f> output) const {
-        return render::affineMatrixResampleRow(
-            source, deviceMatrix(), opacity_,
-            nearest_ ? render::GpuAffineFilter::Nearest : render::GpuAffineFilter::Bilinear,
-            latticeWindow, outputWindow, outputY, output);
+                                          std::span<render::Rgba32f> output,
+                                          const AffineMipLevels* levels = nullptr) const {
+        if (plan_.filtered()) {
+            const auto lower = levels ? levels->level(plan_.lowerLevel) : std::nullopt;
+            const auto upper = levels ? levels->level(plan_.upperLevel) : std::nullopt;
+            if (!lower || !upper)
+                return render::ImageError::codeOnly(render::ImageErrorCode::InvalidState);
+            return render::affineFilteredResampleRow(*lower, *upper, deviceMatrix(), plan_,
+                                                     opacity_, latticeWindow, outputWindow, outputY,
+                                                     output);
+        }
+        return render::affineMatrixResampleRow(source, deviceMatrix(), opacity_, plan_.filter,
+                                               latticeWindow, outputWindow, outputY, output);
     }
     [[nodiscard]] render::ImageStatus row(render::Rgba32fImageView source,
                                           render::ImageWindow outputWindow, std::int64_t outputY,
-                                          std::span<render::Rgba32f> output) const {
-        return row(source, outputWindow, outputWindow, outputY, output);
+                                          std::span<render::Rgba32f> output,
+                                          const AffineMipLevels* levels = nullptr) const {
+        return row(source, outputWindow, outputWindow, outputY, output, levels);
     }
 
   private:
@@ -197,6 +220,20 @@ class ParentedLayerTransform {
     double sx_, sy_;
     float opacity_;
     double determinant_;
-    bool nearest_ = false;
+    render::GpuAffineFilterPlan plan_{};
 };
+
+// #742: the compiled resample filter (kResampleFilter*) as the affine command's filter.
+[[nodiscard]] inline render::GpuAffineFilter gpuAffineFilterOf(const std::int64_t filter) noexcept {
+    switch (filter) {
+    case 1:
+        return render::GpuAffineFilter::Nearest;
+    case 2:
+        return render::GpuAffineFilter::Trilinear;
+    case 3:
+        return render::GpuAffineFilter::Anisotropic;
+    default:
+        return render::GpuAffineFilter::Bilinear;
+    }
+}
 } // namespace bloom::runtime::detail

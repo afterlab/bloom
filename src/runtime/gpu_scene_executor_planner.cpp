@@ -266,6 +266,19 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "an affine input was not planned");
         }
+        const bool filtered = affineCommand->plan.filtered();
+        if (filtered) {
+            // #742: the upper mip level the filtered resample reads beside its lower one.
+            if (const auto plan = planCommand(affineCommand->upperInput, color);
+                plan.code != GpuSceneExecutorDiagnosticCode::None) {
+                return plan;
+            }
+            if (color[affineCommand->upperInput] != 2) {
+                color[index] = 2;
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                      "an affine upper mip level was not planned");
+            }
+        }
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(affineCommand->outputWindow, bytes)) {
             color[index] = 2;
@@ -283,6 +296,10 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.affineOpacity = affineCommand->opacity;
         step.affineFilter = affineCommand->filter;
         step.affineOutputDescriptor = affineCommand->outputDescriptor;
+        if (filtered) {
+            step.destination = affineCommand->upperInput;
+            step.affinePlan = affineCommand->plan;
+        }
         steps.push_back(std::move(step));
         color[index] = 2;
         return {};

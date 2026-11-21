@@ -736,6 +736,57 @@ void testChains() {
                    maxDifference(*frameOf(b), *frameOf(c), 4, 4, 28, 20) > 0.01,
                "skew and opacity change the Transform 2D shutter's picture");
     }
+    // #742: Transform 2D's Trilinear and Anisotropic filters on the shutter samples. Shrunk, the
+    // sub-frame accumulation of the plain filtered Transform 2D (the affine resample's mip levels
+    // and footprint) and the shutter path (the motion kernel's own levels, each sample's footprint
+    // planned by the same rule) agree; the filter changes the shrunk picture; unshrunk, either
+    // filter is the Bilinear shutter bit for bit.
+    {
+        struct FilteredCase final {
+            std::int64_t filter;
+            std::array<double, 2> scale;
+            double rotation;
+            const char* name;
+        };
+        for (const auto& item :
+             {FilteredCase{runtime::kResampleFilterTrilinear, {0.25, 0.25}, 0.0, "Trilinear"},
+              FilteredCase{runtime::kResampleFilterAnisotropic, {0.2, 0.7}, 30.0, "Anisotropic"}}) {
+            const motion_test::MotionValues look{.scene = Scene::TransformBlur,
+                                                 .scale = item.scale,
+                                                 .rotation = item.rotation,
+                                                 .filter = item.filter};
+            auto subLook = look;
+            subLook.scene = Scene::SubFrame;
+            auto bilinearLook = look;
+            bilinearLook.filter = runtime::kResampleFilterBilinear;
+            const auto sub = motion_test::motionPlan(subLook).plan;
+            const auto shutter = motion_test::motionPlan(look).plan;
+            const auto bilinear = motion_test::motionPlan(bilinearLook).plan;
+            const auto a = evaluator.evaluate(sub, request(sub->output()), {});
+            const auto b = evaluator.evaluate(shutter, request(shutter->output()), {});
+            const auto c = evaluator.evaluate(bilinear, request(bilinear->output()), {});
+            expect(frameOf(a) && frameOf(b) &&
+                       maxDifference(*frameOf(a), *frameOf(b), 0, 0, 32, 24) < 2e-4,
+                   std::string("a shrunk ") + item.name +
+                       " shutter matches the sub-frame accumulation of the filtered Transform 2D");
+            expect(frameOf(b) && frameOf(c) &&
+                       maxDifference(*frameOf(b), *frameOf(c), 0, 0, 32, 24) > 0.01,
+                   std::string(item.name) + " changes the shrunk shutter's picture");
+            auto unshrunk = look;
+            unshrunk.scale = {1.0, 1.0};
+            unshrunk.rotation = 0.0;
+            auto unshrunkBilinear = unshrunk;
+            unshrunkBilinear.filter = runtime::kResampleFilterBilinear;
+            const auto d = motion_test::motionPlan(unshrunk).plan;
+            const auto e = motion_test::motionPlan(unshrunkBilinear).plan;
+            const auto f = evaluator.evaluate(d, request(d->output()), {});
+            const auto g = evaluator.evaluate(e, request(e->output()), {});
+            expect(frameOf(f) && frameOf(g) &&
+                       maxDifference(*frameOf(f), *frameOf(g), 0, 0, 32, 24) == 0.0,
+                   std::string("unshrunk, the ") + item.name +
+                       " shutter is the Bilinear one bit for bit");
+        }
+    }
     // A still texture: the sub-frame samples sum to it, Echo's weights to their total, and the
     // optical-flow blur finds no motion.
     {

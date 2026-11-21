@@ -396,9 +396,18 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::startStep(const GpuSceneExecu
             return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
                                   "an affine step is incomplete before dispatch");
         }
-        const render::GpuAffineMatrixParameters parameters{
-            images[step.input],          *step.outputWindow, step.affineMatrix,
-            step.affineOpacity,          step.affineOutputDescriptor, step.affineFilter};
+        render::GpuAffineMatrixParameters parameters{
+            images[step.input], *step.outputWindow,          step.affineMatrix,
+            step.affineOpacity, step.affineOutputDescriptor, step.affineFilter};
+        if (step.affinePlan.filtered()) {
+            if (step.destination == kInvalidGpuSceneCommand ||
+                static_cast<std::size_t>(step.destination) >= images.size() ||
+                images[step.destination] == nullptr)
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::InternalInvariant,
+                                      "an affine upper mip level disappeared before dispatch");
+            parameters.upperLevel = images[step.destination];
+            parameters.plan = step.affinePlan;
+        }
         const auto native = affine->beginAffineMatrix(parameters, remaining);
         if (native.code != render::GpuAffineDiagnosticCode::None) {
             return diagnosticFromAffine(native);

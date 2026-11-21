@@ -51,6 +51,7 @@ const int BMK_PASS_TEMPORAL_FILL = 23;
 const int BMK_PASS_DIS_INIT = 24;
 const int BMK_PASS_DIS_UPDATE = 25;
 const int BMK_PASS_NEIGHBOUR = 26;
+const int BMK_PASS_MIP = 27;
 
 const int BMK_PARAMS = 16;
 
@@ -251,18 +252,75 @@ BMK_FN vec4 bmk_accumulate(int lx, int ly) {
     return r;
 }
 
+// --- Mip levels (#742: Transform 2D's filtered shutter samples) ----------------------------------
+
+// Regions 0 (the level, active) and 1 (the level above it, transparent outside): the premultiplied
+// 2x2 box of the four texels above, as two halfway blends and one between them. A level is
+// ceil(w / 2) x ceil(h / 2) of the level above.
+BMK_FN vec4 bmk_mip(int lx, int ly) {
+    vec4 a = bmk_fetch(1, 2 * lx, 2 * ly, 0);
+    vec4 b = bmk_fetch(1, 2 * lx + 1, 2 * ly, 0);
+    vec4 c = bmk_fetch(1, 2 * lx, 2 * ly + 1, 0);
+    vec4 d = bmk_fetch(1, 2 * lx + 1, 2 * ly + 1, 0);
+    BMK_P vec4 top = bmk_lerp4(a, b, 0.5f);
+    BMK_P vec4 bottom = bmk_lerp4(c, d, 0.5f);
+    BMK_P vec4 r = bmk_lerp4(top, bottom, 0.5f);
+    r.w = bmk_clampf(r.w, 0.0f, 1.0f);
+    return r;
+}
+
+// Level `level` of the path atlas (0 the input in region 1, n in region 1 + n) at the level-0
+// input-local coordinate (x, y): the level coordinate is (x + 1/2) 2^-n - 1/2, read bilinearly.
+BMK_FN vec4 bmk_level(int level, float x, float y) {
+    BMK_P float scale = bmk_float(uint(127 - level) << 23);
+    BMK_P float hx = x + 0.5f;
+    BMK_P float hy = y + 0.5f;
+    BMK_P float sx = hx * scale;
+    BMK_P float sy = hy * scale;
+    BMK_P float qx = sx - 0.5f;
+    BMK_P float qy = sy - 0.5f;
+    return bmk_bilinear(1 + level, qx, qy, 0);
+}
+
+// One filtered sample at (x, y): taps (f.w) trilinear reads spaced by the step along the
+// footprint's major axis from the start (s), each blending its lower (f.x) and upper (f.y) level by
+// f.z, averaged.
+BMK_FN vec4 bmk_filtered(float x, float y, vec4 f, vec4 s) {
+    int lower = int(f.x);
+    int upper = int(f.y);
+    int taps = int(f.w);
+    BMK_P vec4 sum = vec4(0.0f);
+    for (int t = 0; t < taps; ++t) {
+        BMK_P float ox = fma(s.z, float(t), s.x);
+        BMK_P float oy = fma(s.w, float(t), s.y);
+        BMK_P float tx = x + ox;
+        BMK_P float ty = y + oy;
+        vec4 v = bmk_level(lower, tx, ty);
+        if (upper != lower)
+            v = bmk_lerp4(v, bmk_level(upper, tx, ty), f.z);
+        sum = sum + v;
+    }
+    if (taps > 1)
+        sum = sum * bmk_div(1.0f, float(taps));
+    return sum;
+}
+
 // --- The path sampler (Directional, Spin, Zoom, Transform 2D) -----------------------------------
 
-// Regions 0 (the output, active) and 1 (the input). [count, jitter, filter, 0], [seed, frame,
-// output global x, output global y]; sample k at vec4 20 + 4k: [A row 0, weight], [A row 1, 0],
-// [B row 0, 0], [B row 1, 0]. A and B map an output-local texel index to input-local coordinates
-// at the start and end of the sample's stratum; without jitter both are its centre's map.
+// Regions 0 (the output, active), 1 (the input) and, for a filtered Transform 2D (#742), 2.. the
+// input's mip levels 1... [count, jitter, filter (0 Bilinear, 1 Nearest, 2 filtered), 0], [seed,
+// frame, output global x, output global y]; sample k at vec4 20 + 4k: [A row 0, weight], [A row 1,
+// 0], [B row 0, 0], [B row 1, 0]. A and B map an output-local texel index to input-local
+// coordinates at the start and end of the sample's stratum; without jitter both are its centre's
+// map. Filtered, sample k's plan follows every sample at vec4 20 + 4 count + 2k: [lower level,
+// upper level, upper weight, taps (0: this sample is Bilinear)], [tap start x, y, tap step x, y].
 BMK_FN vec4 bmk_path(int lx, int ly) {
     vec4 h = bmk_param(0);
     vec4 g = bmk_param(1);
     int count = int(h.x);
     bool jitter = h.y != 0.0f;
-    bool nearest = h.z != 0.0f;
+    bool nearest = h.z == 1.0f;
+    bool filtered = h.z == 2.0f;
     BMK_P float j = 0.5f;
     if (jitter)
         j = bmk_jitter(g.x, g.y, lx + int(g.z), ly + int(g.w));
@@ -281,7 +339,14 @@ BMK_FN vec4 bmk_path(int lx, int ly) {
         BMK_P float by = fma(b1.x, px, fma(b1.y, py, b1.z));
         BMK_P float qx = fma(bx - ax, j, ax);
         BMK_P float qy = fma(by - ay, j, ay);
-        vec4 s = nearest ? bmk_nearest(1, qx, qy, 0) : bmk_bilinear(1, qx, qy, 0);
+        vec4 s = vec4(0.0f);
+        vec4 f = filtered ? bmk_data(BMK_PARAMS + 4 + 4 * count + 2 * k) : vec4(0.0f);
+        if (f.w > 0.0f)
+            s = bmk_filtered(qx, qy, f, bmk_data(BMK_PARAMS + 4 + 4 * count + 2 * k + 1));
+        else if (nearest)
+            s = bmk_nearest(1, qx, qy, 0);
+        else
+            s = bmk_bilinear(1, qx, qy, 0);
         sum = fma(s, vec4(a0.w), sum);
     }
     sum.w = bmk_clampf(sum.w, 0.0f, 1.0f);
@@ -1462,6 +1527,8 @@ BMK_FN vec4 bmk_main(int ax, int ay) {
         return bmk_grey_pass(ax, ay);
     if (BMK_IS_PASS(BMK_PASS_DECIMATE))
         return bmk_decimate(lx, ly);
+    if (BMK_IS_PASS(BMK_PASS_MIP))
+        return bmk_mip(lx, ly);
     if (BMK_IS_PASS(BMK_PASS_TV_INIT))
         return bmk_tv_init(ax, ay);
     if (BMK_IS_PASS(BMK_PASS_TV_WARP))

@@ -3869,6 +3869,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 key.add(std::string("outputScale"));
                                 key.add(step.outputScale);
                             }
+                            // #742: a filter other than Bilinear resamples differently.
+                            if (step.filter != kResampleFilterBilinear) {
+                                key.add(std::string("filter"));
+                                key.add(step.filter);
+                            }
                             // #343: the window it is drawn in follows what the frame shows of it.
                             for (const auto& window : {visible[index], matteWindowOf(index)}) {
                                 key.add(window.has_value());
@@ -5109,12 +5114,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                     "Layer transform parameters are not evaluable");
                                 return;
                             }
+                            // #742: the layer's resample filter, as the GPU command's.
+                            const auto layerFilter = detail::gpuAffineFilterOf(layer.filter);
                             std::optional<detail::ParentedLayerTransform> parented;
                             if (layer.parent || scaledContent) {
                                 parented.emplace(contentMatrices[index],
                                                  sourceDescriptor->dataWindow(),
                                                  resolved.horizontalScale, resolved.verticalScale,
-                                                 static_cast<float>(opacity->value));
+                                                 static_cast<float>(opacity->value), layerFilter);
                                 if (!parented->finite()) {
                                     operationFailure = diagnostic(
                                         EvaluationDiagnosticCode::InvalidParameter,
@@ -5132,12 +5139,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // the layer's own transform, as on the GPU.
                             std::optional<detail::ParentedLayerTransform> unparentedAffine;
                             if (!layer.parent && !scaledContent &&
-                                !transform.value()->isTranslationOnly())
-                                unparentedAffine.emplace(contentMatrices[index],
-                                                         sourceDescriptor->dataWindow(),
-                                                         resolved.horizontalScale,
-                                                         resolved.verticalScale,
-                                                         static_cast<float>(opacity->value));
+                                (!transform.value()->isTranslationOnly() ||
+                                 layerFilter == render::GpuAffineFilter::Nearest))
+                                unparentedAffine.emplace(
+                                    contentMatrices[index], sourceDescriptor->dataWindow(),
+                                    resolved.horizontalScale, resolved.verticalScale,
+                                    static_cast<float>(opacity->value), layerFilter);
                             // #502: fed by another raster layer, this layer resamples the chain's
                             // first non-layer image once through the composed matrix. Its bounds
                             // still follow its own transform of the earlier layer's bounds.
@@ -5159,7 +5166,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     contentMatrices[index].times(chain->matrix),
                                     descriptor->dataWindow(), resolved.horizontalScale,
                                     resolved.verticalScale,
-                                    static_cast<float>(opacity->value * chain->opacity));
+                                    static_cast<float>(opacity->value * chain->opacity),
+                                    layerFilter);
                                 if (!concatenated->finite()) {
                                     operationFailure = diagnostic(
                                         EvaluationDiagnosticCode::InvalidParameter,
@@ -5339,12 +5347,46 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                                       : nullptr;
                             const auto outputWindow = *layerWindow;
                             const auto resampleLattice = *latticeWindow;
+                            // #742: a shrinking Trilinear/Anisotropic layer reads its source's mip
+                            // levels, built once before the rows and charged to the budget.
+                            detail::AffineMipLevels mipLevels;
+                            if (resample != nullptr && !vectorRaster &&
+                                resample->filterPlan().filtered()) {
+                                const std::size_t layerBytes =
+                                    static_cast<std::size_t>(outputWindow.extent().width()) *
+                                    outputWindow.extent().height() * sizeof(render::Rgba32f);
+                                const auto available = remainingPixelBudget();
+                                switch (detail::AffineMipLevels::build(
+                                    source, resample->filterPlan(),
+                                    available - std::min(available, layerBytes), cancellation,
+                                    mipLevels)) {
+                                case detail::AffineMipLevels::Outcome::Built:
+                                    break;
+                                case detail::AffineMipLevels::Outcome::Cancelled:
+                                    operationCancelled = true;
+                                    return;
+                                case detail::AffineMipLevels::Outcome::OverBudget:
+                                    operationFailure = imageDiagnostic(
+                                        render::ImageError::codeOnly(
+                                            render::ImageErrorCode::PixelStorageBudgetExceeded),
+                                        operationSubject,
+                                        "Layer mip levels exceed the pixel storage budget");
+                                    return;
+                                case detail::AffineMipLevels::Outcome::Invalid:
+                                    operationFailure =
+                                        diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                                   "Layer mip levels could not be built", {},
+                                                   operationSubject);
+                                    return;
+                                }
+                            }
+                            const auto* levels = &mipLevels;
                             const auto outcome = runRowBandPass(
                                 rowBands, cancellation, height, outputWindow.originY(),
                                 [&image, &source, &layerTransform, resample, outputWindow,
-                                 resampleLattice,
-                                 &operationSubject, &vectorRaster, vectorFill, vectorStroke,
-                                 vectorHasFill, vectorHasStroke, vectorRule, vectorOpacity,
+                                 resampleLattice, levels, &operationSubject, &vectorRaster,
+                                 vectorFill, vectorStroke, vectorHasFill, vectorHasStroke,
+                                 vectorRule, vectorOpacity,
                                  &cancellation](const std::int64_t y) -> RowFailure {
                                     auto outputRow = image.row(y);
                                     if (!outputRow) {
@@ -5402,7 +5444,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     if (const auto rowStatus =
                                             resample ? resample->row(source, resampleLattice,
                                                                      outputWindow, y,
-                                                                     *outputRow.value())
+                                                                     *outputRow.value(), levels)
                                                      : render::layerTransformBilinearRow(
                                                            source, outputWindow, y, layerTransform,
                                                            *outputRow.value())) {

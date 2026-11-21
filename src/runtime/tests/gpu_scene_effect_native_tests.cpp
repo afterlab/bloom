@@ -1098,6 +1098,208 @@ void runTransform2D(Expectations& expectations, GpuDevice& device, GpuSceneCache
     }
 }
 
+// #742 filtered sampling: Transform 2D, Resize, Fit, Fill and the Layer transform shrink a signed
+// HDR translucent checker through each of the four filters. The production builder's resident
+// AffineBilinearV1 commands (a filtered command and its mip level commands) match the CPU reference
+// at the strict gate (2e-6 abs-or-rel, exact alpha) at full frame, over a region of interest and on
+// a proxy, with no executor readback. A warm render dispatches nothing; a changed rotation re-runs
+// only the final resample, because the levels are keyed by the source and stay resident; Bilinear
+// and Nearest read no level.
+void runFilteredResample(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::document::Vec2d;
+    using bloom::runtime::CompiledVec2Parameter;
+    using bloom::runtime::ResizeFitKernel;
+    using bloom::runtime::Transform2DExtent;
+    using bloom::runtime::Transform2DKernel;
+    const CpuGpuSceneBuilder builder;
+    const CpuCompositionEvaluator evaluator;
+    enum class Stage : std::uint8_t { Transform, TransformSkewed, Resize, Fit, Fill, Layer };
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 48;
+    const auto planFor = [&](const Stage stage, const std::int64_t filter, const double rotation,
+                             const std::uint64_t id) {
+        std::vector<bloom::runtime::CompiledOperation> operations;
+        operations.emplace_back(bloom::runtime::CompiledChecker{
+            NodeId::fromRaw(id + 1),
+            {ParameterId::fromRaw(id + 2), Color4d{-0.25, 1.75, 0.5, 0.625}},
+            {ParameterId::fromRaw(id + 3), Color4d{3.0, 0.125, 1.25, 1.0}},
+            3,
+            2,
+            kWidth,
+            kHeight});
+        auto content = OperationIndex::fromRaw(0);
+        if (stage != Stage::Layer) {
+            bloom::runtime::ImageEffectKernel kernel = ResizeFitKernel{};
+            if (stage == Stage::Transform || stage == Stage::TransformSkewed) {
+                const bool skewed = stage == Stage::TransformSkewed;
+                kernel = Transform2DKernel{
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 30), Vec2d{1.25, -0.5}},
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 31), Vec2d{0.5, 0.25}},
+                    CompiledVec2Parameter{ParameterId::fromRaw(id + 32),
+                                          skewed ? Vec2d{0.15, 0.6} : Vec2d{0.25, 0.25}},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 33), rotation},
+                    Transform2DExtent::Transformed,
+                    filter,
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 34), skewed ? 12.0 : 0.0},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 35), skewed ? 30.0 : 0.0},
+                    CompiledScalarParameter{ParameterId::fromRaw(id + 36), 0.875}};
+            } else {
+                const std::int64_t policy = stage == Stage::Resize ? 0
+                                            : stage == Stage::Fit  ? 1
+                                                                   : 2;
+                kernel = stage == Stage::Fill  ? ResizeFitKernel{12, 12, 1, 1, filter, policy}
+                         : stage == Stage::Fit ? ResizeFitKernel{20, 10, 1, 1, filter, policy}
+                                               : ResizeFitKernel{16, 7, 2, 1, filter, policy};
+            }
+            operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(id + 5), content,
+                                                        std::move(kernel), false, false});
+            content = OperationIndex::fromRaw(1);
+        }
+        CompiledLayerOutput layer{
+            NodeId::fromRaw(id + 6),
+            LayerId::fromRaw(1),
+            content,
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 7),
+                                  stage == Stage::Layer ? Vec2d{30.5, 22.25} : Vec2d{32.0, 24.0}},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 8), Vec2d{0.0, 0.0}},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 9),
+                                  stage == Stage::Layer ? Vec2d{0.2, 0.3} : Vec2d{1.0, 1.0}},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 10),
+                                    stage == Stage::Layer ? rotation : 0.0},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 11), 1.0},
+            ParameterId::fromRaw(id + 12),
+            bloom::core::kDefaultBlendMode};
+        if (stage == Stage::Layer)
+            layer.filter = filter;
+        const auto layerIndex = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(layer));
+        operations.emplace_back(
+            CompiledMerge{NodeId::fromRaw(id + 13),
+                          std::vector<CompiledMergeInput>{CompiledMergeInput{
+                              LayerSlotId::fromRaw(id + 14), LayerId::fromRaw(1), layerIndex}}});
+        operations.emplace_back(CompiledCompositionOutput{
+            NodeId::fromRaw(id + 15), OperationIndex::fromRaw(layerIndex.value() + 1)});
+        const auto output = OperationIndex::fromRaw(layerIndex.value() + 2);
+        CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                     kProject,
+                                                     CompositionId::fromRaw(id + 100),
+                                                     format(kWidth, kHeight),
+                                                     std::move(operations),
+                                                     output};
+        definition.duration = RationalTime::fromInteger(100);
+        return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+    };
+    struct Run final {
+        const char* name;
+        bool proxy;
+        bool roi;
+    };
+    const std::array runs{Run{"full frame", false, false}, Run{"region of interest", false, true},
+                          Run{"proxy", true, false}};
+    const std::array stages{std::pair{Stage::Transform, "Transform 2D"},
+                            std::pair{Stage::TransformSkewed, "skewed Transform 2D"},
+                            std::pair{Stage::Resize, "Resize"},
+                            std::pair{Stage::Fit, "Fit"},
+                            std::pair{Stage::Fill, "Fill"},
+                            std::pair{Stage::Layer, "Layer"}};
+    const std::array filters{std::pair{bloom::runtime::kResampleFilterBilinear, "Bilinear"},
+                             std::pair{bloom::runtime::kResampleFilterNearest, "Nearest"},
+                             std::pair{bloom::runtime::kResampleFilterTrilinear, "Trilinear"},
+                             std::pair{bloom::runtime::kResampleFilterAnisotropic, "Anisotropic"}};
+    std::uint64_t id = 74200;
+    std::size_t checked = 0;
+    for (const auto& [stage, stageName] : stages) {
+        for (const auto& [filter, filterName] : filters) {
+            for (const auto& run : runs) {
+                cache.clear();
+                const std::string name = std::string("filtered resample native (") + stageName +
+                                         ", " + filterName + ", " + run.name + "): ";
+                const auto plan = planFor(stage, filter, 30.0, id);
+                auto request = requestFor(*plan);
+                if (run.proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(32, 24);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                }
+                if (run.roi) {
+                    const auto roi = ImageWindow::create(20, 14, 24, 18);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                if (!prepared)
+                    std::cerr << name << prepared.diagnostic.message << '\n';
+                expectations.expect(oracle.frame() && prepared,
+                                    name + "CPU oracle and production scene prepare");
+                auto executor = GpuSceneExecutor::create(device, cache);
+                expectations.expect(executor.hasValue(), name + "executor creates");
+                if (!oracle.frame() || !prepared || !executor)
+                    continue;
+                const auto before = executor.executor->counters();
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto after = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        parity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    name + "CPU parity (2e-6, exact alpha): " + detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow() &&
+                                        cold.pixelAspect == descriptor.pixelAspect(),
+                                    name + "data window, display window and pixel aspect match");
+                expectations.expect(after.readbacks == before.readbacks,
+                                    name + "resident evaluation performs no executor readback");
+                const auto coldAffine = after.affineDispatches - before.affineDispatches;
+                const bool filtered = filter == bloom::runtime::kResampleFilterTrilinear ||
+                                      filter == bloom::runtime::kResampleFilterAnisotropic;
+                expectations.expect(filtered ? coldAffine >= 2 : coldAffine == 1,
+                                    name +
+                                        "a shrinking filtered resample dispatches its mip "
+                                        "levels and itself; Bilinear and Nearest one resample (" +
+                                        std::to_string(coldAffine) + ")");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                        executor.executor->counters().affineDispatches ==
+                                            after.affineDispatches,
+                                    name + "an unchanged warm render dispatches nothing");
+                // A changed rotation: the same source, so its levels stay resident and only the
+                // final resample runs again; the result still matches the CPU reference.
+                const auto changed = planFor(stage, filter, 35.0, id);
+                if (stage == Stage::Transform || stage == Stage::TransformSkewed ||
+                    stage == Stage::Layer) {
+                    const auto rebuilt = builder.build(changed, request);
+                    auto changedOracleRequest = request;
+                    changedOracleRequest.bypassOperationCache = true;
+                    const auto changedOracle =
+                        evaluator.evaluate(changed, changedOracleRequest, {});
+                    const auto dispatched = executor.executor->counters().affineDispatches;
+                    const auto moved =
+                        rebuilt ? runScene(*executor.executor, rebuilt.scene) : decltype(cold){};
+                    std::string changedDetail;
+                    expectations.expect(
+                        rebuilt && changedOracle.frame() &&
+                            moved.pollResult == GpuSceneExecutorPollResult::Ready &&
+                            executor.executor->counters().affineDispatches == dispatched + 1 &&
+                            parity(moved.pixels, changedOracle.frame()->processImage().pixels(),
+                                   changedDetail),
+                        name +
+                            "a changed rotation re-runs only the final resample and matches "
+                            "the CPU reference: " +
+                            changedDetail);
+                }
+                ++checked;
+                id += 100;
+            }
+        }
+    }
+    std::cout
+        << "filtered resample native: " << checked
+        << " runs checked for CPU parity, windows, residency, mip level dispatches, warm reuse "
+           "and a changed rotation\n";
+}
+
 // Gaussian Blur's separate vertical radius: both axes, a vertical-only blur (the horizontal pass is
 // a one-tap copy and is not dispatched) and a horizontal-only one, at full scale, on a proxy with a
 // region of interest, against the CPU reference.
@@ -4734,16 +4936,35 @@ void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache&
     };
     std::vector<Case> cases{
         {{.scene = Scene::Directional, .quality = draft}, "directional"},
-        {{.scene = Scene::Directional, .curve = doc::kShutterCurveGaussian}, "directional gaussian"},
+        {{.scene = Scene::Directional, .curve = doc::kShutterCurveGaussian},
+         "directional gaussian"},
         {{.scene = Scene::Spin, .quality = draft}, "spin"},
         {{.scene = Scene::Zoom, .quality = draft, .jitter = true}, "zoom jittered"},
         {{.scene = Scene::TransformBlur, .quality = draft}, "transform shutter"},
-        {{.scene = Scene::TransformBlur, .curve = doc::kShutterCurveCustom}, "transform custom curve"},
-        {{.scene = Scene::TransformBlur, .quality = draft, .skew = 25.0, .skewAxis = 10.0,
+        {{.scene = Scene::TransformBlur, .curve = doc::kShutterCurveCustom},
+         "transform custom curve"},
+        {{.scene = Scene::TransformBlur,
+          .quality = draft,
+          .skew = 25.0,
+          .skewAxis = 10.0,
           .fadeOpacity = true},
          "transform shutter, skew and fading opacity"},
+        // #742: the filtered shutter samples (the motion kernel's mip passes and taps).
+        {{.scene = Scene::TransformBlur,
+          .quality = draft,
+          .scale = {0.25, 0.25},
+          .filter = bloom::runtime::kResampleFilterTrilinear},
+         "transform shutter, shrunk Trilinear"},
+        {{.scene = Scene::TransformBlur,
+          .quality = draft,
+          .scale = {0.2, 0.7},
+          .rotation = 30.0,
+          .filter = bloom::runtime::kResampleFilterAnisotropic},
+         "transform shutter, shrunk Anisotropic"},
         {{.scene = Scene::SubFrame, .quality = draft}, "sub-frame"},
-        {{.scene = Scene::SubFrame, .quality = draft, .curve = doc::kShutterCurveTriangle,
+        {{.scene = Scene::SubFrame,
+          .quality = draft,
+          .curve = doc::kShutterCurveTriangle,
           .offset = doc::kShutterOffsetEnd},
          "sub-frame triangle, end"},
         {{.scene = Scene::Echo}, "echo add"},
@@ -4770,16 +4991,19 @@ void runMotionBlur(Expectations& expectations, GpuDevice& device, GpuSceneCache&
         {{.scene = Scene::FlowDis, .quality = doc::kMotionQualityFinal}, "flow DIS final"},
         {{.scene = Scene::FlowTvl1, .quality = draft}, "flow TV-L1 draft"},
         {{.scene = Scene::FlowTvl1, .quality = doc::kMotionQualityFinal}, "flow TV-L1 final"},
-        {{.scene = Scene::FlowTvl1, .quality = draft, .border = doc::kFlowBorderWrap}, "flow TV-L1 wrap"},
+        {{.scene = Scene::FlowTvl1, .quality = draft, .border = doc::kFlowBorderWrap},
+         "flow TV-L1 wrap"},
         {{.scene = Scene::FlowConsistency, .quality = draft}, "flow consistency"},
         {{.scene = Scene::FlowConsistency, .quality = draft, .depth = true}, "flow occlusion"},
         {{.scene = Scene::FlowCut, .quality = draft}, "flow cut"},
         {{.scene = Scene::FlowCut, .quality = draft, .depth = true}, "flow cut unrelated"},
         {{.scene = Scene::FlowBlur, .quality = draft}, "flow blur"},
-        {{.scene = Scene::FlowBlur, .quality = draft, .border = doc::kFlowBorderWrap}, "flow blur wrap"},
+        {{.scene = Scene::FlowBlur, .quality = draft, .border = doc::kFlowBorderWrap},
+         "flow blur wrap"},
         {{.scene = Scene::FlowTvl1, .quality = draft, .matteSolve = true}, "flow TV-L1 matte"},
         {{.scene = Scene::FlowDis, .quality = draft, .matteSolve = true}, "flow DIS matte"},
-        {{.scene = Scene::FlowBlur, .quality = doc::kMotionQualityHigh}, "flow blur High, quadratic"},
+        {{.scene = Scene::FlowBlur, .quality = doc::kMotionQualityHigh},
+         "flow blur High, quadratic"},
         {{.scene = Scene::FlowBlurMatte, .quality = draft}, "flow blur matte"},
         {{.scene = Scene::FlowBlurTemporal, .quality = draft}, "flow blur temporal"},
     };
@@ -5093,6 +5317,7 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     BLOOM_TIMED_CASE(runShapeMergeEntry(expectations, device, cache));
     BLOOM_TIMED_CASE(runResizeFit(expectations, device, cache));
     BLOOM_TIMED_CASE(runTransform2D(expectations, device, cache));
+    BLOOM_TIMED_CASE(runFilteredResample(expectations, device, cache));
     BLOOM_TIMED_CASE(runBlurs(expectations, device, cache));
     BLOOM_TIMED_CASE(runDenoise(expectations, device, cache));
     BLOOM_TIMED_CASE(runSeparateBlurs(expectations, device, cache));

@@ -80,7 +80,17 @@ Footage inside a retimed layer is not held: the retime's own sub-frame times app
 ## The path sampler
 
 Directional, Spin, Zoom and Transform 2D's shutter are one pass: a source image, per sample one matrix
-from output to input, the samples' weights, bilinear filtering. Curved paths are exact because each
+from output to input, the samples' weights, bilinear filtering (Transform 2D's Nearest: nearest).
+Transform 2D's Trilinear and Anisotropic filters (#742) plan each sample's footprint from the mean of
+its stratum's two end maps with the affine resample's rule (`planAffineFilterFromJacobian`, in
+[Evaluation primitives](evaluation-primitives.md)), and the pass reads mip levels of the source that
+the motion kernel builds first: each level a mip pass, the premultiplied 2x2 box of the level above
+(two halfway blends and one between them, transparent outside), up to the deepest level any sample
+reads and at most twelve. A sample's tap reads its two levels bilinearly at the level coordinate
+`(x + 1/2) 2^-n - 1/2` and blends them by the plan's weight; its taps are averaged. A sample whose
+map does not shrink is Bilinear exactly, and with no shrinking sample the pass is the Bilinear one.
+The levels and the taps run in the motion kernel's own binary32 dialect, so the CPU reference and
+every device agree; they are not the affine resample's double-float coordinates. Curved paths are exact because each
 sample evaluates the matrix at its own time rather than interpolating two end matrices; Transform 2D
 evaluates its rows with `sampleParametersAt`. Directional, Spin and Zoom's operands are read at the
 frame time; only their result moves. A Directional Blur's length is its full reach.

@@ -8,6 +8,7 @@
 #include "transform_2d_geometry.hpp"
 
 #include <bloom/document/motion_blur_nodes.hpp>
+#include <bloom/render/gpu_affine.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -42,6 +43,7 @@ constexpr int kPassTemporalFill = 23;
 constexpr int kPassDisInit = 24;
 constexpr int kPassDisUpdate = 25;
 constexpr int kPassNeighbour = 26;
+constexpr int kPassMip = 27;
 constexpr std::int64_t kVectorTileSize = 32;
 constexpr std::size_t kParams = 16;
 constexpr std::size_t kWeights = kParams + 32;
@@ -540,15 +542,67 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
     if (!representable(out) || samples.empty() ||
         samples.size() > static_cast<std::size_t>(kMotionMaxSamples))
         return std::nullopt;
-    const auto placed = placeAtlas(builder, {{std::nullopt, sizeOf(out)}, {0, {}}});
+    // #742: Transform 2D's Trilinear and Anisotropic filters plan each shutter sample's footprint
+    // from that sample's own constant map (the mean of its stratum's two ends) through the affine
+    // resample's footprint rule, render::planAffineFilterFromJacobian(), and read mip levels of the
+    // input the motion kernel builds itself (each level the premultiplied 2x2 box of the one above,
+    // transparent outside). A sample whose map does not shrink stays Bilinear exactly, and with no
+    // shrinking sample the table is the Bilinear one.
+    const auto transformFilter = kernel.mode == MotionPathMode::Transform && kernel.transform
+                                     ? kernel.transform->filter
+                                     : kResampleFilterBilinear;
+    const bool nearest = transformFilter == kResampleFilterNearest;
+    std::vector<render::GpuAffineFilterPlan> plans;
+    std::uint32_t deepest = 0;
+    if ((transformFilter == kResampleFilterTrilinear ||
+         transformFilter == kResampleFilterAnisotropic) &&
+        in.width <= kMaxCoordinate && in.height <= kMaxCoordinate) {
+        const auto requested = transformFilter == kResampleFilterTrilinear
+                                   ? render::GpuAffineFilter::Trilinear
+                                   : render::GpuAffineFilter::Anisotropic;
+        for (const auto& sample : samples) {
+            const auto& a = sample.start.m;
+            const auto& b = sample.end.m;
+            auto plan = render::planAffineFilterFromJacobian(
+                (a[0] + b[0]) * 0.5, (a[1] + b[1]) * 0.5, (a[3] + b[3]) * 0.5, (a[4] + b[4]) * 0.5,
+                requested, static_cast<std::uint32_t>(in.width),
+                static_cast<std::uint32_t>(in.height));
+            if (plan.filtered() && plan.lowerLevel >= kMotionMaxMipLevel) {
+                // The atlas holds the input and twelve levels; deeper footprints read the last.
+                plan.lowerLevel = kMotionMaxMipLevel;
+                plan.upperLevel = kMotionMaxMipLevel;
+                plan.upperWeight = 0.0F;
+            }
+            if (plan.filtered())
+                deepest = std::max(deepest, plan.upperLevel);
+            plans.push_back(plan);
+        }
+    }
+    const bool filtered = deepest > 0;
+    std::vector<Slot> slots{{std::nullopt, sizeOf(out)}, {0, {}}};
+    std::uint32_t level = 0;
+    for (std::uint32_t n = 1; n <= deepest; ++n) {
+        const auto [width, height] = render::affineMipLevelExtent(
+            static_cast<std::uint32_t>(in.width), static_cast<std::uint32_t>(in.height), n);
+        const MotionRect size{0, 0, static_cast<std::int64_t>(width),
+                              static_cast<std::int64_t>(height)};
+        const auto mip = placeAtlas(builder, {{std::nullopt, sizeOf(size)}, {level, {}}});
+        const auto& r = mip.atlas.regions;
+        Table reduce(kPassMip);
+        reduce.active(r[0]);
+        reduce.region(0, r[0]);
+        reduce.region(1, r[1]);
+        level = builder.cut(builder.run(mip.buffer, reduce.take()), r[0], 0, 0);
+        slots.push_back({level, {}});
+    }
+    const auto placed = placeAtlas(builder, slots);
     const auto& region = placed.atlas.regions;
     Table table(kPassPath);
     table.active(region[0]);
-    table.region(0, region[0]);
-    table.region(1, region[1]);
-    const bool nearest = kernel.transform && kernel.transform->filter == kResampleFilterNearest;
+    for (std::size_t r = 0; r < region.size(); ++r)
+        table.region(r, region[r]);
     table.param(0, static_cast<double>(samples.size()), shutter.jitter ? 1.0 : 0.0,
-                nearest ? 1.0 : 0.0);
+                nearest ? 1.0 : (filtered ? 2.0 : 0.0));
     table.param(1, static_cast<double>(kernel.seed & 0xFFFFFFU), static_cast<double>(grade.data[1]),
                 static_cast<double>(out.x), static_cast<double>(out.y));
     for (std::size_t k = 0; k < samples.size(); ++k) {
@@ -563,6 +617,16 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                   static_cast<float>(b[2]), 0.0F);
         table.vec(base + 3, static_cast<float>(b[3]), static_cast<float>(b[4]),
                   static_cast<float>(b[5]), 0.0F);
+        if (filtered) {
+            // After every sample, two vec4s each: [lower level, upper level, upper weight, taps
+            // (0: Bilinear)], [tap start x, y, tap step x, y] in input pixels.
+            const auto& p = plans[k];
+            const auto at = kParams + 4 + 4 * samples.size() + 2 * k;
+            table.vec(at, static_cast<float>(p.lowerLevel), static_cast<float>(p.upperLevel),
+                      p.upperWeight, p.filtered() ? static_cast<float>(p.taps) : 0.0F);
+            table.vec(at + 1, static_cast<float>(p.tapStartX), static_cast<float>(p.tapStartY),
+                      static_cast<float>(p.tapStepX), static_cast<float>(p.tapStepY));
+        }
     }
     const auto run = builder.run(placed.buffer, table.take());
     return builder.finish(builder.cut(run, region[0], out.x, out.y));

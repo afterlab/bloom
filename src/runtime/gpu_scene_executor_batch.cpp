@@ -82,9 +82,21 @@ std::optional<GpuSceneExecutorDiagnostic> GpuSceneExecutor::Impl::tryStartBatch(
             const auto source = ref(step.input);
             if (!source || !step.outputWindow)
                 return std::nullopt;
-            operations.emplace_back(render::GpuBatchAffine{
-                *source, *step.outputWindow, step.affineMatrix, step.affineOpacity,
-                step.affineOutputDescriptor, step.affineFilter});
+            render::GpuBatchAffine batchAffine{*source,
+                                               *step.outputWindow,
+                                               step.affineMatrix,
+                                               step.affineOpacity,
+                                               step.affineOutputDescriptor,
+                                               step.affineFilter};
+            if (step.affinePlan.filtered()) {
+                // #742: the upper mip level, an earlier batch output or a resident image.
+                const auto upper = ref(step.destination);
+                if (!upper)
+                    return std::nullopt;
+                batchAffine.upperLevel = *upper;
+                batchAffine.plan = step.affinePlan;
+            }
+            operations.emplace_back(std::move(batchAffine));
         } else if (step.kind == GpuSceneExecutorStepKind::SourceOver) {
             const auto source = ref(step.input);
             const auto destination =

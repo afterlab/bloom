@@ -797,8 +797,9 @@ void testTransform2DLowering(Expectations& expectations) {
                             kernel->rotation.id == ParameterId::fromRaw(973) && translate &&
                             *translate == Vec2d{12.5, -4.0} &&
                             kernel->extent == runtime::Transform2DExtent::Display &&
-                            kernel->filter == 0,
-                        "Transform 2D lowering retains identities, values, extent and filter");
+                            kernel->filter == runtime::kResampleFilterTrilinear,
+                        "Transform 2D lowering retains identities, values and extent, and the new "
+                        "node's Automatic filter resolves to Trilinear (#742)");
     const auto* skew = kernel ? std::get_if<double>(&kernel->skew.source) : nullptr;
     const auto* skewAxis = kernel ? std::get_if<double>(&kernel->skewAxis.source) : nullptr;
     const auto* opacity = kernel ? std::get_if<double>(&kernel->opacity.source) : nullptr;

@@ -680,6 +680,65 @@ displayProofRunner(const bool customView) {
             }
             return combined;
         });
+    // #742: Trilinear and Anisotropic through the production affine command, each over a map
+    // that shrinks the 6x5 source so the scene carries the filtered command and its mip levels
+    // (a fixture whose map resolved to Bilinear proves nothing and fails here).
+    const auto runFiltered = [](const std::int64_t filter, const std::uint64_t idBaseStart,
+                                const bool requireLevels) {
+        FixtureRun combined;
+        combined.prepared = true;
+        const std::array<ImageEffectKernel, 3> kernels{
+            bloom::runtime::ResizeFitKernel{3, 2, 1, 1, filter},
+            bloom::runtime::ResizeFitKernel{4, 2, 1, 1, filter, 1},
+            bloom::runtime::Transform2DKernel{
+                CompiledVec2Parameter{ParameterId::fromRaw(idBaseStart + 30), Vec2d{1.25, -0.5}},
+                CompiledVec2Parameter{ParameterId::fromRaw(idBaseStart + 31), Vec2d{}},
+                CompiledVec2Parameter{ParameterId::fromRaw(idBaseStart + 32), Vec2d{0.2, 0.6}},
+                CompiledScalarParameter{ParameterId::fromRaw(idBaseStart + 33), 30.0},
+                bloom::runtime::Transform2DExtent::Transformed, filter}};
+        const auto wanted = filter == bloom::runtime::kResampleFilterTrilinear
+                                ? bloom::render::GpuAffineFilter::Trilinear
+                                : bloom::render::GpuAffineFilter::Anisotropic;
+        std::uint64_t idBase = idBaseStart;
+        for (const auto& kernel : kernels) {
+            auto frame = runBuilder(effectPlan(kernel, idBase));
+            idBase += 100;
+            bool filtered = false;
+            bool levels = false;
+            for (const auto& run : frame.frames)
+                for (const auto& command : run.scene->commands())
+                    if (const auto* affine =
+                            std::get_if<bloom::runtime::GpuSceneAffineCommand>(&command)) {
+                        filtered =
+                            filtered || (affine->filter == wanted && affine->plan.filtered());
+                        levels =
+                            levels || affine->matrix == bloom::render::affineMipReductionMatrix();
+                    }
+            if (!filtered || (requireLevels && !levels)) {
+                combined.prepared = false;
+                combined.evidence += "no filtered affine command (or no mip level) was prepared; ";
+            }
+            combined.prepared = combined.prepared && frame.prepared;
+            combined.evidence += frame.evidence + "; ";
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        }
+        return combined;
+    };
+    add("feature.resample.trilinear", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Resize/Fit, Transform 2D and layer production affine preparation",
+        [runFiltered] {
+            return runFiltered(bloom::runtime::kResampleFilterTrilinear, 105800, false);
+        });
+    add("feature.resample.anisotropic", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Resize/Fit, Transform 2D and layer production affine preparation",
+        [runFiltered] {
+            return runFiltered(bloom::runtime::kResampleFilterAnisotropic, 106200, false);
+        });
+    add("feature.resample.mip-pyramid", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime production affine mip level preparation", [runFiltered] {
+            return runFiltered(bloom::runtime::kResampleFilterTrilinear, 106600, true);
+        });
     add("node.bloom.linear-gradient", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime gradient source and native batch tests",
         [] { return runBuilder(withSource(gradient(false, 140000), 140000)); });

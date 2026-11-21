@@ -69,6 +69,12 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
     return {code, DiagnosticSeverity::Error, {}, "Transform 2D: " + reason, std::move(reason)};
 }
 
+// The bytes of an RGBA32F image over `window` (already admitted by its builder).
+[[nodiscard]] std::size_t outputBytes(const render::ImageWindow window) noexcept {
+    return static_cast<std::size_t>(window.extent().width()) * window.extent().height() *
+           sizeof(render::Rgba32f);
+}
+
 // #336: one inverse-mapped premultiplied resample through the Layer Output's own raster rows: the
 // exact translate-only LayerTransform row for a pure Bilinear move, otherwise the composed-matrix
 // row the GPU affine command shares (#545). The display window and pixel aspect are retained; the
@@ -120,25 +126,48 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
     const auto rows = window.extent().height();
     reportProgress(progress, {EvaluationProgressStage::Operation, operation, 0, rows});
     // Exactly the GPU's choice: the translation pass for a pure Bilinear move, otherwise the affine
-    // command over the same author-space matrix (#480 Nearest samples it at one tap).
-    const bool nearestFilter = prepared.filter == kResampleFilterNearest;
+    // command over the same author-space matrix (#480 Nearest samples it at one tap; #742
+    // Trilinear and Anisotropic resolve to Bilinear unless the map shrinks the image, and then
+    // read the source's mip levels).
+    const ParentedLayerTransform resample{geometry->matrix,
+                                          inputDescriptor.dataWindow(),
+                                          horizontalScale,
+                                          verticalScale,
+                                          static_cast<float>(prepared.values.opacity),
+                                          gpuAffineFilterOf(prepared.filter)};
     const std::optional<ParentedLayerTransform> affine =
-        nearestFilter || !geometry->transform->isTranslationOnly()
-            ? std::optional{ParentedLayerTransform{geometry->matrix, inputDescriptor.dataWindow(),
-                                                   horizontalScale, verticalScale,
-                                                   static_cast<float>(prepared.values.opacity),
-                                                   nearestFilter}}
+        resample.filterPlan().filter != render::GpuAffineFilter::Bilinear ||
+                !geometry->transform->isTranslationOnly()
+            ? std::optional{resample}
             : std::nullopt;
+    AffineMipLevels levels;
+    switch (AffineMipLevels::build(*source.value(), resample.filterPlan(),
+                                   pixelBudget - std::min(pixelBudget, outputBytes(window)),
+                                   cancellation, levels)) {
+    case AffineMipLevels::Outcome::Built:
+        break;
+    case AffineMipLevels::Outcome::Cancelled:
+        result.cancelled = true;
+        return result;
+    case AffineMipLevels::Outcome::OverBudget:
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                             "the mip levels exceed the pixel storage budget");
+        return result;
+    case AffineMipLevels::Outcome::Invalid:
+        result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                             "the mip levels could not be built");
+        return result;
+    }
     for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
         if (cancellation.isCancellationRequested()) {
             result.cancelled = true;
             return result;
         }
         const auto row = target.value()->row(y);
-        if (!row || (affine ? affine->row(*source.value(), window, y, *row.value())
-                             : render::layerTransformBilinearRow(*source.value(), window, y,
-                                                                 *geometry->transform,
-                                                                 *row.value()))) {
+        if (!row ||
+            (affine ? affine->row(*source.value(), window, y, *row.value(), &levels)
+                    : render::layerTransformBilinearRow(*source.value(), window, y,
+                                                        *geometry->transform, *row.value()))) {
             result.diagnostic = transformFailure(EvaluationDiagnosticCode::InvalidPixel,
                                                  "the resample produced an invalid row");
             return result;
@@ -669,16 +698,39 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
             return result;
         }
         const auto window = geometry->descriptor.dataWindow();
-        const ParentedLayerTransform transform{
-            geometry->matrix, input.descriptor()->dataWindow(), 1.0, 1.0, 1.0F,
-            effect.resizeFit->filter == kResampleFilterNearest};
+        const ParentedLayerTransform transform{geometry->matrix,
+                                               input.descriptor()->dataWindow(),
+                                               1.0,
+                                               1.0,
+                                               1.0F,
+                                               gpuAffineFilterOf(effect.resizeFit->filter)};
+        // #742: a shrinking Trilinear/Anisotropic map reads the input's mip levels.
+        AffineMipLevels levels;
+        switch (AffineMipLevels::build(*source.value(), transform.filterPlan(),
+                                       pixelBudget - std::min(pixelBudget, outputBytes(window)),
+                                       cancellation, levels)) {
+        case AffineMipLevels::Outcome::Built:
+            break;
+        case AffineMipLevels::Outcome::Cancelled:
+            result.cancelled = true;
+            return result;
+        case AffineMipLevels::Outcome::OverBudget:
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                                               "Resize/Fit mip levels exceed the pixel storage "
+                                               "budget");
+            return result;
+        case AffineMipLevels::Outcome::Invalid:
+            result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
+                                               "Resize/Fit mip levels could not be built");
+            return result;
+        }
         for (auto y = window.originY(); y < window.maxYExclusive(); ++y) {
             if (cancellation.isCancellationRequested()) {
                 result.cancelled = true;
                 return result;
             }
             const auto row = target.value()->row(y);
-            if (!row || transform.row(*source.value(), window, y, *row.value())) {
+            if (!row || transform.row(*source.value(), window, y, *row.value(), &levels)) {
                 result.diagnostic = spatialFailure(EvaluationDiagnosticCode::InvalidPixel,
                                                    "Resize/Fit produced an invalid row");
                 return result;

@@ -122,6 +122,15 @@ lowerLayerBoundary(const document::LayerOutputBoundary& boundary, const document
                                         *time,
                                         sourcePixelAspect};
     result.framePivot = boundary.pivot == LayerPivot::Frame;
+    // #742: the layer's resample filter; absent (a layer saved before it existed) is Bilinear.
+    if (const auto* filterBinding = bound(kLayerFilterParameterRole)) {
+        const auto* filter = parameterConstant<std::int64_t>(filterBinding);
+        if (filter == nullptr || !runtime::validDocumentResampleFilter(*filter)) {
+            addTopologyFailure(owner, "Layer filter could not be lowered.");
+            return std::nullopt;
+        }
+        result.filter = runtime::resolveResampleFilter(*filter);
+    }
     // #642: a Vector Artwork layer whose transform its artwork's geometry draws (svg_artwork.hpp).
     if (const auto composed = artwork_.composed.find(boundary.layerId); composed != artwork_.composed.end()) {
         const auto* carrier = graph.findLayer(composed->second.carrier);

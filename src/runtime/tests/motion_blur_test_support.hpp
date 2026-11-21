@@ -88,6 +88,11 @@ struct MotionValues final {
     double skew = 0.0;
     double skewAxis = 0.0;
     bool fadeOpacity = false;
+    // #742: the moving Transform 2D's scale, rotation (degrees) and resample filter, for the
+    // filtered shutter samples. The defaults are the plain unscaled Bilinear transform.
+    std::array<double, 2> scale{1.0, 1.0};
+    double rotation = 0.0;
+    std::int64_t filter = runtime::kResampleFilterBilinear;
 };
 
 struct MotionPlan final {
@@ -211,8 +216,10 @@ struct MotionPlan final {
         definition.vec2Curves.push_back(std::move(curve));
         translate.source = Vec2CurveIndex::fromRaw(0);
     }
-    Transform2DKernel transform{translate, vec2(idBase + 26, 0.0, 0.0), vec2(idBase + 27, 1.0, 1.0),
-                                scalar(idBase + 28, 0.0)};
+    Transform2DKernel transform{translate, vec2(idBase + 26, 0.0, 0.0),
+                                vec2(idBase + 27, values.scale[0], values.scale[1]),
+                                scalar(idBase + 28, values.rotation)};
+    transform.filter = values.filter;
     if (values.skew != 0.0 || values.skewAxis != 0.0) {
         transform.skew = scalar(idBase + 92, values.skew);
         transform.skewAxis = scalar(idBase + 93, values.skewAxis);

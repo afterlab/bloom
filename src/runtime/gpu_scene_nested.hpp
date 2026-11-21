@@ -162,6 +162,11 @@ inline void offsetNestedCommandReferences(GpuSceneCommand& command,
                           std::is_same_v<T, GpuScenePointResampleCommand> ||
                           std::is_same_v<T, GpuSceneCryptomatteCommand> ||
                           std::is_same_v<T, GpuSceneCompositionOutputCommand>) {
+                if constexpr (std::is_same_v<T, GpuSceneAffineCommand>) {
+                    // #742: a filtered resample's upper mip level.
+                    if (item.upperInput != kInvalidGpuSceneCommand)
+                        item.upperInput = static_cast<GpuSceneCommandIndex>(item.upperInput + base);
+                }
                 if constexpr (std::is_same_v<T, GpuSceneCryptomatteCommand>) {
                     // #549: the previous rank layer's pass.
                     if (item.accumulator != kInvalidGpuSceneCommand)

@@ -442,6 +442,24 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.resample.nearest", "Nearest filtering for Resize, Fit and Transform 2D",
         GpuCoverageDisposition::Required,
         "src/runtime Resize/Fit and Transform 2D production affine preparation"});
+    // #742 Trilinear and Anisotropic are pixel semantics of AffineBilinearV1 (its sampling word
+    // and its two level bindings), and the mip pyramid they read is a chain of the same kernel's
+    // 2x box reductions, never a CPU resample: Resize, Fit, Transform 2D and the Layer transform
+    // reach the resident affine commands when the map shrinks the image.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.resample.trilinear",
+        "Trilinear (mipmapped) filtering for Resize, Fit, Transform 2D and the Layer transform",
+        GpuCoverageDisposition::Required,
+        "src/runtime Resize/Fit, Transform 2D and layer production affine preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.resample.anisotropic",
+        "Anisotropic filtering for Resize, Fit, Transform 2D and the Layer transform",
+        GpuCoverageDisposition::Required,
+        "src/runtime Resize/Fit, Transform 2D and layer production affine preparation"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.resample.mip-pyramid",
+        "the mip levels a shrinking filtered resample reads (premultiplied 2x box chain)",
+        GpuCoverageDisposition::Required, "src/runtime production affine mip level preparation"});
     // #480 Composition Source `channels`: a precomp's file channel layers through the production
     // channel gather at the mapped nested time, and its composite and Image to Channel Set layers
     // as Channel Select / Channel Combine over nested Composition Source images, never a CPU frame.

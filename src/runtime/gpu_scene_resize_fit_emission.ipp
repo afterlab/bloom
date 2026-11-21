@@ -44,29 +44,15 @@ emitResizeFitCommand(const ResizeFitKernel& kernel, const OperationIndex input,
         return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
                     "Resize/Fit output geometry is not representable");
     const auto output = geometry->descriptor.dataWindow();
-    if (const auto error =
-            charge(output.extent().width(), output.extent().height(), sizeof(render::Rgba32f)))
-        return error;
     const auto matrix = toGpuAffineMatrix(geometry->matrix, source->data, 1.0, 1.0);
     const auto aspect = geometry->descriptor.pixelAspect();
-    const auto filter = kernel.filter == kResampleFilterNearest
-                            ? render::GpuAffineFilter::Nearest
-                            : render::GpuAffineFilter::Bilinear;
-    const auto key =
-        makeGpuSceneAffineSemanticKey(inputKey, source->data, matrix, 1.0F, output, aspect,
-                                      std::string{kGpuAffineSpirvSha256}, geometry->descriptor,
-                                      filter);
-    result.command = emit(GpuSceneAffineCommand{.sourceOperation = operation,
-                                                .input = inputCommand,
-                                                .inputKey = std::move(inputKey),
-                                                .sourceWindow = source->data,
-                                                .outputWindow = output,
-                                                .matrix = matrix,
-                                                .opacity = 1.0F,
-                                                .pixelAspect = aspect,
-                                                .semanticKey = key,
-                                                .outputDescriptor = geometry->descriptor,
-                                                .filter = filter});
+    // #742: a shrinking Trilinear/Anisotropic map first emits the input's mip levels.
+    std::string key;
+    if (const auto error = emitAffineMatrixCommand(
+            inputCommand, inputKey, source->data, output, matrix, 1.0F, aspect,
+            geometry->descriptor, gpuAffineFilterOf(kernel.filter), operation, charge, emit,
+            result.command, key, source->pixelAspect))
+        return error;
     result.key = key;
     result.window = output;
     result.local = boundsForWindow(output, ctx.hScale, ctx.vScale);

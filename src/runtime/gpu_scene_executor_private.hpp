@@ -124,6 +124,8 @@ struct GpuSceneExecutorStep final {
     float affineOpacity = 1.0F;
     render::GpuAffineFilter affineFilter = render::GpuAffineFilter::Bilinear;
     std::optional<render::Rgba32fImageDescriptor> affineOutputDescriptor{};
+    // #742 Trilinear/Anisotropic: `input` is the lower mip level, `destination` the upper one.
+    render::GpuAffineFilterPlan affinePlan{};
     // Blend: `input` is the foreground source, `destination` the backdrop.
     core::BlendMode blendMode = core::kDefaultBlendMode;
     std::optional<render::GpuImageCombineParameters> imageCombine;
@@ -229,7 +231,10 @@ inline constexpr std::string_view kCryptomatteCoverageArtifactToken = "cryptomat
            std::isfinite(affine.matrix.d) && std::isfinite(affine.matrix.ty) &&
            std::isfinite(affine.opacity) &&
            (affine.filter == render::GpuAffineFilter::Bilinear ||
-            affine.filter == render::GpuAffineFilter::Nearest);
+            affine.filter == render::GpuAffineFilter::Nearest ||
+            ((affine.filter == render::GpuAffineFilter::Trilinear ||
+              affine.filter == render::GpuAffineFilter::Anisotropic) &&
+             affine.plan.filter == affine.filter && affine.upperInput != kInvalidGpuSceneCommand));
 }
 
 [[nodiscard]] inline bool
@@ -250,10 +255,10 @@ pointResampleFieldsValid(const GpuScenePointResampleCommand& resample) noexcept 
         if (!affineFieldsFinite(*affine)) {
             return {};
         }
-        return makeGpuSceneAffineSemanticKey(affine->inputKey, affine->sourceWindow, affine->matrix,
-                                             affine->opacity, affine->outputWindow,
-                                             affine->pixelAspect, std::string{kAffineArtifactToken},
-                                             affine->outputDescriptor, affine->filter);
+        return makeGpuSceneAffineSemanticKey(
+            affine->inputKey, affine->sourceWindow, affine->matrix, affine->opacity,
+            affine->outputWindow, affine->pixelAspect, std::string{kAffineArtifactToken},
+            affine->outputDescriptor, affine->filter, &affine->plan, affine->upperInputKey);
     }
     if (const auto* resample = std::get_if<GpuScenePointResampleCommand>(&command)) {
         if (!pointResampleFieldsValid(*resample)) {

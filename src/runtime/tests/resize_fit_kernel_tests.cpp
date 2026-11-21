@@ -177,8 +177,15 @@ void testKernel() {
     expect(!runtime::detail::validResizeFitKernel({0, 8}) &&
                !runtime::detail::validResizeFitKernel({8, -1}) &&
                !runtime::detail::validResizeFitKernel({8, 8, 0, 1}) &&
-               !runtime::detail::validResizeFitKernel({8, 8, 1, 1, 2}),
-           "zero/negative extents, degenerate PAR and unknown filters are refused");
+               !runtime::detail::validResizeFitKernel(
+                   {8, 8, 1, 1, runtime::kResampleFilterAutomatic}) &&
+               !runtime::detail::validResizeFitKernel({8, 8, 1, 1, 5}),
+           "zero/negative extents, degenerate PAR and unknown filters are refused; Automatic is "
+           "resolved by the compiler and never reaches a kernel");
+    expect(runtime::detail::validResizeFitKernel({8, 8, 1, 1, runtime::kResampleFilterTrilinear}) &&
+               runtime::detail::validResizeFitKernel(
+                   {8, 8, 1, 1, runtime::kResampleFilterAnisotropic}),
+           "#742 Trilinear and Anisotropic are supported Resize/Fit filters");
     expect(runtime::detail::validResizeFitKernel({8, 8, 1, 1, runtime::kResampleFilterNearest}),
            "Nearest is a supported Resize/Fit filter");
     expect(run({0, 8}, input).diagnostic.has_value(),

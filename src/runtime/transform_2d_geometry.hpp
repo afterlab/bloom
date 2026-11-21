@@ -51,7 +51,7 @@ struct PreparedTransform2D final {
 [[nodiscard]] inline bool validTransform2DKernel(const Transform2DKernel& kernel) noexcept {
     return static_cast<std::uint8_t>(kernel.extent) <=
                static_cast<std::uint8_t>(Transform2DExtent::Display) &&
-           (kernel.filter == kResampleFilterBilinear || kernel.filter == kResampleFilterNearest);
+           validCompiledResampleFilter(kernel.filter);
 }
 
 [[nodiscard]] inline bool validTransform2DValues(const Transform2DValues& values) noexcept {
@@ -84,8 +84,7 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
                            const double proxyY) {
     if (static_cast<std::uint8_t>(prepared.extent) >
             static_cast<std::uint8_t>(Transform2DExtent::Display) ||
-        (prepared.filter != kResampleFilterBilinear && prepared.filter != kResampleFilterNearest) ||
-        !validTransform2DValues(prepared.values) ||
+        !validCompiledResampleFilter(prepared.filter) || !validTransform2DValues(prepared.values) ||
         !std::isfinite(proxyX) || !std::isfinite(proxyY) || !(proxyX > 0.0) || !(proxyY > 0.0))
         return std::nullopt;
     const auto& values = prepared.values;

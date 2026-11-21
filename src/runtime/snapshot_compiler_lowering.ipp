@@ -2613,11 +2613,10 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* extent = parameterConstant<std::int64_t>(findParameterBinding(node, "extent"));
         const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
         if (translate && pivot && scale && rotation && extent && *extent >= 0 && *extent <= 2 &&
-            filter && (*filter == runtime::kResampleFilterBilinear ||
-                       *filter == runtime::kResampleFilterNearest)) {
+            filter && runtime::validDocumentResampleFilter(*filter)) {
             runtime::Transform2DKernel transform{*translate, *pivot, *scale, *rotation,
                                                  static_cast<runtime::Transform2DExtent>(*extent),
-                                                 *filter};
+                                                 runtime::resolveResampleFilter(*filter)};
             // Skew and Opacity are later additions: a node saved without them reads as none.
             bool optionalLowered = true;
             for (const auto& [role, target] :
@@ -2685,10 +2684,12 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* bypass = parameterConstant<bool>(findParameterBinding(node, "bypass"));
         const auto* policy = parameterConstant<std::int64_t>(findParameterBinding(node, "policy"));
         if (width && height && numerator && denominator && filter && bypass &&
+            runtime::validDocumentResampleFilter(*filter) &&
             (node.typeId == "bloom.resize" || policy))
             return runtime::CompiledImageEffect{
                 node.id, *input,
-                runtime::ResizeFitKernel{*width, *height, *numerator, *denominator, *filter,
+                runtime::ResizeFitKernel{*width, *height, *numerator, *denominator,
+                                         runtime::resolveResampleFilter(*filter),
                                          node.typeId == "bloom.resize" ? 0 : *policy + 1},
                 *bypass};
     }

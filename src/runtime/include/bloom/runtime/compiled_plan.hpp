@@ -308,8 +308,27 @@ struct DiscreteImageKernel final {
 // around the sample point, shared with Layer Output. Nearest (1, #480) copies the one tap whose
 // centre is nearest the sample (the upper tap on an exact half), so data, ID and Cryptomatte
 // images keep their stored values exactly.
+// Trilinear (2, #742) blends the two mip levels around the map's footprint, and Anisotropic (3)
+// takes up to 16 trilinear taps along its major axis; both equal Bilinear exactly when nothing
+// shrinks (render::planAffineFilter). Automatic (4) is a document value only: the compiler
+// resolves it (resolveResampleFilter) and a compiled kernel holds 0-3.
 inline constexpr std::int64_t kResampleFilterBilinear = 0;
 inline constexpr std::int64_t kResampleFilterNearest = 1;
+inline constexpr std::int64_t kResampleFilterTrilinear = 2;
+inline constexpr std::int64_t kResampleFilterAnisotropic = 3;
+inline constexpr std::int64_t kResampleFilterAutomatic = 4;
+// A compiled kernel's filter.
+[[nodiscard]] constexpr bool validCompiledResampleFilter(const std::int64_t filter) noexcept {
+    return filter >= kResampleFilterBilinear && filter <= kResampleFilterAnisotropic;
+}
+// A document's filter, Automatic included.
+[[nodiscard]] constexpr bool validDocumentResampleFilter(const std::int64_t filter) noexcept {
+    return filter >= kResampleFilterBilinear && filter <= kResampleFilterAutomatic;
+}
+// #742 Q4: Automatic is Trilinear, which equals Bilinear unless the image shrinks.
+[[nodiscard]] constexpr std::int64_t resolveResampleFilter(const std::int64_t filter) noexcept {
+    return filter == kResampleFilterAutomatic ? kResampleFilterTrilinear : filter;
+}
 // Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
 struct ResizeFitKernel final {
     std::int64_t width = 1920;
@@ -325,7 +344,7 @@ struct ResizeFitKernel final {
 // Output vocabulary: translate, pivot (an offset from the centre of the input's content bounds),
 // per-axis scale and clockwise rotation in degrees, all animatable or driven. Extent chooses the
 // output data window: the full transformed support, clipped to the input data window, or clipped
-// to the input display window. `filter` is kResampleFilterBilinear or kResampleFilterNearest.
+// to the input display window. `filter` is a compiled resample filter (0-3).
 enum class Transform2DExtent : std::uint8_t { Transformed, Input, Display };
 struct Transform2DKernel final {
     CompiledVec2Parameter translate;
@@ -1756,6 +1775,10 @@ struct CompiledLayerOutput {
     // detail::resolveLayerOpacity applies it on the CPU reference and the GPU route alike. Appended
     // 1: no existing plan changes meaning.
     double isolationOpacity = 1.0;
+    // #742: the resample filter of the layer's transform, a compiled filter (0-3; the document's
+    // Automatic is resolved). A layer saved without one is Bilinear. Appended Bilinear: no existing
+    // plan changes meaning.
+    std::int64_t filter = kResampleFilterBilinear;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

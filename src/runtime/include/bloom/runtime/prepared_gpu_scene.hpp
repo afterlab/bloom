@@ -307,8 +307,18 @@ struct GpuSceneAffineCommand final {
     // it recomputes the effective key from the fields above and the actual device selection.
     std::string semanticKey;
     std::optional<render::Rgba32fImageDescriptor> outputDescriptor{};
-    // #480 Resize, Fit and Transform 2D Nearest; every layer placement is Bilinear.
+    // #480 Resize, Fit and Transform 2D Nearest; #742 Trilinear and Anisotropic for those and
+    // the Layer placement.
     render::GpuAffineFilter filter = render::GpuAffineFilter::Bilinear;
+    // #742 Trilinear/Anisotropic: `input` is the plan's lower mip level command and `upperInput`
+    // its upper level command (the same command when the levels are equal), each a Bilinear
+    // affine command halving the previous level (render::affineMipReductionMatrix) and keyed by
+    // the source's own key, so a pyramid is retained in the scene cache per source identity.
+    // `sourceWindow` stays the level-0 source window the matrix maps, and `plan` is
+    // render::planAffineFilter() of the matrix over it.
+    GpuSceneCommandIndex upperInput = kInvalidGpuSceneCommand;
+    std::string upperInputKey{};
+    render::GpuAffineFilterPlan plan{};
 };
 
 // A BlendV1 composite of two resident inputs under an explicit core::BlendMode. `source` is the
@@ -493,15 +503,14 @@ inline void appendSemanticFloatBits(std::string& out, float value) {
 
 } // namespace gpu_scene_key_detail
 
-[[nodiscard]] inline std::string
-makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWindow& sourceWindow,
-                              const render::GpuAffineMatrix& matrix, const float opacity,
-                              const render::ImageWindow& outputWindow,
-                              const core::PixelAspectRatio& pixelAspect,
-                              const std::string& artifactDigest,
-                              const std::optional<render::Rgba32fImageDescriptor>& output = {},
-                              const render::GpuAffineFilter filter =
-                                  render::GpuAffineFilter::Bilinear) {
+[[nodiscard]] inline std::string makeGpuSceneAffineSemanticKey(
+    const std::string& inputKey, const render::ImageWindow& sourceWindow,
+    const render::GpuAffineMatrix& matrix, const float opacity,
+    const render::ImageWindow& outputWindow, const core::PixelAspectRatio& pixelAspect,
+    const std::string& artifactDigest,
+    const std::optional<render::Rgba32fImageDescriptor>& output = {},
+    const render::GpuAffineFilter filter = render::GpuAffineFilter::Bilinear,
+    const render::GpuAffineFilterPlan* plan = nullptr, const std::string& upperInputKey = {}) {
     std::string key = "affine-bilinear-v1|in=";
     key.append(inputKey);
     gpu_scene_key_detail::appendSemanticWindow(key, sourceWindow);
@@ -531,6 +540,27 @@ makeGpuSceneAffineSemanticKey(const std::string& inputKey, const render::ImageWi
     // #480: a Nearest resample is a different image; Bilinear keys are unchanged.
     if (filter == render::GpuAffineFilter::Nearest)
         key.append("|sampling=nearest");
+    // #742: a filtered resample names its filter, the levels and blend it reads, its taps and the
+    // upper level's key (the input key is the lower level's).
+    if (filter == render::GpuAffineFilter::Trilinear ||
+        filter == render::GpuAffineFilter::Anisotropic) {
+        key.append(filter == render::GpuAffineFilter::Trilinear ? "|sampling=trilinear"
+                                                                : "|sampling=anisotropic");
+        if (plan != nullptr) {
+            key.append("|levels=");
+            key.append(std::to_string(plan->lowerLevel));
+            key.push_back(',');
+            key.append(std::to_string(plan->upperLevel));
+            gpu_scene_key_detail::appendSemanticFloatBits(key, plan->upperWeight);
+            key.append("|taps=");
+            key.append(std::to_string(plan->taps));
+            gpu_scene_key_detail::appendSemanticDouble(key, plan->tapStepX);
+            key.push_back(',');
+            gpu_scene_key_detail::appendSemanticDouble(key, plan->tapStepY);
+        }
+        key.append("|upper=");
+        key.append(upperInputKey);
+    }
     return key;
 }
 

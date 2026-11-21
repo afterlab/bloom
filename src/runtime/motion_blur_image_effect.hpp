@@ -33,8 +33,12 @@ namespace bloom::runtime::detail {
 struct ImageEffectResult;
 struct ResolvedEvaluation;
 
-// The largest table a pass reads: the path sampler's 64 samples of four vec4s after its header.
-inline constexpr std::size_t kMotionTableFloats = 4 * (20 + 4 * 64);
+// The largest table a pass reads: the path sampler's 64 samples of four vec4s after its header, and
+// (#742, a filtered Transform 2D) two more vec4s per sample.
+inline constexpr std::size_t kMotionTableFloats = 4 * (20 + 6 * 64);
+// The deepest mip level a filtered Transform 2D shutter sample reads (#742): the path atlas holds
+// the output, the input and this many levels in its fourteen regions.
+inline constexpr std::uint32_t kMotionMaxMipLevel = 12;
 // The operands of a motion kernel at the operation's clock time `time`: [time in seconds, frame
 // index], the kernel's operands in forEachColorGradeOperand order, then for a Transform path the
 // number of shutter rows and per row the transform's seven operands (translate, pivot, scale,

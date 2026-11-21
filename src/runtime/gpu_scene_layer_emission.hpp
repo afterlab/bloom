@@ -74,6 +74,93 @@ template <typename Charge, typename Emit>
     return std::nullopt;
 }
 
+// #742: one composed-matrix resample of `input`. Bilinear and Nearest, and a Trilinear or
+// Anisotropic map that does not shrink the image (planAffineFilter resolves those to Bilinear),
+// emit the one affine command. A shrinking filtered map first emits the mip levels it reads, each
+// a Bilinear affine command halving the previous level through affineMipReductionMatrix() and
+// keyed by the source's key, so the scene cache retains the pyramid per source identity and an
+// unchanged source reuses it on the next frame; then the filtered command reads the plan's lower
+// and upper levels. Every level is charged to the frame budget.
+template <typename Charge, typename Emit>
+[[nodiscard]] inline std::optional<GpuSceneLeafFailure> emitAffineMatrixCommand(
+    const GpuSceneCommandIndex input, const std::string& inputKey,
+    const render::ImageWindow sourceWindow, const render::ImageWindow outputWindow,
+    const render::GpuAffineMatrix& affineMatrix, const float opacity,
+    const core::PixelAspectRatio pixelAspect,
+    const std::optional<render::Rgba32fImageDescriptor>& outputDescriptor,
+    const render::GpuAffineFilter requestedFilter, const OperationIndex operationIndex,
+    Charge&& charge, Emit&& emit, GpuSceneCommandIndex& out, std::string& key,
+    const std::optional<core::PixelAspectRatio> sourcePixelAspect = std::nullopt) {
+    // A level inherits its source's display window and pixel aspect.
+    const auto levelPixelAspect = sourcePixelAspect.value_or(pixelAspect);
+    const auto plan =
+        render::planAffineFilter(affineMatrix, requestedFilter, sourceWindow.extent().width(),
+                                 sourceWindow.extent().height());
+    GpuSceneCommandIndex lower = input;
+    std::string lowerKey = inputKey;
+    GpuSceneCommandIndex upper = kInvalidGpuSceneCommand;
+    std::string upperKey;
+    if (plan.filtered()) {
+        GpuSceneCommandIndex level = input;
+        std::string levelKey = inputKey;
+        render::ImageWindow levelWindow = sourceWindow;
+        const auto reduction = render::affineMipReductionMatrix();
+        for (std::uint32_t index = 1; index <= plan.upperLevel; ++index) {
+            const auto [width, height] = render::affineMipLevelExtent(
+                sourceWindow.extent().width(), sourceWindow.extent().height(), index);
+            const auto next = render::ImageWindow::create(0, 0, width, height);
+            if (!next)
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                            "A mip level window is not representable");
+            if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
+                return error;
+            auto nextKey =
+                makeGpuSceneAffineSemanticKey(levelKey, levelWindow, reduction, 1.0F, *next.value(),
+                                              levelPixelAspect, std::string{kGpuAffineSpirvSha256});
+            level = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
+                                               .input = level,
+                                               .inputKey = levelKey,
+                                               .sourceWindow = levelWindow,
+                                               .outputWindow = *next.value(),
+                                               .matrix = reduction,
+                                               .opacity = 1.0F,
+                                               .pixelAspect = levelPixelAspect,
+                                               .semanticKey = nextKey});
+            levelKey = std::move(nextKey);
+            levelWindow = *next.value();
+            if (index == plan.lowerLevel) {
+                lower = level;
+                lowerKey = levelKey;
+            }
+        }
+        upper = plan.upperLevel == plan.lowerLevel ? lower : level;
+        upperKey = plan.upperLevel == plan.lowerLevel ? lowerKey : levelKey;
+    }
+    const auto filter = plan.filter;
+    key = makeGpuSceneAffineSemanticKey(lowerKey, sourceWindow, affineMatrix, opacity, outputWindow,
+                                        pixelAspect, std::string{kGpuAffineSpirvSha256},
+                                        outputDescriptor, filter, &plan, upperKey);
+    if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
+                                  sizeof(render::Rgba32f))) {
+        return error;
+    }
+    out = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
+                                     .input = lower,
+                                     .inputKey = lowerKey,
+                                     .sourceWindow = sourceWindow,
+                                     .outputWindow = outputWindow,
+                                     .matrix = affineMatrix,
+                                     .opacity = opacity,
+                                     .pixelAspect = pixelAspect,
+                                     .semanticKey = key,
+                                     .outputDescriptor = outputDescriptor,
+                                     .filter = filter,
+                                     .upperInput = upper,
+                                     .upperInputKey = upperKey,
+                                     .plan = plan});
+    return std::nullopt;
+}
+
 template <typename Charge, typename Emit>
 [[nodiscard]] inline std::optional<GpuSceneLeafFailure> emitAffineLayerCommand(
     const GpuSceneCommandIndex input, const std::string& inputKey,
@@ -83,25 +170,9 @@ template <typename Charge, typename Emit>
     Charge&& charge, Emit&& emit, GpuSceneCommandIndex& out, std::string& key,
     const render::GpuAffineFilter filter = render::GpuAffineFilter::Bilinear) {
     const auto affineMatrix = toGpuAffineMatrix(matrix, sourceWindow, scaleX, scaleY);
-    key = makeGpuSceneAffineSemanticKey(inputKey, sourceWindow, affineMatrix,
-                                        static_cast<float>(opacity), outputWindow, fullPixelAspect,
-                                        std::string{kGpuAffineSpirvSha256}, {}, filter);
-    if (const auto error = charge(outputWindow.extent().width(), outputWindow.extent().height(),
-                                  sizeof(render::Rgba32f))) {
-        return error;
-    }
-    GpuSceneAffineCommand affine{.sourceOperation = operationIndex,
-                                 .input = input,
-                                 .inputKey = inputKey,
-                                 .sourceWindow = sourceWindow,
-                                 .outputWindow = outputWindow,
-                                 .matrix = affineMatrix,
-                                 .opacity = static_cast<float>(opacity),
-                                 .pixelAspect = fullPixelAspect,
-                                 .semanticKey = key,
-                                 .filter = filter};
-    out = emit(std::move(affine));
-    return std::nullopt;
+    return emitAffineMatrixCommand(input, inputKey, sourceWindow, outputWindow, affineMatrix,
+                                   static_cast<float>(opacity), fullPixelAspect, std::nullopt,
+                                   filter, operationIndex, charge, emit, out, key);
 }
 
 } // namespace bloom::runtime::detail

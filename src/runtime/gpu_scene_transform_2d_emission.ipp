@@ -92,10 +92,18 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
     GpuSceneCommandIndex emitted = kInvalidGpuSceneCommand;
     std::string key;
     // #480 Nearest always takes the affine command: the translation pass interpolates a
-    // fractional move.
-    const bool nearest = prepared.filter == kResampleFilterNearest;
-    const auto delta = nearest ? std::nullopt
-                               : translationOnlyDeviceDelta(*geometry->transform, source->data, output);
+    // fractional move. #742 Trilinear and Anisotropic are Bilinear unless the map shrinks the
+    // image, which a pure move never does.
+    const auto filter = gpuAffineFilterOf(prepared.filter);
+    const auto resolvedFilter =
+        render::planAffineFilter(toGpuAffineMatrix(geometry->matrix, source->data, ctx.hScale,
+                                                   ctx.vScale),
+                                 filter, source->data.extent().width(),
+                                 source->data.extent().height())
+            .filter;
+    const auto delta = resolvedFilter != render::GpuAffineFilter::Bilinear
+                           ? std::nullopt
+                           : translationOnlyDeviceDelta(*geometry->transform, source->data, output);
     if (delta) {
         if (const auto error = emitTranslationOpacityCommand(
                 inputCommand, inputKey, source->data, output, delta->first, delta->second,
@@ -105,8 +113,7 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
     } else if (const auto error = emitAffineLayerCommand(
                    inputCommand, inputKey, source->data, output, geometry->matrix, ctx.hScale,
                    ctx.vScale, prepared.values.opacity, source->pixelAspect, operation, charge,
-                   emit, emitted, key,
-                   nearest ? render::GpuAffineFilter::Nearest : render::GpuAffineFilter::Bilinear)) {
+                   emit, emitted, key, filter)) {
         return error;
     }
     result.command = emitted;
