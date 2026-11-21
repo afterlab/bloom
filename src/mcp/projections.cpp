@@ -7,7 +7,9 @@
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/path_value.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/core/coordinate_space.hpp>
 #include <bloom/runtime/font_resolver.hpp>
+#include <bloom/scripting/node_path_query.hpp>
 
 #include <array>
 #include <cstddef>
@@ -135,7 +137,44 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
         },
         value);
 }
+
+// #591: a space as values: its name, its map from units to composition pixels (a row-major 4x4:
+// rows pixel x, pixel y, depth, w; columns unit x, unit y, unit z, 1), its range and its parent.
+yyjson_mut_val* spaceValue(Json& out, const runtime::CompiledSpaceValue& held) {
+    if (held.value == nullptr)
+        return out.null();
+    const auto& space = *held.value;
+    auto* result = out.object();
+    out.set(result, "name", out.text(space.name));
+    out.set(result, "dimensions", out.number(space.dimensions));
+    auto* matrix = out.array();
+    for (std::size_t row = 0; row < 4; ++row) {
+        auto* line = out.array();
+        for (std::size_t column = 0; column < 4; ++column)
+            out.append(line, out.real(space.toPixels[row * 4 + column]));
+        out.append(matrix, line);
+    }
+    out.set(result, "matrix", matrix);
+    out.set(result, "affine", out.boolean(core::space::isAffine(space.toPixels)));
+    if (space.range) {
+        auto* range = out.object();
+        out.set(range, "min", vector(out, {space.range->minimum.x, space.range->minimum.y}));
+        out.set(range, "max", vector(out, {space.range->maximum.x, space.range->maximum.y}));
+        out.set(result, "range", range);
+    } else {
+        out.set(result, "range", out.null());
+    }
+    out.set(result, "parent", space.parent ? out.text(space.parent->name) : out.null());
+    return result;
+}
 } // namespace
+
+yyjson_mut_val* evaluatedValue(Json& out, const runtime::CompiledValue& value) {
+    if (const auto* space = std::get_if<runtime::CompiledSpaceValue>(&value))
+        return spaceValue(out, *space);
+    const auto stored = scripting::parameterValueOf(value);
+    return stored ? parameterValue(out, *stored) : out.null();
+}
 
 yyjson_mut_val* parameterRecord(Json& out, const document::ParameterRecord& value) {
     auto* record = out.object();

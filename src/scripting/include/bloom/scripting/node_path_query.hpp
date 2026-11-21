@@ -11,7 +11,9 @@
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/runtime/cancellation.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -81,5 +83,39 @@ struct NodeBakeActivity final {
     std::uint64_t framesTotal = 0;
 };
 [[nodiscard]] NodeBakeActivity nodeBakeActivity() noexcept;
+
+// #591: every output of a node at one time, as values -- what a Space Readout, a To Space or any other
+// value node answers, read without driving a parameter or reading a card. Like the reads above,
+// nothing has to consume the node: the plan is compiled with it as a value readout. Pictures, sound,
+// masks, channel sets and fields carry no one value, so those outputs are listed with a note.
+struct NodeOutputValue final {
+    std::string name;
+    document::SocketValueKind kind = document::SocketValueKind::Scalar;
+    // The value at the time; none for an output that carries no one value, or one the node gave
+    // nothing for (then `note` says why).
+    std::optional<runtime::CompiledValue> value;
+    std::string note;
+};
+struct NodeOutputsQuery final {
+    // One entry per output the node's definition declares, in its order.
+    std::vector<NodeOutputValue> outputs;
+    // What the node itself reported at this time ("summary: detail"), with its outputs still read
+    // (a node that cannot answer gives its documented fallback).
+    std::vector<std::string> nodeDiagnostics;
+    // Why nothing could be read (a missing node, a plan that does not compile); empty on success.
+    std::string diagnostic;
+    bool cancelled = false;
+};
+
+[[nodiscard]] NodeOutputsQuery queryNodeOutputs(const document::Snapshot& snapshot,
+                                                document::CompositionId composition,
+                                                document::NodeId node, core::RationalTime time,
+                                                const runtime::CancellationToken& cancellation,
+                                                const std::filesystem::path& assetBaseDirectory = {});
+
+// The parameter value a computed value is written as (MCP and Python project both the same way);
+// none for a space, which has no stored form.
+[[nodiscard]] std::optional<document::ParameterValue>
+parameterValueOf(const runtime::CompiledValue& value);
 
 } // namespace bloom::scripting

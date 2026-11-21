@@ -65,6 +65,8 @@ void bindHost(nb::module_& module) {
         .def("render", &NativeHost::render)
         .def("scopes", &NativeHost::scopes, nb::arg("options"), nb::arg("cancellation_task"),
              nb::arg("progress") = nb::none())
+        .def("outputs", &NativeHost::outputs, nb::arg("composition"), nb::arg("node"),
+             nb::arg("numerator"), nb::arg("denominator"))
         .def("events", &NativeHost::events)
         .def("tasks", &NativeHost::tasks)
         .def("track_task", &NativeHost::trackTask, nb::keep_alive<0, 1>())

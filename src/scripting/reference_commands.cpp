@@ -305,6 +305,50 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .unit = "composition time",
            .defaultValue = "the playhead (frame 0 headless)"}},
          R"({"name":"query","arguments":{"kind":"layer-bounds","composition":1,"layer":2,"time":24}})");
+    kind("outputs", "Every output of a node at a time, as typed values, without rendering.",
+         "Evaluates the node at `time` on the CPU reference path (a compile and the value pass; a "
+         "node that reads the picture, such as Layer Bounds, evaluates the frame) and reads every "
+         "output its type declares, in order; nothing has to be connected to the node. Each output "
+         "has its socket `kind` (query:node-types) and a `value`: scalar a number, integer an "
+         "integer, boolean true or false, vector2 [x, y], vector3 [x, y, z], color [r, g, b, a], "
+         "string a text, path {closed, anchors} or {contours, ...} as a path parameter is "
+         "written, number-list {values:[...]}, and space {name, dimensions, matrix, affine, "
+         "range, parent} or null for \"no space\". A space's matrix is its map from units to "
+         "composition pixels: four rows (pixel x, pixel y, depth, w) of four columns (unit x, unit "
+         "y, unit z, 1); a 2D space's map is rows and columns 0, 1 and 3, and a point lands at "
+         "(row0 . p) / (row3 . p). range is {min:[x, y], max:[x, y]} in the space's units or null; "
+         "parent is the name of the space it was defined in or null. Pictures, masks, channel "
+         "sets, sound and fields carry no one value: their value is null with a `note`. "
+         "`diagnostics` lists what the node reported at that time (its outputs are then its "
+         "documented fallback). A plan that cannot be compiled answers status unavailable with "
+         "a reason. Values are in the node's own units: a Space Readout's origin and axes are "
+         "composition pixels, To Space answers units of the space.",
+         "{revision, composition, node, type, time:" + std::string(time) +
+             ", status (evaluated|unavailable), reason?, outputs:[{name, kind, value, note?}], "
+             "diagnostics:[text]}",
+         {{.name = "composition",
+           .type = "integer",
+           .summary = "The composition.",
+           .unit = "composition id (query:compositions)",
+           .range = ">= 1",
+           .defaultValue = "the context's composition"},
+          {.name = "node",
+           .type = "integer",
+           .required = true,
+           .summary = "The node.",
+           .unit = "node id (query:nodes .id)",
+           .range = ">= 1"},
+          {.name = "time",
+           .type = "integer or [numerator, denominator]",
+           .summary = "An integer is a whole frame of the composition at its frame rate; "
+                      "[numerator, denominator] is exact seconds (concept:time).",
+           .unit = "composition time",
+           .defaultValue = "the playhead (frame 0 headless)"},
+          {.name = "expectedRevision",
+           .type = "integer",
+           .summary = "Refuse when the project moved on.",
+           .range = ">= 0"}},
+         R"({"name":"query","arguments":{"kind":"outputs","composition":1,"node":7,"time":24}})");
     kind("history", "The undo history: every entry's label and where the project is in it.",
          "Entries are oldest first. The first `position` entries are applied; the ones after "
          "that are the redo branch. `undoLabel` is the step the history tool's undo would take "
@@ -762,6 +806,17 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
         "(layer_kind node, entry or none), parameter ids, values and adjustment, shared and "
         "nested-Merge markers.",
         "bloom.data.layers(bloom.context.composition)");
+    api("bloom.data.outputs", "Read every output of a node at a time, as values.",
+        "bloom.data.outputs(node, *, composition=None, frame=None, time=None, "
+        "expected_revision=None) evaluates the node exactly as query:outputs does (the same "
+        "answer, in snake_case) and returns a mapping: revision, composition, node, type, time "
+        "{frames, seconds}, status (\"evaluated\" or \"unavailable\" with a reason), outputs (each "
+        "{name, kind, value} and a note for an output with no one value) and diagnostics. Vectors "
+        "and colours are tuples; a space is {name, dimensions, matrix (four rows of four), affine, "
+        "range, parent} and \"no space\" None. frame is a whole frame, time is seconds; neither is "
+        "the context's time. An unknown composition or node, a stale expected_revision or a bad "
+        "time raises ValueError.",
+        "bloom.data.outputs(readout, frame=24)[\"outputs\"][0][\"value\"]");
     api("bloom.render", "Render a frame or a range to image files.",
         "bloom.render.frame(number, *, out, composition=None, preset=...) and "
         "bloom.render.range(first, last, *, out, ...). Output keeps alpha; the composition "

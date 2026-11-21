@@ -7,6 +7,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/runtime/text_metrics.hpp>
+#include <bloom/scripting/node_path_query.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include <array>
@@ -65,5 +66,36 @@ struct LayerBoundsReading final {
                                                     document::CompositionId composition,
                                                     core::RationalTime time,
                                                     document::LayerId layer);
+
+// ---- Node outputs (#591)
+
+enum class NodeOutputsStatus : std::uint8_t {
+    Evaluated,
+    // The composition or the node is not in the project; `diagnostic` names which and where to
+    // look them up.
+    MissingComposition,
+    MissingNode,
+    // The project cannot be evaluated here, or the node's plan does not compile; `diagnostic` says
+    // why.
+    Unavailable,
+    Cancelled,
+};
+
+struct NodeOutputsReading final {
+    NodeOutputsStatus status = NodeOutputsStatus::Unavailable;
+    std::string diagnostic;
+    // The revision of the project that was evaluated.
+    std::uint64_t revision = 0;
+    std::string type;
+    std::vector<NodeOutputValue> outputs;
+    std::vector<std::string> nodeDiagnostics;
+};
+
+// Evaluates `node` of `composition` at `time` on the CPU reference path and reads every one of its
+// outputs (query kind=outputs, bloom.data.outputs). Needs the context's render source. Runs on the
+// calling client thread and stops when the context's stop token fires.
+[[nodiscard]] NodeOutputsReading readNodeOutputs(const OperationContext& context,
+                                                 document::CompositionId composition,
+                                                 core::RationalTime time, document::NodeId node);
 
 } // namespace bloom::scripting

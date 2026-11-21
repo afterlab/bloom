@@ -198,6 +198,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
                       {"enums", "Keyframe interpolation, ease and handle-mode tokens"},
                       {"text-metrics", "The advance and ink bounds of a piece of text"},
                       {"layer-bounds", "A layer's evaluated bounds at a time"},
+                      {"outputs", "Every output of a node at a time, as typed values"},
                       {"history", "The undo history: labels and position"},
                       {"viewer", "The Viewer's display settings (desktop only)"},
                       {"preview-cache", "RAM Preview: filled range, fill rate, budget, "
@@ -212,7 +213,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
          {.name = "composition",
           .type = "integer",
           .summary = "The composition, for layers, nodes, parameters, parameter, "
-                     "parameter-value, keyframes, pixels and scopes.",
+                     "parameter-value, keyframes, layer-bounds, outputs, pixels and scopes.",
           .unit = "composition id (query:compositions)",
           .range = ">= 1"},
          {.name = "parameter",
@@ -241,8 +242,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = "at most 160 characters"},
          {.name = "expectedRevision",
           .type = "integer",
-          .summary = "For parameter and parameter-value: refuse when the project moved "
-                     "on. Required for parameter-value.",
+          .summary = "For parameter, parameter-value and outputs: refuse when the "
+                     "project moved on. Required for parameter-value.",
           .range = ">= 0"},
          {.name = "offset",
           .type = "integer",
@@ -270,6 +271,11 @@ void addTools(std::vector<ReferenceEntry>& out) {
                      "everything upstream of it. Default: every layer.",
           .unit = "layer id (query:layers .id)",
           .range = ">= 1"},
+         {.name = "node",
+          .type = "integer",
+          .summary = "For outputs: the node whose outputs are read.",
+          .unit = "node id (query:nodes .id)",
+          .range = ">= 1"},
          {.name = "text",
           .type = "string",
           .summary = "For text-metrics: the text to measure. A newline starts a new "
@@ -292,7 +298,7 @@ void addTools(std::vector<ReferenceEntry>& out) {
          {.name = "time",
           .type = "integer or [numerator, denominator]",
           .summary =
-              "For layer-bounds, pixels and scopes: the time to evaluate at. An integer is a whole "
+              "For layer-bounds, outputs, pixels and scopes: the time to evaluate at. An integer is a whole "
               "frame of the composition at its frame rate; [numerator, "
               "denominator] is exact seconds (concept:time).",
           .unit = "composition time",

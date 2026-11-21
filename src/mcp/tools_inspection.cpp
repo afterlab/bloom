@@ -239,6 +239,77 @@ yyjson_mut_val* layerBounds(Json& out, McpCall& call, yyjson_val* arguments) {
     return result;
 }
 
+// #591 query kind=outputs: every output of a node at a time, as typed values.
+yyjson_mut_val* nodeOutputs(Json& out, McpCall& call, yyjson_val* arguments) {
+    members(arguments, {"kind", "composition", "node", "time", "expectedRevision"},
+            {"kind", "node"});
+    const auto snapshot = call.session.snapshot();
+    std::uint64_t compositionId = 0;
+    if (auto* requested = member(arguments, "composition")) {
+        compositionId = integer(requested);
+    } else if (call.context.composition && *call.context.composition != 0) {
+        compositionId = *call.context.composition;
+    } else if (!snapshot.project().compositions().empty()) {
+        compositionId = snapshot.project().compositions().front().id().value();
+    }
+    const auto nodeId = integer(member(arguments, "node"));
+    if (compositionId == 0 || nodeId == 0)
+        throw InvalidInput("composition and node are ids (query kind=compositions and nodes)");
+    if (auto* expected = member(arguments, "expectedRevision");
+        expected != nullptr && integer(expected) != snapshot.revision().value())
+        throw InvalidInput("Stale revision: the project is at revision " +
+                           std::to_string(snapshot.revision().value()) +
+                           "; query again and pass that revision");
+    const auto* composition =
+        snapshot.project().findComposition(document::CompositionId::fromRaw(compositionId));
+    if (composition == nullptr)
+        throw InvalidInput("Composition " + std::to_string(compositionId) +
+                           " does not exist; query kind=compositions lists them");
+    core::RationalTime time = call.context.time.value_or(core::RationalTime::fromInteger(0));
+    if (auto* requested = member(arguments, "time"))
+        time = frameOrSecondsArgument(requested, snapshot, compositionId);
+    const auto reading =
+        scripting::readNodeOutputs(call.context, document::CompositionId::fromRaw(compositionId),
+                                   time, document::NodeId::fromRaw(nodeId));
+    switch (reading.status) {
+    case scripting::NodeOutputsStatus::Cancelled:
+        throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    case scripting::NodeOutputsStatus::MissingComposition:
+    case scripting::NodeOutputsStatus::MissingNode:
+        throw InvalidInput(reading.diagnostic);
+    case scripting::NodeOutputsStatus::Evaluated:
+    case scripting::NodeOutputsStatus::Unavailable:
+        break;
+    }
+    auto* result = out.object();
+    out.set(result, "revision",
+            out.number(reading.revision != 0 ? reading.revision : snapshot.revision().value()));
+    out.set(result, "composition", out.number(compositionId));
+    out.set(result, "node", out.number(nodeId));
+    out.set(result, "type", out.text(reading.type));
+    out.set(result, "time", timeObject(out, time, composition->format().frameRate()));
+    const bool evaluated = reading.status == scripting::NodeOutputsStatus::Evaluated;
+    out.set(result, "status", out.text(evaluated ? "evaluated" : "unavailable"));
+    if (!evaluated)
+        out.set(result, "reason", out.text(reading.diagnostic));
+    auto* outputs = out.array();
+    for (const auto& output : reading.outputs) {
+        auto* row = out.object();
+        out.set(row, "name", out.text(output.name));
+        out.set(row, "kind", out.text(document::socketValueKindName(output.kind)));
+        out.set(row, "value", output.value ? evaluatedValue(out, *output.value) : out.null());
+        if (!output.note.empty())
+            out.set(row, "note", out.text(output.note));
+        out.append(outputs, row);
+    }
+    out.set(result, "outputs", outputs);
+    auto* diagnostics = out.array();
+    for (const auto& text : reading.nodeDiagnostics)
+        out.append(diagnostics, out.text(text));
+    out.set(result, "diagnostics", diagnostics);
+    return result;
+}
+
 yyjson_mut_val* historyQuery(McpServerCore::State& core, Json& out, McpCall& call,
                              yyjson_val* arguments) {
     members(arguments, {"kind"}, {"kind"});
@@ -541,7 +612,7 @@ yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall&
 bool isInspectionQuery(const std::string_view kind) noexcept {
     return kind == "text-metrics" || kind == "layer-bounds" || kind == "history" ||
            kind == "viewer" || kind == "preview-cache" || kind == "jobs" ||
-           kind == "render-route" || kind == "pixels" || kind == "scopes";
+           kind == "render-route" || kind == "pixels" || kind == "scopes" || kind == "outputs";
 }
 
 yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
@@ -550,6 +621,8 @@ yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& 
         return textMetrics(out, call, arguments);
     if (kind == "layer-bounds")
         return layerBounds(out, call, arguments);
+    if (kind == "outputs")
+        return nodeOutputs(out, call, arguments);
     if (kind == "history")
         return historyQuery(core, out, call, arguments);
     if (kind == "viewer")

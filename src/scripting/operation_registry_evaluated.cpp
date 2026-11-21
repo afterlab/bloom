@@ -804,9 +804,62 @@ void addEvaluatedOperations(std::vector<OperationDescriptor>& descriptors) {
     return reading;
 }
 
+[[nodiscard]] static NodeOutputsReading readNodeOutputsReading(const OperationContext& context,
+                                                              const CompositionId compositionId,
+                                                              const core::RationalTime time,
+                                                              const NodeId nodeId) {
+    NodeOutputsReading reading;
+    const auto stop = [&reading](const NodeOutputsStatus status, std::string why) {
+        reading.status = status;
+        reading.diagnostic = std::move(why);
+        return reading;
+    };
+    if (!context.source)
+        return stop(NodeOutputsStatus::Unavailable,
+                    "This client cannot read the project to evaluate it");
+    const auto source = context.source();
+    if (!source)
+        return stop(NodeOutputsStatus::Unavailable, "The project is closed or being replaced");
+    reading.revision = source->snapshot.revision().value();
+    const auto* composition = source->snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return stop(NodeOutputsStatus::MissingComposition,
+                    "Composition " + std::to_string(compositionId.value()) +
+                        " does not exist; query kind=compositions lists them");
+    const auto* node = composition->graph().findNode(nodeId);
+    if (node == nullptr)
+        return stop(NodeOutputsStatus::MissingNode,
+                    "Node " + std::to_string(nodeId.value()) + " does not exist in composition " +
+                        std::to_string(compositionId.value()) +
+                        "; query kind=nodes lists its nodes");
+    reading.type = node->typeId;
+    const auto queried = runCancellable<NodeOutputsQuery>(
+        context.stop, "Read node outputs", runtime::TaskExecutor::Cpu,
+        [&](const runtime::CancellationToken& cancellation) {
+            return queryNodeOutputs(source->snapshot, compositionId, nodeId, time, cancellation,
+                                    source->assetBaseDirectory);
+        });
+    if (queried.cancelled || (queried.value && queried.value->cancelled))
+        return stop(NodeOutputsStatus::Cancelled, "The request was cancelled");
+    if (!queried.value)
+        return stop(NodeOutputsStatus::Unavailable, "The node could not be read");
+    if (!queried.value->diagnostic.empty())
+        return stop(NodeOutputsStatus::Unavailable, queried.value->diagnostic);
+    reading.status = NodeOutputsStatus::Evaluated;
+    reading.outputs = std::move(queried.value->outputs);
+    reading.nodeDiagnostics = std::move(queried.value->nodeDiagnostics);
+    return reading;
+}
+
 } // namespace bloom::scripting::detail::parity
 
 namespace bloom::scripting {
+
+NodeOutputsReading readNodeOutputs(const OperationContext& context,
+                                   const document::CompositionId composition,
+                                   const core::RationalTime time, const document::NodeId node) {
+    return detail::parity::readNodeOutputsReading(context, composition, time, node);
+}
 
 LayerBoundsReading measureLayerBounds(const OperationContext& context,
                                       const document::CompositionId composition,

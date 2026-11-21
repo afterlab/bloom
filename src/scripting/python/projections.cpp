@@ -8,7 +8,9 @@
 #include <bloom/document/animation.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/path_value.hpp>
+#include <bloom/core/coordinate_space.hpp>
 #include <bloom/scripting/merge_entry_view.hpp>
+#include <bloom/scripting/node_path_query.hpp>
 
 #include <string>
 
@@ -108,6 +110,33 @@ nb::object parameterValue(const document::ParameterValue& value) {
             }
         },
         value);
+}
+
+// #591: a space as values, in the members MCP's query kind=outputs gives it (matrix: four rows of
+// four, units to composition pixels).
+nb::object spaceValue(const runtime::CompiledSpaceValue& held) {
+    if (held.value == nullptr)
+        return nb::none();
+    const auto& space = *held.value;
+    nb::dict result;
+    result["name"] = space.name;
+    result["dimensions"] = static_cast<int>(space.dimensions);
+    nb::list matrix;
+    for (std::size_t row = 0; row < 4; ++row)
+        matrix.append(nb::make_tuple(space.toPixels[row * 4], space.toPixels[row * 4 + 1],
+                                     space.toPixels[row * 4 + 2], space.toPixels[row * 4 + 3]));
+    result["matrix"] = nb::tuple(matrix);
+    result["affine"] = core::space::isAffine(space.toPixels);
+    if (space.range) {
+        nb::dict range;
+        range["min"] = nb::make_tuple(space.range->minimum.x, space.range->minimum.y);
+        range["max"] = nb::make_tuple(space.range->maximum.x, space.range->maximum.y);
+        result["range"] = range;
+    } else {
+        result["range"] = nb::none();
+    }
+    result["parent"] = space.parent ? nb::object(nb::cast(space.parent->name)) : nb::none();
+    return result;
 }
 
 // The interpolation's stable token next to its enum id, and the easing-equation
@@ -431,6 +460,13 @@ nb::dict commandResult(const commands::CommandResult& result) {
     }
     row["outputs"] = outputs;
     return row;
+}
+
+nb::object evaluatedValue(const runtime::CompiledValue& value) {
+    if (const auto* space = std::get_if<runtime::CompiledSpaceValue>(&value))
+        return spaceValue(*space);
+    const auto stored = parameterValueOf(value);
+    return stored ? parameterValue(*stored) : nb::none();
 }
 
 } // namespace bloom::scripting::python

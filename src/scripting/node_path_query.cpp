@@ -5,6 +5,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/runtime/audio_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -15,6 +16,7 @@
 #include <atomic>
 #include <cmath>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -181,6 +183,139 @@ NodePathQuery queryNodePath(const document::Snapshot& snapshot,
         return result;
     }
     return fail("The node produced no path at this time");
+}
+
+namespace {
+
+// Pixels, sound and fields are not one value; a group's outputs are its inner nodes'.
+[[nodiscard]] std::string unreadableNote(const document::NodeDefinition& definition,
+                                         const document::SocketValueKind kind) {
+    if (definition.lowering == document::NodeLoweringKind::NodeGroup ||
+        definition.lowering == document::NodeLoweringKind::GroupBoundary)
+        return "A group's outputs are computed by the nodes inside it; read those nodes";
+    switch (kind) {
+    case document::SocketValueKind::Image:
+    case document::SocketValueKind::Mask:
+    case document::SocketValueKind::ChannelSet:
+        return "Pixels, not a value: render or capture the frame to see them";
+    case document::SocketValueKind::Audio:
+        return "Sound, not a value";
+    case document::SocketValueKind::ScalarField:
+    case document::SocketValueKind::Vector2Field:
+    case document::SocketValueKind::ColorField:
+        return "A field is a function of the composition position, not one value";
+    default:
+        return {};
+    }
+}
+
+} // namespace
+
+std::optional<document::ParameterValue> parameterValueOf(const runtime::CompiledValue& value) {
+    return std::visit(
+        [](const auto& held) -> std::optional<document::ParameterValue> {
+            using T = std::decay_t<decltype(held)>;
+            if constexpr (std::is_same_v<T, runtime::CompiledPathValue>)
+                return document::ParameterValue{*held.value};
+            else if constexpr (std::is_same_v<T, runtime::CompiledNumberList>)
+                return document::ParameterValue{document::NumberListValue{*held.values}};
+            else if constexpr (std::is_same_v<T, runtime::CompiledSpaceValue>)
+                return std::nullopt;
+            else
+                return document::ParameterValue{held};
+        },
+        value);
+}
+
+NodeOutputsQuery queryNodeOutputs(const document::Snapshot& snapshot,
+                                  const document::CompositionId compositionId,
+                                  const document::NodeId nodeId, const core::RationalTime time,
+                                  const runtime::CancellationToken& cancellation,
+                                  const std::filesystem::path& assetBaseDirectory) {
+    NodeOutputsQuery result;
+    const auto fail = [&result](std::string message) {
+        result.diagnostic = std::move(message);
+        return result;
+    };
+    const auto* composition = snapshot.project().findComposition(compositionId);
+    if (composition == nullptr)
+        return fail("The composition does not exist");
+    const auto* node = composition->graph().findNode(nodeId);
+    const auto* definition =
+        node != nullptr ? document::builtInNodeDefinitions().find(node->typeId, node->schemaVersion)
+                        : nullptr;
+    const auto name = "Node " + std::to_string(nodeId.value());
+    if (node == nullptr || definition == nullptr)
+        return fail(name + " does not exist");
+    bool readable = false;
+    for (const auto& output : definition->outputs) {
+        auto note = unreadableNote(*definition, output.valueKind);
+        readable = readable || note.empty();
+        result.outputs.push_back(
+            {.name = output.name, .kind = output.valueKind, .value = std::nullopt, .note = std::move(note)});
+    }
+    if (!readable)
+        return result;
+    // Camera Shake also has a picture output: its values are read with it muted, as Properties
+    // reads them, so a shake with nothing connected yet still answers. Its operation publishes the
+    // offset and the roll first; every other node's outputs are in its definition's order.
+    const bool shake = node->typeId == document::kCameraShakeNodeType;
+    const auto slotOf = [&](const std::size_t index) -> std::optional<std::size_t> {
+        if (!shake)
+            return index;
+        const auto& port = definition->outputs[index].name;
+        if (port == document::kCameraShakeOffsetPort)
+            return 0;
+        if (port == document::kCameraShakeRollPort)
+            return 1;
+        return std::nullopt;
+    };
+    std::optional<Probe> probe;
+    if (shake) {
+        probe.emplace(snapshot, compositionId);
+        if (!probe->edit<commands::SetNodeMuted>(nodeId, true))
+            return fail(name + " could not be read");
+    }
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::SnapshotCompileRequest request{probe ? probe->snapshot() : snapshot, compositionId};
+    request.valueReadouts.push_back(nodeId);
+    const auto compiled = compiler.compile(request, cancellation);
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    if (!compiled.plan)
+        return fail(compiled.diagnostics.empty() ? name + " could not be compiled"
+                                                 : compiled.diagnostics.front().summary);
+    std::vector<runtime::CompiledValue> outputs;
+    std::vector<runtime::ValueGraphDiagnostic> diagnostics;
+    evaluateValueOutputs(compiled.plan, *composition, time, cancellation, assetBaseDirectory, outputs,
+                         diagnostics);
+    if (cancellation.isCancellationRequested()) {
+        result.cancelled = true;
+        return result;
+    }
+    for (const auto& diagnostic : diagnostics)
+        if (diagnostic.nodeId == nodeId)
+            result.nodeDiagnostics.push_back(diagnostic.detail.empty()
+                                                 ? diagnostic.summary
+                                                 : diagnostic.summary + ": " + diagnostic.detail);
+    const auto operation = std::ranges::find(compiled.plan->valueOperations(), nodeId,
+                                             &runtime::CompiledValueOperation::sourceNodeId);
+    for (std::size_t index = 0; index < result.outputs.size(); ++index) {
+        auto& entry = result.outputs[index];
+        if (!entry.note.empty())
+            continue;
+        const auto slot = slotOf(index);
+        if (operation == compiled.plan->valueOperations().end() || !slot ||
+            *slot >= operation->outputCount ||
+            operation->firstOutput.value() + *slot >= outputs.size()) {
+            entry.note = "The node gave no value at this time";
+            continue;
+        }
+        entry.value = outputs[operation->firstOutput.value() + *slot];
+    }
+    return result;
 }
 
 NodeNumberListQuery queryNodeNumberList(const document::Snapshot& snapshot,

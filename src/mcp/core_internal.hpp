@@ -9,6 +9,7 @@
 #include <bloom/host/export_queue.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/mcp/server_core.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/scripting/events.hpp>
 #include <bloom/scripting/live_session_host.hpp>
 #include <bloom/scripting/session.hpp>
@@ -411,6 +412,10 @@ inline constexpr std::size_t kResultDiagnosticLimit = 256;
 // when they fit 64 bits, anything else a real; non-finite is null.
 [[nodiscard]] yyjson_mut_val* shortestNumber(Json& out, double value);
 [[nodiscard]] yyjson_mut_val* referenceValue(Json& out, const document::ParameterValue& value);
+// #591: a value a node computed (query kind=outputs): a stored kind as its parameter value is
+// written, a space as {name, dimensions, matrix (4x4 rows), affine, range|null, parent|null}, and
+// "no space" as null.
+[[nodiscard]] yyjson_mut_val* evaluatedValue(Json& out, const runtime::CompiledValue& value);
 [[nodiscard]] yyjson_mut_val* referenceTime(Json& out, core::RationalTime time,
                                             const document::FrameRate& rate);
 [[nodiscard]] yyjson_mut_val* referenceMetadata(Json& out, std::string_view schemaKey,

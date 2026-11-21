@@ -5,6 +5,7 @@
 #include "task_ticket.hpp"
 
 #include <bloom/host/gpu_export_provider.hpp>
+#include <bloom/runtime/compiled_value_graph.hpp>
 #include <bloom/scripting/facade.hpp>
 #include <nanobind/nanobind.h>
 
@@ -55,6 +56,10 @@ class NativeHost final {
     // a callable taking (frames done, frames total) that may raise to stop the read.
     [[nodiscard]] nb::dict scopes(const nb::dict& options, std::uint64_t cancellationTask,
                                   const nb::object& progress);
+    // #591 bloom.data.outputs: every output of `node` at `numerator`/`denominator` seconds,
+    // evaluated with the GIL released.
+    [[nodiscard]] nb::dict outputs(std::uint64_t composition, std::uint64_t node,
+                                   std::int64_t numerator, std::int64_t denominator);
     [[nodiscard]] nb::list events();
     [[nodiscard]] nb::list tasks() const;
     [[nodiscard]] std::unique_ptr<TaskTicket> trackTask(std::string name) {
@@ -103,6 +108,9 @@ class NativeHost final {
 
 [[nodiscard]] nb::dict projectSnapshot(const document::Snapshot& snapshot);
 [[nodiscard]] nb::dict commandResult(const commands::CommandResult& result);
+// #591: a value a node computed, written as bloom.data.outputs gives it (a stored kind as its
+// parameter value reads, a space as a dict, "no space" as None).
+[[nodiscard]] nb::object evaluatedValue(const runtime::CompiledValue& value);
 [[nodiscard]] Value scriptValue(nb::handle value, std::size_t depth = 0);
 void bindHost(nb::module_& module);
 [[nodiscard]] std::shared_ptr<PythonRootRetirements> moduleRootRetirements();

@@ -1,6 +1,7 @@
 #include "native.hpp"
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/project_color_choice.hpp>
+#include <bloom/scripting/readings.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
@@ -774,6 +775,55 @@ nb::dict NativeHost::setColorSettings(const std::string& config,
         row["context"] = variables;
     }
     return row;
+}
+
+nb::dict NativeHost::outputs(const std::uint64_t composition, const std::uint64_t node,
+                             const std::int64_t numerator, const std::int64_t denominator) {
+    const auto time = core::RationalTime::create(numerator, denominator);
+    if (!time)
+        throw nb::value_error("time is seconds: a Fraction, a number or (numerator, denominator) "
+                              "with a positive denominator");
+    const auto access = lockSession();
+    const auto context = operationContext();
+    const auto reading = [&] {
+        const nb::gil_scoped_release release;
+        return readNodeOutputs(context, document::CompositionId::fromRaw(composition), *time,
+                               document::NodeId::fromRaw(node));
+    }();
+    switch (reading.status) {
+    case NodeOutputsStatus::MissingComposition:
+    case NodeOutputsStatus::MissingNode:
+        throw nb::value_error(reading.diagnostic.c_str());
+    case NodeOutputsStatus::Cancelled:
+        throw std::runtime_error(reading.diagnostic);
+    case NodeOutputsStatus::Evaluated:
+    case NodeOutputsStatus::Unavailable:
+        break;
+    }
+    nb::dict result;
+    result["revision"] = reading.revision;
+    result["composition"] = composition;
+    result["node"] = node;
+    result["type"] = reading.type;
+    result["status"] = reading.status == NodeOutputsStatus::Evaluated ? "evaluated" : "unavailable";
+    if (reading.status != NodeOutputsStatus::Evaluated)
+        result["reason"] = reading.diagnostic;
+    nb::list outputs;
+    for (const auto& output : reading.outputs) {
+        nb::dict row;
+        row["name"] = output.name;
+        row["kind"] = std::string(document::socketValueKindName(output.kind));
+        row["value"] = output.value ? evaluatedValue(*output.value) : nb::none();
+        if (!output.note.empty())
+            row["note"] = output.note;
+        outputs.append(row);
+    }
+    result["outputs"] = outputs;
+    nb::list diagnostics;
+    for (const auto& text : reading.nodeDiagnostics)
+        diagnostics.append(text);
+    result["diagnostics"] = diagnostics;
+    return result;
 }
 
 nb::list NativeHost::events() {

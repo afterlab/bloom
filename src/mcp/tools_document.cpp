@@ -1617,8 +1617,8 @@ yyjson_mut_val* queryTool(McpServerCore::State& core, Json& out, McpCall& call,
         throw InvalidInput("Unknown query kind " + kind +
                            ". Kinds: project, compositions, layers, nodes, node-types, "
                            "parameters, parameter, parameter-value, keyframes, assets, "
-                           "operations, context, enums, text-metrics, layer-bounds, history, "
-                           "viewer, preview-cache, jobs, render-route, pixels");
+                           "operations, context, enums, text-metrics, layer-bounds, outputs, "
+                           "history, viewer, preview-cache, jobs, render-route, pixels, scopes");
     out.set(result, "records", records);
     projectRecords(out, result, arguments);
     return result;
