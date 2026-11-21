@@ -97,8 +97,9 @@ OperationResult createEntryLayer(document::Draft& draft, const document::Composi
     boundary.pivot = document::LayerPivot::Frame;
     std::vector<OperationOutput> outputs{{std::string(kEntryLayerOutput), *layerId}};
     for (const auto& role : document::entryLayerRoles()) {
-        if (role.role == document::kTimeRemapParameterRole)
-            continue; // ADR 0024: bound only while Time Remap is enabled.
+        if (document::isOptionalEntryLayerRole(role.role))
+            continue; // ADR 0024: Time Remap is bound only while enabled; #742 no filter is
+                      // Bilinear.
         const auto value = detail::entryLayerDefaultValue(*composition, role.role);
         const auto parameterId = draft.ids().allocateParameter();
         if (!parameterId)
@@ -735,7 +736,7 @@ class CompositionReconcile final {
             if (binding != node->parameters.end()) {
                 id = detail::copyParameterFrom(ids_, source, after_, binding->parameterId,
                                                fallback);
-            } else if (role.role != document::kTimeRemapParameterRole && fallback) {
+            } else if (!document::isOptionalEntryLayerRole(role.role) && fallback) {
                 id = ids_.allocateParameter();
                 if (id && !after_.parameters().insert({*id, std::string(role.schemaKey),
                                                        document::ConstantValueSource{*fallback}}))

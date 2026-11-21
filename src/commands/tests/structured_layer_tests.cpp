@@ -3,6 +3,7 @@
 
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/sha256.hpp>
+#include <bloom/document/resample_filter.hpp>
 
 #include <algorithm>
 #include <array>
@@ -95,6 +96,27 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
         {{std::string(document::kSolidColorParameterRole), ids.colorParameterId}},
         document::kSolidSourceNodeSchemaVersion,
     };
+    // #742: a new layer binds its resample filter Automatic. AddSolidLayer names no output for it,
+    // so its identity is read from the node and only its record is pinned.
+    const auto* createdLayerNode = value.graph().findNode(ids.layerOutputNodeId);
+    const auto filterBinding =
+        createdLayerNode == nullptr
+            ? createdLayerNode->parameters.end()
+            : std::ranges::find(createdLayerNode->parameters,
+                                std::string(document::kLayerFilterParameterRole),
+                                &document::ParameterBinding::role);
+    const auto filterParameterId =
+        createdLayerNode != nullptr && filterBinding != createdLayerNode->parameters.end()
+            ? filterBinding->parameterId
+            : ParameterId{};
+    const auto* filterParameter = value.parameters().find(filterParameterId);
+    test.expect(
+        filterParameter != nullptr &&
+            *filterParameter ==
+                ParameterRecord{
+                    filterParameterId, std::string(document::kLayerFilterParameterSchemaKey),
+                    ConstantValueSource{std::int64_t{document::kResampleFilterAutomaticValue}}},
+        "a new solid layer's filter is bound Automatic (#742)");
     const NodeRecord expectedLayerOutputNode{
         ids.layerOutputNodeId,
         std::string(document::kLayerOutputNodeType),
@@ -105,6 +127,7 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
             {std::string(document::kRotationParameterRole), ids.rotationParameterId},
             {std::string(document::kOpacityParameterRole), ids.opacityParameterId},
             {std::string(document::kBlendModeParameterRole), ids.blendModeParameterId},
+            {std::string(document::kLayerFilterParameterRole), filterParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };

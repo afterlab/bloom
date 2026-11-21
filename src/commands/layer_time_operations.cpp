@@ -4,6 +4,7 @@
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/core/rational_time.hpp>
+#include <bloom/document/resample_filter.hpp>
 
 #include <algorithm>
 #include <limits>
@@ -248,6 +249,65 @@ OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
     // An identity remap of the range changes no pixel inside it, but frame selection rounds the
     // remapped seconds, so publish the layer span conservatively.
     auto result = spanResult(composition_, *target.layer, duration);
+    result.outputs.push_back({"parameter", *parameterId});
+    return result;
+}
+
+std::string_view SetLayerFilter::typeId() const noexcept { return "bloom.layer.set-filter"; }
+
+OperationResult SetLayerFilter::apply(document::Draft& draft) const {
+    if (filter_ < 0 || filter_ > document::kResampleFilterAutomaticValue)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "A layer filter is 0 Bilinear, 1 Nearest, 2 Trilinear, "
+                                         "3 Anisotropic or 4 Automatic");
+    Target target;
+    if (auto failure = findTarget(draft, composition_, layer_, target))
+        return std::move(*failure);
+    auto& composition = *target.composition;
+    if (!target.layer->entryOwned()) {
+        const auto* node = composition.graph().findNode(target.layer->nodeId);
+        if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
+            return OperationResult::rejected(
+                OperationIssueCode::InvalidTarget,
+                "Layer " + std::to_string(layer_.value()) + " in composition " +
+                    std::to_string(composition_.value()) +
+                    " has no Layer node at the current schema, so it cannot hold a filter");
+    }
+    auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
+    if (bindings == nullptr)
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Layer " + std::to_string(layer_.value()) + " in composition " +
+                std::to_string(composition_.value()) + " has no parameter bindings");
+    const document::ParameterValue value{filter_};
+    const auto bound = std::ranges::find(*bindings, document::kLayerFilterParameterRole,
+                                         &document::ParameterBinding::role);
+    if (bound != bindings->end()) {
+        const auto* record = composition.parameters().find(bound->parameterId);
+        const auto* constant =
+            record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
+        if (constant != nullptr && constant->value == value)
+            return OperationResult::noChange();
+        if (!composition.parameters().setSource(bound->parameterId,
+                                                document::ConstantValueSource{value}))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "The layer filter could not be set");
+        auto result = spanResult(composition_, *target.layer, composition.duration());
+        result.outputs.push_back({"parameter", bound->parameterId});
+        return result;
+    }
+    const auto parameterId = draft.ids().allocateParameter();
+    if (!parameterId)
+        return detail::exhaustedIds("parameter");
+    if (!composition.parameters().insert({*parameterId,
+                                          std::string(document::kLayerFilterParameterSchemaKey),
+                                          document::ConstantValueSource{value}}))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The layer filter parameter could not be created");
+    bindings->push_back({std::string(document::kLayerFilterParameterRole), *parameterId});
+    if (target.layer->entryOwned())
+        std::ranges::sort(*bindings, {}, &document::ParameterBinding::role);
+    auto result = spanResult(composition_, *target.layer, composition.duration());
     result.outputs.push_back({"parameter", *parameterId});
     return result;
 }

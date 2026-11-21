@@ -81,7 +81,7 @@ class ExpansionTarget final : public SvgArtworkTarget {
         boundary.entrySlot = slot;
         boundary.pivot = LayerPivot::Frame;
         for (const auto& role : entryLayerRoles()) {
-            if (role.role == kTimeRemapParameterRole)
+            if (isOptionalEntryLayerRole(role.role))
                 continue;
             const auto value = defaultValue(role.role);
             if (!value)
@@ -354,7 +354,7 @@ constexpr std::array<ScaledBetweenNode, 13> kScaledBetweenNodes{{
         carrier.parameters.push_back({std::string(kTransformRoles[i]), transform[i].id});
     for (const auto& parameter : definition->parameters) {
         if (std::ranges::find(kTransformRoles, parameter.role) != kTransformRoles.end() ||
-            parameter.role == kTimeRemapParameterRole)
+            isOptionalEntryLayerRole(parameter.role))
             continue;
         const auto* schema = layerParameterBinding(graph, *layer, parameter.role);
         const auto* record = schema ? work.parameters().find(schema->parameterId) : nullptr;
@@ -1165,7 +1165,8 @@ struct GroupLevel final {
     const Vec2d origin{-static_cast<double>(work.format().width()) / 2.0,
                        -static_cast<double>(work.format().height()) / 2.0};
     for (const auto& parameter : definition->parameters) {
-        if (parameter.role == kTimeRemapParameterRole)
+        // #742: a carrier resamples Bilinear, as it always did (no filter binding).
+        if (isOptionalEntryLayerRole(parameter.role))
             continue;
         ParameterValue value = parameter.role == kPositionParameterRole ? ParameterValue{Vec2d{0.0, 0.0}}
                                : parameter.role == kAnchorParameterRole ? ParameterValue{origin}

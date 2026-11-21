@@ -2,7 +2,6 @@
 // dissolve (adopt / return), shared Layer nodes, Adjustment layers, the layer commands on entry
 // layers, the reconcile pass's cleanup and its work counters, lock refusal and exact undo/redo.
 
-#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
 #include <bloom/commands/layer_mask_operations.hpp>
@@ -12,10 +11,12 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/pixel_aspect_ratio.hpp>
+#include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/value_nodes.hpp>
 
 #include <algorithm>
@@ -280,6 +281,48 @@ void timeRemapBindsOnTheEntryLayer() {
     expect(!layerParameterBinding(fixture.comp().graph(), *layer, kTimeRemapParameterRole) &&
                noOrphanParameters(fixture.comp()),
            "disabling Time Remap erases its binding and parameter");
+}
+
+// #742: a plain entry's first filter edit creates its layer and the optional filter binding in one
+// undo step; a second edit changes the same binding; values outside 0..4 are refused; and the
+// entry's layer without a binding is Bilinear, so the binding is never created by other edits.
+void filterBindsOnTheEntryLayer() {
+    Fixture fixture;
+    const auto merge = fixture.mainMerge();
+    const auto slot = fixture.connect(fixture.addSolid(), merge);
+    const auto before = fixture.document.snapshot();
+    const auto set = fixture.edit(merge, slot, [&](const LayerId id) {
+        return std::make_unique<SetLayerFilter>(fixture.composition, id, 2);
+    });
+    const auto* layer = entryLayer(fixture.comp(), merge, slot);
+    const auto* value =
+        layer ? constant(fixture.comp(), *layer, kLayerFilterParameterRole) : nullptr;
+    expect(set.changed() && value != nullptr && *value == ParameterValue{std::int64_t{2}},
+           "the first filter edit creates the entry layer with a Trilinear filter binding");
+    expect(fixture.document.snapshot().project().validate().ok() &&
+               noOrphanParameters(fixture.comp()),
+           "an entry layer with a filter validates and owns its parameter");
+    expectExactUndoRedo(fixture, before, "entry filter");
+    const auto count = parameterCount(fixture.comp());
+    fixture.must<SetLayerFilter>(fixture.composition, layer->layerId, 1);
+    layer = entryLayer(fixture.comp(), merge, slot);
+    value = constant(fixture.comp(), *layer, kLayerFilterParameterRole);
+    expect(value != nullptr && *value == ParameterValue{std::int64_t{1}} &&
+               parameterCount(fixture.comp()) == count,
+           "a second filter edit changes the same binding");
+    for (const std::int64_t invalid : {-1, 5})
+        expect(
+            !fixture.run<SetLayerFilter>(fixture.composition, layer->layerId, invalid).succeeded(),
+            "a filter outside 0..4 is refused");
+    // Another entry's opacity edit creates its layer without a filter binding (Bilinear).
+    const auto other = fixture.connect(fixture.addSolid(), merge);
+    fixture.edit(merge, other, [&](const LayerId id) {
+        return std::make_unique<SetLayerSolo>(fixture.composition, id, true);
+    });
+    const auto* plain = entryLayer(fixture.comp(), merge, other);
+    expect(plain != nullptr &&
+               !layerParameterBinding(fixture.comp().graph(), *plain, kLayerFilterParameterRole),
+           "an entry layer created by another edit has no filter binding: Bilinear");
 }
 
 void insertingALayerNodeAdoptsTheEntrysValues() {
@@ -561,7 +604,10 @@ void aSharedLayerNodeReturnsToEveryEntry() {
     const auto* a = entryLayer(fixture.comp(), main, first);
     const auto* b = entryLayer(fixture.comp(), nested, second);
     expect(a && b && a->entryOwned() && b->entryOwned() && a->layerId != b->layerId && a->solo &&
-               b->solo && a->parameters.size() == 6 && b->parameters.size() == 6,
+               b->solo &&
+               // #742: the node's filter binding (a new node's Automatic) is carried with the
+               // other six.
+               a->parameters.size() == 7 && b->parameters.size() == 7,
            "each entry of a shared Layer node gets its own copy of its values");
     expect(noOrphanParameters(fixture.comp()) &&
                fixture.document.snapshot().project().validate().ok(),
@@ -862,6 +908,7 @@ int main() try {
     firstEditCreatesTheEntryLayerInOneStep();
     ensureReportsALayerNodeEntry();
     timeRemapBindsOnTheEntryLayer();
+    filterBindsOnTheEntryLayer();
     insertingALayerNodeAdoptsTheEntrysValues();
     anExistingLayerNodeWinsUnlessDefault();
     aSharedLayerNodeReturnsToEveryEntry();

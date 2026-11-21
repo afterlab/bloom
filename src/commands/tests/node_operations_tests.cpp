@@ -551,11 +551,12 @@ void testResizeFitParameters(TestContext& test) {
                                    ConstantValueSource{std::int64_t{0}});
         refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *aspect,
                                    ConstantValueSource{std::int64_t{0}});
-        // #480: Nearest (1) is the second filter; nothing beyond it is.
-        (void)exercise<SetParameterSource>(test, fixture, *filter,
-                                           ConstantValueSource{std::int64_t{1}});
+        // #480 Nearest (1), #742 Trilinear (2), Anisotropic (3) and Automatic (4); nothing
+        // beyond them is a filter.
+        for (const std::int64_t value : {1, 2, 3, 4})
+            (void)exercise<SetParameterSource>(test, fixture, *filter, ConstantValueSource{value});
         refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
-                                   ConstantValueSource{std::int64_t{2}});
+                                   ConstantValueSource{std::int64_t{5}});
         if (const auto policy = result.outputId<ParameterId>("parameter.policy")) {
             (void)exercise<SetParameterSource>(test, fixture, *policy,
                                                ConstantValueSource{std::int64_t{1}});
@@ -589,10 +590,10 @@ void testTransform2DParameters(TestContext& test) {
                                ConstantValueSource{std::numeric_limits<double>::quiet_NaN()});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *extent,
                                ConstantValueSource{std::int64_t{3}});
-    (void)exercise<SetParameterSource>(test, fixture, *filter,
-                                       ConstantValueSource{std::int64_t{1}});
+    for (const std::int64_t value : {1, 2, 3, 4})
+        (void)exercise<SetParameterSource>(test, fixture, *filter, ConstantValueSource{value});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *filter,
-                               ConstantValueSource{std::int64_t{2}});
+                               ConstantValueSource{std::int64_t{5}});
 }
 
 // #337: Matte Blur is added, wired Mask to Mask, edited, undone and redone through the generic node
@@ -1851,9 +1852,9 @@ void testRemoveAndDissolve(TestContext& test) {
     exercise<DissolveNode>(test, fixture, *loose);
     const auto& dissolved = composition(fixture.document.snapshot());
     test.expect(!dissolved.graph().findNode(*loose) && !dissolved.nodeLayout().contains(*loose) &&
-                    // ADAPTED (task S4, then blend modes): a Layer Output node now owns six
-                    // parameters, not two, so dissolving one orphans six.
-                    dissolved.parameters().records().size() == count - 6 &&
+                    // ADAPTED (task S4, then blend modes, then #742's filter): a new Layer Output
+                    // node owns seven parameters, so dissolving one orphans seven.
+                    dissolved.parameters().records().size() == count - 7 &&
                     std::ranges::count_if(
                         dissolved.graph().edges(),
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,

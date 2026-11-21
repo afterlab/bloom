@@ -84,6 +84,27 @@ class EnableLayerTimeRemap final : public Operation {
     document::LayerId layer_;
 };
 
+// #742: sets the resample filter of the layer's transform (0 Bilinear, 1 Nearest, 2 Trilinear,
+// 3 Anisotropic, 4 Automatic) on its Layer node (current schema) or its entry layer, binding the
+// optional `filter` parameter when the layer has none (a layer saved before it existed, which
+// resamples Bilinear). A plain Merge entry gets its entry layer first through EntryLayerEdit.
+class SetLayerFilter final : public Operation {
+  public:
+    SetLayerFilter(document::CompositionId composition, document::LayerId layer,
+                   std::int64_t filter)
+        : composition_(composition), layer_(layer), filter_(filter) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    std::int64_t filter_ = 0;
+};
+
 // Unbinds the Time Remap parameter and erases it with its curve.
 class DisableLayerTimeRemap final : public Operation {
   public:

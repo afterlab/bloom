@@ -1,5 +1,6 @@
-#include <bloom/commands/operations.hpp>
 #include <bloom/commands/node_layout_arrange.hpp>
+#include <bloom/commands/operations.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 
 #include "node_operation_support.hpp"
@@ -425,6 +426,8 @@ struct StructuredLayerIds {
     document::ParameterId rotationParameterId;
     document::ParameterId opacityParameterId;
     document::ParameterId blendModeParameterId;
+    // #742: the new layer's resample filter, bound Automatic.
+    document::ParameterId filterParameterId;
 };
 
 struct StructuredLayerDescriptor {
@@ -482,6 +485,9 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
     const auto rotationParameterId = allocator.allocateParameter();
     const auto opacityParameterId = allocator.allocateParameter();
     const auto blendModeParameterId = allocator.allocateParameter();
+    const auto filterParameterId = allocator.allocateParameter();
+    if (!filterParameterId.has_value())
+        return std::nullopt;
     if (!sourceNodeId.has_value() || !layerOutputNodeId.has_value() ||
         !sourceToLayerEdgeId.has_value() || !layerToStackEdgeId.has_value() ||
         !layerId.has_value() || !slotId.has_value() || !sourceParametersAllocated ||
@@ -502,7 +508,8 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
                               *scaleParameterId,
                               *rotationParameterId,
                               *opacityParameterId,
-                              *blendModeParameterId};
+                              *blendModeParameterId,
+                              *filterParameterId};
 }
 
 [[nodiscard]] OperationResult
@@ -551,7 +558,10 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                             document::ConstantValueSource{opacity}}) ||
         !parameters.insert({ids->blendModeParameterId,
                             std::string(document::kBlendModeParameterSchemaKey),
-                            document::ConstantValueSource{document::kDefaultBlendModeValue}})) {
+                            document::ConstantValueSource{document::kDefaultBlendModeValue}}) ||
+        !parameters.insert(
+            {ids->filterParameterId, std::string(document::kLayerFilterParameterSchemaKey),
+             document::ConstantValueSource{document::kResampleFilterAutomaticValue}})) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Layer parameters could not be inserted");
     }
@@ -573,6 +583,7 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
             {std::string(document::kRotationParameterRole), ids->rotationParameterId},
             {std::string(document::kOpacityParameterRole), ids->opacityParameterId},
             {std::string(document::kBlendModeParameterRole), ids->blendModeParameterId},
+            {std::string(document::kLayerFilterParameterRole), ids->filterParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };
