@@ -76,7 +76,11 @@ magenta blue black` and their `bg_` forms) are built-in styles that every list m
 | lines per cue before wrapping | 16 | |
 | bytes per speaker or style name | 256 | |
 
-MCP advertises the named limits under `capabilities.experimental.bloom.limits`.
+MCP advertises the named limits under `capabilities.experimental.bloom.limits`. A list that
+breaks one is not a valid list: an edit or load that would leave one is refused with its first
+problem, such as "17 cues show at once at 00:00:04.000; at most 16 may". A list another node
+supplies is not checked at the edit, so the `subtitles` read warns on each cue past the
+active-cue limit.
 
 ## Formats
 

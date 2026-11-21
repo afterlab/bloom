@@ -106,7 +106,7 @@ same in whole seconds, rounded up.
 | `subtitleCueTextBytes`: UTF-8 bytes of one cue's text | 4,096 | `bloom.mcp.limit.subtitle-cue-text-bytes` |
 | `subtitleFileBytes`: one subtitle file, or text pasted as one | 16 MiB | `bloom.mcp.limit.subtitle-file-bytes` |
 | `subtitleStyles`: named styles in one cue list | 256 | `bloom.mcp.limit.subtitle-styles` |
-| `subtitleActiveCues`: cues one frame draws at once | 16 | never refused: the `subtitles` query warns on the cues past it |
+| `subtitleActiveCues`: cues that show at one time | 16 | an edit or load that leaves more is refused as an invalid list, naming the time; the `subtitles` query warns on a supplied list that holds more |
 
 `initialize` also reports `requestWorkers`, `clients`, `connections`, `renderFrames`,
 `retainedEvents`, `eventOutputs` (the ids an `events` record keeps), `eventsOutputsPerAnswer`,
