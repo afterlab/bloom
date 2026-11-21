@@ -16,6 +16,7 @@
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/kit/button.hpp>
@@ -300,11 +301,20 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
         const auto* boundaryLayer =
             layer.layerId.isValid() ? composition->graph().findLayer(layer.layerId) : nullptr;
         const auto add = [&](std::string_view role, const QString& name) {
-            if (boundaryLayer != nullptr)
-                addBinding(document::layerParameterBindings(composition->graph(), *boundaryLayer),
-                           role, name);
-            else if (layer.mergeNodeId.isValid())
+            if (boundaryLayer != nullptr) {
+                const auto bindings =
+                    document::layerParameterBindings(composition->graph(), *boundaryLayer);
+                // #742: a layer saved without a filter binding still shows its (Bilinear) filter;
+                // choosing one creates the binding.
+                if (role == document::kLayerFilterParameterRole &&
+                    std::ranges::find(bindings, role, &document::ParameterBinding::role) ==
+                        bindings.end())
+                    addDefault(role, name);
+                else
+                    addBinding(bindings, role, name);
+            } else if (layer.mergeNodeId.isValid()) {
                 addDefault(role, name);
+            }
         };
         if (boundaryLayer != nullptr || layer.mergeNodeId.isValid()) {
             group(QObject::tr("Object"), {}, true);
@@ -315,6 +325,7 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
             add(document::kAnchorParameterRole, QObject::tr("Anchor"));
             add(document::kScaleParameterRole, QObject::tr("Scale"));
             add(document::kRotationParameterRole, QObject::tr("Rotation"));
+            add(document::kLayerFilterParameterRole, QObject::tr("Filter"));
         }
         // ADR 0028: the layer's masks, between its own rows and its source's.
         appendMaskEntries(session, layer, collapsedGroups, rows, reveal);
@@ -508,10 +519,20 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
     alignment_->setControlSize(kit::KDropdown::ControlSize::Dense);
 
     connect(alignment_, &kit::KDropdown::activated, this, [this](int index) {
-        if (!binding_ && index >= 0)
-            (void)session_.setParameterValue(entry_.parameterId,
-                                             alignment_->itemData(index).value<std::int64_t>(),
-                                             tr("Set Parameter"));
+        if (binding_ || index < 0)
+            return;
+        const auto stored = alignment_->itemData(index).value<std::int64_t>();
+        if (entry_.role == document::kLayerFilterParameterRole) {
+            // #742: the layer's filter, bound or not, through the command that creates it.
+            if (entry_.layerId.isValid())
+                (void)session_.setLayerFilter(entry_.layerId, stored);
+            else if (entry_.mergeNodeId.isValid())
+                (void)session_.setEntryParameterValue(
+                    entry_.entry(), document::kLayerFilterParameterRole,
+                    document::ParameterValue{stored}, tr("Set Filter"));
+            return;
+        }
+        (void)session_.setParameterValue(entry_.parameterId, stored, tr("Set Parameter"));
     });
     color_->setObjectName("timelinePropertyColor");
     properties::bindValueEdit(session_, *color_, [this] { return entry_.parameterId; });
@@ -695,8 +716,11 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         diamond_->refresh();
         const auto role = std::string_view(entry.role);
         const auto* record = session_.composition()->parameters().find(entry.parameterId);
+        const bool filterRow = role == document::kLayerFilterParameterRole;
         const auto items = record ? propertiesSelectorItems(record->schemaKey)
-                                  : QList<std::pair<QString, std::int64_t>>{};
+                           : filterRow
+                               ? propertiesSelectorItems(document::kLayerFilterParameterSchemaKey)
+                               : QList<std::pair<QString, std::int64_t>>{};
         const bool selector = !items.empty() && role != document::kBlendModeParameterRole;
         alignment_->setVisible(selector);
         if (selector) {
@@ -709,9 +733,19 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             const auto* constant =
                 record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
             const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+            // #742: an unbound layer filter reads as its layer's (Bilinear) value.
+            const auto unboundFilter =
+                filterRow && value == nullptr
+                    ? std::optional(entry.layerId.isValid()
+                                        ? session_.layerFilterValue(entry.layerId)
+                                        : std::int64_t{0})
+                    : std::nullopt;
             if (value)
                 alignment_->setCurrentIndex(alignment_->findData(QVariant::fromValue(*value)));
-            alignment_->setEnabled(value != nullptr);
+            else if (unboundFilter)
+                alignment_->setCurrentIndex(
+                    alignment_->findData(QVariant::fromValue(*unboundFilter)));
+            alignment_->setEnabled(value != nullptr || unboundFilter.has_value());
             diamond_->hide();
         }
         const auto plainValue =

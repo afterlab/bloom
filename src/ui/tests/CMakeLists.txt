@@ -2903,7 +2903,9 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     # the service would otherwise plan its resident pool from the driver's live budget, which moves
     # with every other program on the device (#726).
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
-                              denoise-temporal blur-separate blur-per-channel transform-skew hue-vibrance
+                              denoise-temporal blur-separate blur-per-channel transform-skew
+                              transform-trilinear transform-anisotropic transform-nearest-shrunk
+                              resize-trilinear hue-vibrance
                               hue-colorize node-group tile-mirror-tile tile-mirror-wrap-offset
                               tile-mirror-mirror tile-mirror-kaleidoscope inner-shadow
                               inner-glow-edge inner-glow-center quantize-threshold
@@ -2926,9 +2928,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
-    foreach(scenario IN ITEMS tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
+    foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
+                              tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
                               tile-mirror-kaleidoscope inner-shadow inner-glow-edge inner-glow-center
                               quantize-threshold quantize-threshold-soft quantize-posterize
                               quantize-posterize-channels dither-blue-noise dither-ordered

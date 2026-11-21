@@ -594,6 +594,32 @@ void run() {
         require(session.undo(), "timeline enum undo");
     }
     require(enumRows == 1, "timeline exposes the image loop mode row");
+    // #742: the layer's Filter row in the Transform group: a new layer's Automatic among the five
+    // filters, committed through the command that owns the optional binding, and undoable.
+    int filterRows = 0;
+    for (const auto& item : rows) {
+        if (item.role != "filter")
+            continue;
+        ++filterRows;
+        ui::TimelinePropertyRow row(session, nullptr);
+        row.bind(item);
+        auto* control = row.findChild<ui::kit::KDropdown*>("timelinePropertyAlignment");
+        // Automatic (stored 4) leads; the four filters keep their stored values 0..3.
+        const QStringList names{"Automatic", "Bilinear", "Nearest", "Trilinear", "Anisotropic"};
+        const std::array<long long, 5> stored{4, 0, 1, 2, 3};
+        require(control && control->count() == names.size(), "the filter row is a closed dropdown");
+        for (int index = 0; index < names.size(); ++index)
+            require(control->itemText(index) == names[index] &&
+                        control->itemData(index).toLongLong() ==
+                            stored[static_cast<std::size_t>(index)],
+                    "filter display and stored value agree");
+        require(control->currentText() == "Automatic", "a new layer's filter reads Automatic");
+        control->chooseIndex(3);
+        require(session.layerFilterValue(layer) == 2, "the timeline filter row commits Trilinear");
+        require(session.undo() && session.layerFilterValue(layer) == 4,
+                "the filter edit undoes to Automatic");
+    }
+    require(filterRows == 1, "timeline exposes the layer's Filter row");
     controller.remove(asset);
     require(!session.snapshot().project().findAsset(asset), "Remove publishes asset removal");
     require(cardAsset->currentText() == "Missing asset" && cardAsset->mutedValue() &&

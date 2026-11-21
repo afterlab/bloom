@@ -6,10 +6,12 @@
 
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/entry_layer_operations.hpp>
+#include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/ui/composition_session.hpp>
 
 #include <QThread>
@@ -224,14 +226,20 @@ CompositionSession::entryLayerDefault(const std::string_view role) const {
         return document::ParameterValue{1.0};
     if (role == document::kBlendModeParameterRole)
         return document::ParameterValue{std::int64_t{0}};
+    // #742: an entry layer is created without a filter binding, which is Bilinear.
+    if (role == document::kLayerFilterParameterRole)
+        return document::ParameterValue{std::int64_t{0}};
     return std::nullopt;
 }
 
 std::optional<ParameterSample>
 CompositionSession::entryParameterValue(const document::MergeEntryRef& entry,
                                         const std::string_view role) const {
-    if (const auto layer = entryLayer(entry))
+    if (const auto layer = entryLayer(entry)) {
+        if (role == document::kLayerFilterParameterRole)
+            return ParameterSample(layerFilterValue(*layer));
         return effectiveParameterValue(layerParameter(*layer, role));
+    }
     const auto value = entryLayerDefault(role);
     if (!value)
         return std::nullopt;
@@ -250,6 +258,24 @@ bool CompositionSession::setEntryParameterValue(const document::MergeEntryRef& e
                                                 document::ParameterValue value,
                                                 const QString& label) {
     Q_ASSERT(QThread::currentThread() == thread());
+    if (role == document::kLayerFilterParameterRole) {
+        // #742: the filter binding is optional, so its edit goes through SetLayerFilter, which
+        // creates it; a plain entry's layer is created in the same undo step.
+        const auto* filter = std::get_if<std::int64_t>(&value);
+        if (filter == nullptr)
+            return false;
+        if (const auto layer = entryLayer(entry))
+            return setLayerFilter(*layer, *filter);
+        if (*filter == 0)
+            return true;
+        const auto compositionId = compositionId_;
+        return editEntry(entry, label,
+                         [compositionId, stored = *filter](const document::LayerId layer) {
+                             return std::make_unique<commands::SetLayerFilter>(compositionId, layer,
+                                                                               stored);
+                         })
+            .succeeded();
+    }
     if (const auto layer = entryLayer(entry)) {
         const auto* parameter = layerParameter(*layer, role);
         if (parameter == nullptr) {
@@ -367,6 +393,25 @@ commands::CommandResult CompositionSession::runTransaction(commands::Transaction
     auto result = commandStack_->execute(std::move(folded));
     foldingEntryLayer_ = false;
     return result;
+}
+
+bool CompositionSession::setLayerFilter(const document::LayerId layerId,
+                                        const std::int64_t filter) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // An unbound layer is Bilinear, so asking for Bilinear there changes nothing.
+    if (layerFilterValue(layerId) == filter)
+        return true;
+    commands::Transaction transaction("Set Filter", snapshot_.revision());
+    transaction.emplace<commands::SetLayerFilter>(compositionId_, layerId, filter);
+    return execute(std::move(transaction));
+}
+
+std::int64_t CompositionSession::layerFilterValue(const document::LayerId layerId) const {
+    const auto* parameter = layerParameter(layerId, document::kLayerFilterParameterRole);
+    const auto* constant =
+        parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+    const auto* stored = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+    return stored ? *stored : 0;
 }
 
 } // namespace bloom::ui

@@ -160,6 +160,34 @@ struct Scenario final {
     out["transform-skew"] = {"bloom.four-color-gradient", {}, "bloom.transform-2d",
                              {{"skew", 20.0}, {"skewAxis", 10.0}, {"opacity", 0.7},
                               {"translate", Vec2d{30.0, 0.0}}}};
+    // #742: a checker shrunk to a fifth through each filter, its rotation keyed so a RAM preview
+    // shows a new picture every frame (Trilinear and Anisotropic read the resident mip levels).
+    out["transform-trilinear"] = {"bloom.checker-source",
+                                  {},
+                                  "bloom.transform-2d",
+                                  {{"scale", Vec2d{0.2, 0.2}}, {"filter", std::int64_t{2}}},
+                                  "rotation",
+                                  0.0,
+                                  90.0};
+    out["transform-anisotropic"] = {"bloom.checker-source",
+                                    {},
+                                    "bloom.transform-2d",
+                                    {{"scale", Vec2d{0.1, 0.5}}, {"filter", std::int64_t{3}}},
+                                    "rotation",
+                                    0.0,
+                                    90.0};
+    out["transform-nearest-shrunk"] = {"bloom.checker-source",
+                                       {},
+                                       "bloom.transform-2d",
+                                       {{"scale", Vec2d{0.2, 0.2}}, {"filter", std::int64_t{1}}},
+                                       "rotation",
+                                       0.0,
+                                       90.0};
+    out["resize-trilinear"] = {
+        "bloom.checker-source",
+        {},
+        "bloom.resize-fit",
+        {{"width", std::int64_t{384}}, {"height", std::int64_t{216}}, {"filter", std::int64_t{2}}}};
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",

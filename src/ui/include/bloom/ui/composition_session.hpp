@@ -640,6 +640,11 @@ class CompositionSession final : public QObject {
     [[nodiscard]] bool setLayerParent(document::LayerId layer,
                                       std::optional<document::LayerId> parent);
     [[nodiscard]] bool setLayerBlendMode(document::LayerId layerId, core::BlendMode mode);
+    // #742: the layer transform's resample filter (0 Bilinear, 1 Nearest, 2 Trilinear,
+    // 3 Anisotropic, 4 Automatic), creating its binding on a layer saved without one. A layer
+    // without a binding reads as Bilinear (layerFilterValue).
+    [[nodiscard]] bool setLayerFilter(document::LayerId layerId, std::int64_t filter);
+    [[nodiscard]] std::int64_t layerFilterValue(document::LayerId layerId) const;
     // The selection-driven form, for the Properties row and the Layer node card, which author
     // whatever the contextual layer is. Resolves the selection's layer and delegates to
     // setLayerBlendMode(), so there is exactly one write path.
