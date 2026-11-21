@@ -1,3 +1,4 @@
+#include "subtitles_editing.hpp"
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/timeline_editor.hpp>
 
@@ -104,6 +105,10 @@ void TimelineEditor::createHeaderMenus() {
     auto* text = localAction(add, tr("Text"), QStringLiteral("addTextLayerAction"), {},
                              [this] { (void)addDefaultTextLayer(session_); });
     text->setToolTip(tr("Add a text layer"));
+    auto* subtitles = localAction(add, tr("Subtitles"), QStringLiteral("addSubtitlesLayerAction"),
+                                  {}, [this] { (void)addDefaultSubtitlesLayer(session_); });
+    subtitles->setToolTip(tr("Add a subtitles layer: type cues, or load an SRT, WebVTT, TTML or "
+                             "ASS file"));
     for (std::int64_t index = 0; index <= 6; ++index) {
         const auto kind = static_cast<document::ShapeKind>(index);
         auto* shapeAction =
@@ -409,6 +414,12 @@ void TimelineEditor::selectAllLayers() {
 }
 
 void TimelineEditor::deleteSelectedLayers() {
+    // #752: with a cue block picked in the lanes, Delete deletes that cue.
+    if (lanes_ != nullptr && lanes_->cueFocused())
+        if (const auto cue = session_.selectedCue()) {
+            (void)subtitles_editing::removeCues(session_, cue->node, {cue->cue});
+            return;
+        }
     // #502: deleting a row deletes its layer -- a Layer node and its content's nodes, or an entry
     // layer with its Merge entry (a plain entry gains its layer in the same step first).
     const auto targets = selectedTargets(session_);

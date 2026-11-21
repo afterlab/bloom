@@ -479,6 +479,21 @@ class TimelineLaneRegion final : public QWidget {
     };
     [[nodiscard]] Work work() const noexcept { return work_; }
 
+    // #752: a Subtitles layer's cues as blocks on its bar (docs/ux/interaction-model.md,
+    // "Timeline"): each cue that shows on the bar, in list order, in this widget's coordinates.
+    // Dragging a block moves the cue, dragging its edge retimes it, both snapped to frames, the
+    // playhead and the neighboring cues' edges (Shift: frames only); the drag previews through the
+    // session's value edit and commits one Edit Cue on release.
+    struct CueBlock final {
+        document::NodeId node;
+        std::uint64_t cue = 0;
+        QRect rect;
+    };
+    [[nodiscard]] std::vector<CueBlock> cueBlocks(int row) const;
+    // Whether the last press in the lanes picked a cue: Delete then deletes that cue, not its
+    // layer.
+    [[nodiscard]] bool cueFocused() const noexcept { return cueFocused_ && hasFocus(); }
+
   Q_SIGNALS:
     void expansionRequested(document::LayerId layer);
     void entryExpansionRequested(document::LayerSlotId slot);
@@ -526,6 +541,23 @@ class TimelineLaneRegion final : public QWidget {
         document::LayerSpeed previewSpeed{};
     };
     std::optional<RangeDrag> drag_{};
+    struct CueDrag {
+        document::NodeId node;
+        document::ParameterId parameter;
+        std::uint64_t cue = 0;
+        document::Revision revision;
+        // Cue-clock times at the press and in the preview.
+        core::RationalTime start, end, previewStart, previewEnd;
+        double pressSeconds = 0.0;
+        int handle = 0; // -1: start, 0: body, 1: end
+        bool editing = false;
+    };
+    std::optional<CueDrag> cueDrag_{};
+    bool cueFocused_ = false;
+    bool pressCue(int row, QMouseEvent* event);
+    void moveCue(QMouseEvent* event);
+    void releaseCue();
+    void paintCueBlocks(QPainter& painter, int row, const QRect& bar) const;
     std::optional<core::RationalTime> guide_{};
     std::optional<core::RationalTime> dropTime_{};
     int dropRow_ = -1;

@@ -1,5 +1,6 @@
 #include "asset_drop.hpp"
 #include "layer_drop.hpp"
+#include "subtitles_editing.hpp"
 #include "node_editor_items.hpp"
 #include <QSignalBlocker>
 #include <bloom/ui/asset_controller.hpp>
@@ -2007,6 +2008,259 @@ void TimelineLaneRegion::setSnappingEnabled(const bool enabled) {
         graphView_->setSnappingEnabled(enabled);
 }
 
+std::vector<TimelineLaneRegion::CueBlock> TimelineLaneRegion::cueBlocks(const int row) const {
+    namespace editing = subtitles_editing;
+    std::vector<CueBlock> blocks;
+    if (row < 0 || row >= static_cast<int>(entries_.size()))
+        return blocks;
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    if (!entry.layerId.isValid() || entry.rowKind != TimelineLayerEntry::Kind::Layer)
+        return blocks;
+    const auto node = editing::subtitlesNodeOfLayer(session_, entry.layerId);
+    const auto bar = clipBarRect(row);
+    const auto axis = ruler_.axisForWidth(width());
+    if (!node || !bar || !axis)
+        return blocks;
+    const auto source = editing::cueSource(session_, *node);
+    if (source.list == nullptr)
+        return blocks;
+    const auto inset = kit::px(kit::Size::Hairline);
+    const auto inner = bar->adjusted(0, inset, 0, -inset);
+    for (const auto& handle : source.list->cues) {
+        auto start = handle->start;
+        auto end = handle->end;
+        if (cueDrag_ && cueDrag_->node == *node && cueDrag_->cue == handle->id) {
+            start = cueDrag_->previewStart;
+            end = cueDrag_->previewEnd;
+        }
+        const auto from = editing::compositionTimeOfCue(session_, source.parameter, start);
+        const auto to = editing::compositionTimeOfCue(session_, source.parameter, end);
+        if (!from || !to)
+            continue;
+        const auto left = axis->pixelForTime(*from);
+        const auto right = axis->pixelForTime(*to);
+        if (right < 0 || left > width())
+            continue;
+        QRect rect(QPoint(static_cast<int>(std::lround(left)), inner.top()),
+                   QPoint(std::max(static_cast<int>(std::lround(left)) + 1,
+                                   static_cast<int>(std::lround(right)) - 1),
+                          inner.bottom()));
+        rect = rect.intersected(inner);
+        if (rect.isEmpty())
+            continue;
+        blocks.push_back({*node, handle->id, rect});
+    }
+    return blocks;
+}
+
+void TimelineLaneRegion::paintCueBlocks(QPainter& painter, const int row, const QRect& bar) const {
+    const auto blocks = cueBlocks(row);
+    if (blocks.empty())
+        return;
+    const auto selected = session_.selectedCue();
+    const auto source = subtitles_editing::cueSource(session_, blocks.front().node);
+    painter.save();
+    painter.setClipRect(bar);
+    painter.setFont(kit::font(kit::TypeRole::UiSmall));
+    const auto metrics = painter.fontMetrics();
+    for (const auto& block : blocks) {
+        const bool chosen = selected && selected->node == block.node && selected->cue == block.cue;
+        const auto fill = kit::color(kit::Color::SurfaceRaised);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        painter.setPen(QPen(kit::color(chosen ? kit::Color::Accent : kit::Color::Border),
+                            chosen ? kit::px(kit::Size::SelectionEdge) : kit::kHairlineWidth));
+        painter.setBrush(fill);
+        painter.drawRoundedRect(QRectF(block.rect).adjusted(0.5, 0.5, -0.5, -0.5),
+                                kit::px(kit::Spacing::XXS), kit::px(kit::Spacing::XXS));
+        const auto* cue = source.list == nullptr ? nullptr : source.list->findCue(block.cue);
+        const auto textRect = block.rect.adjusted(kit::px(kit::Spacing::XS), 0,
+                                                  -kit::px(kit::Spacing::XS), 0);
+        if (cue != nullptr && textRect.width() > metrics.averageCharWidth() * 2) {
+            painter.setPen(kit::color(kit::Color::Foreground));
+            painter.drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft,
+                             metrics.elidedText(subtitles_editing::plainCueText(*cue, true),
+                                                Qt::ElideRight, textRect.width()));
+        }
+    }
+    painter.restore();
+}
+
+bool TimelineLaneRegion::pressCue(const int row, QMouseEvent* event) {
+    namespace editing = subtitles_editing;
+    const auto bar = clipBarRect(row);
+    const auto point = event->position().toPoint();
+    if (!bar || !bar->contains(point))
+        return false;
+    // The bar's own edges stay the layer's trim handles.
+    const int barEdge = kit::px(kit::Spacing::S);
+    if (std::abs(point.x() - bar->left()) <= barEdge || std::abs(point.x() - bar->right()) <= barEdge)
+        return false;
+    const auto blocks = cueBlocks(row);
+    const auto hit = std::find_if(blocks.rbegin(), blocks.rend(),
+                                  [point](const CueBlock& block) { return block.rect.contains(point); });
+    if (hit == blocks.rend())
+        return false;
+    const auto& entry = entries_[static_cast<std::size_t>(row)];
+    session_.selectLayer(entry.layerId);
+    session_.selectCue(hit->node, hit->cue);
+    cueFocused_ = true;
+    const auto source = editing::cueSource(session_, hit->node);
+    const auto* cue = source.list == nullptr ? nullptr : source.list->findCue(hit->cue);
+    const auto* composition = session_.composition();
+    const auto* layer = composition ? composition->graph().findLayer(entry.layerId) : nullptr;
+    const auto mapping = ruler_.axisForWidth(width());
+    if (cue != nullptr && mapping && source.kind == editing::CueSourceKind::Typed &&
+        !(layer != nullptr && layer->locked)) {
+        const int edge = std::min(kit::px(kit::Spacing::XS), hit->rect.width() / 3);
+        const auto x = point.x();
+        const int handle = std::abs(x - hit->rect.left()) <= edge    ? -1
+                           : std::abs(x - hit->rect.right()) <= edge ? 1
+                                                                     : 0;
+        cueDrag_ = CueDrag{.node = hit->node,
+                           .parameter = source.parameter,
+                           .cue = hit->cue,
+                           .revision = session_.snapshot().revision(),
+                           .start = cue->start,
+                           .end = cue->end,
+                           .previewStart = cue->start,
+                           .previewEnd = cue->end,
+                           .pressSeconds = mapping->secondsForPixel(x),
+                           .handle = handle,
+                           .editing = false};
+    } else if (!source.refusal.isEmpty() && cue != nullptr) {
+        setToolTip(source.refusal);
+    }
+    update();
+    return true;
+}
+
+void TimelineLaneRegion::moveCue(QMouseEvent* event) {
+    namespace editing = subtitles_editing;
+    const auto mapping = ruler_.axisForWidth(width());
+    const auto* composition = session_.composition();
+    if (!cueDrag_ || !mapping || !composition ||
+        (session_.snapshot().revision() != cueDrag_->revision && !cueDrag_->editing)) {
+        return;
+    }
+    auto& drag = *cueDrag_;
+    const auto source = editing::cueSource(session_, drag.node);
+    if (source.list == nullptr)
+        return;
+    const auto originalFrom = editing::compositionTimeOfCue(session_, drag.parameter, drag.start);
+    const auto originalTo = editing::compositionTimeOfCue(session_, drag.parameter, drag.end);
+    if (!originalFrom || !originalTo)
+        return;
+    const auto rate = composition->format().frameRate();
+    const double fps = static_cast<double>(rate.numerator()) / rate.denominator();
+    double delta = mapping->secondsForPixel(event->position().x()) - drag.pressSeconds;
+    guide_.reset();
+    // The dragged edge (the start, for a body move) lands on a frame, or on a magnetic target
+    // within reach: the playhead or another cue's edge (Shift: frames only).
+    const double edgeSeconds =
+        (drag.handle > 0 ? originalTo->toSeconds() : originalFrom->toSeconds()) + delta;
+    std::optional<core::RationalTime> landing;
+    if (snapping_ && !event->modifiers().testFlag(Qt::ShiftModifier)) {
+        std::vector<core::RationalTime> targets{session_.currentTime()};
+        for (const auto& other : source.list->cues) {
+            if (other->id == drag.cue)
+                continue;
+            for (const auto time : {other->start, other->end})
+                if (const auto mapped = editing::compositionTimeOfCue(session_, drag.parameter, time))
+                    targets.push_back(*mapped);
+        }
+        double best = kit::px(kit::Spacing::S);
+        for (const auto target : targets) {
+            // A body move snaps either edge onto a target.
+            for (const int edge : {-1, 1}) {
+                if (drag.handle != 0 && drag.handle != edge)
+                    continue;
+                const double seconds =
+                    (edge < 0 ? originalFrom->toSeconds() : originalTo->toSeconds()) + delta;
+                const double distance = std::abs(mapping->pixelForTime(target) -
+                                                 mapping->pixelForSeconds(seconds));
+                if (distance < best) {
+                    best = distance;
+                    guide_ = target;
+                    if (edge < 0 || drag.handle != 0)
+                        landing = target;
+                    else // the end lands on the target: the start is that minus the length
+                        landing = editing::subtractTimes(
+                            target, *editing::subtractTimes(*originalTo, *originalFrom));
+                }
+            }
+        }
+    }
+    if (!landing) {
+        const auto frame = static_cast<std::int64_t>(std::llround(edgeSeconds * fps));
+        landing = core::RationalTime::create(frame * static_cast<std::int64_t>(rate.denominator()),
+                                             static_cast<std::int64_t>(rate.numerator()));
+    }
+    if (!landing)
+        return;
+    const auto at = editing::cueTimeOfCompositionTime(session_, drag.parameter, *landing);
+    if (!at)
+        return;
+    auto start = drag.start;
+    auto end = drag.end;
+    if (drag.handle == 0) {
+        const auto length = editing::subtractTimes(drag.end, drag.start);
+        const auto moved = length ? editing::addTimes(*at, *length) : std::nullopt;
+        if (!moved)
+            return;
+        start = *at;
+        end = *moved;
+    } else if (drag.handle < 0) {
+        start = *at;
+    } else {
+        end = *at;
+    }
+    // A cue keeps 0 <= start < end; a step past that holds the last valid preview.
+    if (start < core::RationalTime{} || !(start < end))
+        return;
+    if (start == drag.previewStart && end == drag.previewEnd)
+        return;
+    drag.previewStart = start;
+    drag.previewEnd = end;
+    // The Viewer follows through the session's value edit; nothing is written until release.
+    if (!drag.editing) {
+        drag.editing = session_.beginValueEdit(drag.parameter);
+        drag.revision = session_.snapshot().revision();
+    }
+    if (drag.editing) {
+        auto list = *source.list;
+        if (const auto index = list.indexOf(drag.cue)) {
+            auto cue = *list.cues[*index];
+            cue.start = start;
+            cue.end = end;
+            list.cues[*index] = std::make_shared<const document::Cue>(std::move(cue));
+            document::canonicalizeCueList(list);
+            if (!session_.updateValueEdit(document::ParameterValue{std::move(list)}))
+                drag.editing = false;
+        }
+    }
+    update();
+}
+
+void TimelineLaneRegion::releaseCue() {
+    if (!cueDrag_)
+        return;
+    const auto drag = *cueDrag_;
+    cueDrag_.reset();
+    guide_.reset();
+    if (drag.editing)
+        session_.cancelValueEdit();
+    if (drag.previewStart != drag.start || drag.previewEnd != drag.end) {
+        commands::CueEdit edit;
+        if (drag.previewStart != drag.start)
+            edit.start = drag.previewStart;
+        if (drag.previewEnd != drag.end)
+            edit.end = drag.previewEnd;
+        (void)subtitles_editing::editCue(session_, drag.node, drag.cue, std::move(edit),
+                                         drag.handle == 0 ? tr("Move Cue") : tr("Retime Cue"));
+    }
+    update();
+}
+
 std::optional<QRect> TimelineLaneRegion::clipBarRect(const int row) const {
     if (row < 0 || row >= static_cast<int>(entries_.size())) {
         return std::nullopt;
@@ -2256,6 +2510,7 @@ void TimelineLaneRegion::paintEvent(QPaintEvent* event) {
                                    kit::px(kit::Size::Hairline), bar->height() - (grip + grip)),
                              kit::hoverFillFor(fill));
             paintContentExtent(painter, row, *bar);
+            paintCueBlocks(painter, row, *bar);
             if (entry.audioNodeId.isValid() && entry.waveform != nullptr &&
                 !entry.waveform->buckets.empty()) {
                 painter.setPen(QPen(kit::color(kit::Color::DataAudio), kit::kHairlineWidth));
@@ -2378,6 +2633,12 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
                 }
             }
     }
+    // #752: a Subtitles layer's cue block takes the press before the bar under it.
+    if (pressCue(row, event)) {
+        event->accept();
+        return;
+    }
+    cueFocused_ = false;
     const auto bar = clipBarRect(row);
     const auto* composition = session_.composition();
     const auto mapping = ruler_.axisForWidth(width());
@@ -2423,6 +2684,11 @@ void TimelineLaneRegion::mousePressEvent(QMouseEvent* event) {
     event->accept();
 }
 void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
+    if (cueDrag_) {
+        moveCue(event);
+        event->accept();
+        return;
+    }
     if (!drag_) {
         const int row =
             (static_cast<int>(event->position().y()) + scrollOffset_) / kTimelineRowHeight;
@@ -2439,7 +2705,16 @@ void TimelineLaneRegion::mouseMoveEvent(QMouseEvent* event) {
             bar->contains(event->position().toPoint()) &&
             (std::abs(event->position().x() - bar->left()) <= kit::px(kit::Spacing::S) ||
              std::abs(event->position().x() - bar->right()) <= kit::px(kit::Spacing::S));
-        setCursor(edge ? Qt::SizeHorCursor : Qt::ArrowCursor);
+        bool cueEdge = false;
+        if (!edge)
+            for (const auto& block : cueBlocks(row))
+                if (block.rect.contains(event->position().toPoint()) &&
+                    (std::abs(event->position().x() - block.rect.left()) <=
+                         kit::px(kit::Spacing::XS) ||
+                     std::abs(event->position().x() - block.rect.right()) <=
+                         kit::px(kit::Spacing::XS)))
+                    cueEdge = true;
+        setCursor(edge || cueEdge ? Qt::SizeHorCursor : Qt::ArrowCursor);
         ruler_.updateScrub(static_cast<int>(event->position().x()));
         event->accept();
         return;
@@ -2507,6 +2782,12 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
         QWidget::mouseReleaseEvent(event);
         return;
     }
+    if (cueDrag_) {
+        moveCue(event);
+        releaseCue();
+        event->accept();
+        return;
+    }
     if (drag_) {
         mouseMoveEvent(event);
         if (!drag_)
@@ -2547,6 +2828,11 @@ void TimelineLaneRegion::mouseReleaseEvent(QMouseEvent* event) {
 void TimelineLaneRegion::keyPressEvent(QKeyEvent* event) {
     if (event->key() == Qt::Key_Escape) {
         drag_.reset();
+        if (cueDrag_) {
+            if (cueDrag_->editing)
+                session_.cancelValueEdit();
+            cueDrag_.reset();
+        }
         guide_.reset();
         update();
         event->accept();
