@@ -24,7 +24,8 @@ area, and its layers from the bottom up. A layer is one of:
   layer, with no media; "pathNode" drives its `path` from a keyed Path node, #589; "plotNode":
   {"function": name in FUNCTION_GROUPS, "values": {role: value}, "keys": {role: [[frame, value],
   ...]}} drives it from a Function Plot reading that group, #595; "axesNode": {"values": {...},
-  "keys": {...}} drives it from an Axes node, #596; "pathChain": {"keys": [[frame, path value],
+  "keys": {...}} drives it from an Axes node, #596; a "plotNode" or "axesNode" with "space": name
+  draws in the scenario's coordinate space of that name, #591; "pathChain": {"keys": [[frame, path value],
   ...], "steps": [{"type": node type, "values": {...}, "keys": {...}}, ...]} drives it from a keyed
   Path node read by each path processing step in turn, #344, #530; "textOutline": {"text",
   "size", "steps": [...]} adds a text layer and drives it from a Text Outline of that text read by
@@ -34,6 +35,10 @@ Every "keys" entry names a role of its node. A role whose schema can be animated
 value-graph operand whose schema cannot be (a path step's amount, a plot's range) is driven through its
 socket by a keyed value node of its kind, the way an artist animates it. A role that is neither fails
 the build of the scenario (keyed_roles below lists them for the runner's test).
+
+A scenario may also hold "spaces": {name: {"values": {role: value}, "keys": {...}}}, a Coordinate
+Space node per name (#591) whose `space` output every plot or axes naming it reads, so several layers
+share one space.
 
 A footage layer may also carry mattes (#383): "cryptomattes": {name: matte list} adds a
 Cryptomatte node per name reading the layer's channel set (the matte list in the common syntax),
@@ -284,6 +289,8 @@ def keyed_roles(scenario):
     found = []
     for layer in scenario["layers"]:
         _layer_keys(layer, found)
+    for name, space in (scenario.get("spaces") or {}).items():
+        found.extend((name, "bloom.coordinate-space", role) for role in space.get("keys") or {})
     return found
 
 # The synthetic scene's object names (blender_scene.py).
@@ -1087,6 +1094,34 @@ SCENARIOS["axes-2k"] = {
                                  "xStep": 1.0, "yStep": 1.0, "tickLength": 6.0,
                                  "origin": [100.0, 900.0], "pixelsPerUnit": [1.5, 0.8]},
                       "keys": {"xMax": [[0, 500.0], [23, 1000.0]]}}},
+    ],
+}
+
+# #591: one coordinate space read by a 4096-sample Function Plot and by Axes at their most ticks, each
+# drawn by its own Shape Source, the space's origin and scale keyed so that every frame maps every
+# point anew. The cost is the two paths' evaluation through the space's map and their strokes, on top
+# of what function-plot-2k and axes-2k cost alone. No media is read. Written, not run.
+SCENARIOS["coordinate-space-2k"] = {
+    "description": "A 4096-sample damped sine and a 2050-contour Axes path drawn in one coordinate "
+                   "space whose origin and scale move over the shot.",
+    "tier": "1080p",
+    "frames": 24,
+    "spaces": {
+        "graph": {"values": {"name": "graph", "origin": [200.0, 700.0],
+                             "pixelsPerUnit": [200.0, 300.0]},
+                  "keys": {"origin": [[0, [200.0, 700.0]], [23, [400.0, 600.0]]],
+                           "pixelsPerUnit": [[0, [200.0, 300.0]], [23, [1.5, 0.8]]]}},
+    },
+    "layers": [
+        {"name": "Axes",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "axesNode": {"space": "graph",
+                      "values": {"xMin": 0.0, "xMax": 1000.0, "yMin": 0.0, "yMax": 1000.0,
+                                 "xStep": 1.0, "yStep": 1.0, "tickLength": 6.0}}},
+        {"name": "Plot",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "plotNode": {"function": "damped-sine", "space": "graph",
+                      "values": {"start": -1.0, "end": 6.0, "samples": 4096}}},
     ],
 }
 

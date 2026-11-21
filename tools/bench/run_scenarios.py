@@ -351,6 +351,7 @@ class Builder:
         self.layers = {}  # layer name -> {"source": node, "output": node}
         self.mattes = {}  # matte name -> the node whose `mask` output it is (#383)
         self.passes = {}  # pass name -> (source node, port) a depth input reads (#483)
+        self.spaces = {}  # space name -> its Coordinate Space node (#591)
 
     def transact(self, op, **args):
         revision = self.client.call("query", {"kind": "project"})["revision"]
@@ -637,6 +638,23 @@ class Builder:
                       sourcePort="image", targetNode=output_merge, role="content")
         self.layer_controls(holder, layer)
 
+    def space_into(self, node, spec):
+        """#591: connects the scenario's named coordinate space (made once, on first use) to the
+        `space` input of `node`, a Function Plot or Axes; nothing when `spec` names no space."""
+        name = spec.get("space")
+        if name is None:
+            return
+        spaces = self.spaces
+        if name not in spaces:
+            definition = (self.scenario.get("spaces") or {})[name]
+            space = self.transact("bloom.node.add", composition=self.composition,
+                                  nodeType="bloom.coordinate-space")["node"]
+            self.set_values(space, "bloom.coordinate-space", definition.get("values") or {})
+            self.set_keys(space, definition.get("keys") or {})
+            spaces[name] = space
+        self.transact("bloom.node.connect", composition=self.composition, sourceNode=spaces[name],
+                      sourcePort="space", targetNode=node, port="space")
+
     def generator(self, layer, output_merge):
         """A procedural source node (a Fields generator) whose `port` raster, through the
         layer's effects, is one layer of the output Merge."""
@@ -659,6 +677,7 @@ class Builder:
                                    nodeType="bloom.function-plot")["node"]
             self.set_values(driver, "bloom.function-plot", {"group": group, **plot["values"]})
             self.set_keys(driver, plot.get("keys") or {})
+            self.space_into(driver, plot)
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort="path")
@@ -726,6 +745,7 @@ class Builder:
                                    nodeType="bloom.axes")["node"]
             self.set_values(driver, "bloom.axes", axes["values"])
             self.set_keys(driver, axes.get("keys") or {})
+            self.space_into(driver, axes)
             self.transact("bloom.parameter.set-source", composition=self.composition,
                           parameter=self.parameter_id(source, "path"), driverNode=driver,
                           driverPort="path")

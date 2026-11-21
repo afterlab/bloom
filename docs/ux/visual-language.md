@@ -529,7 +529,7 @@ kind takes its own role here on the day it ships.
 
 Sockets and the links leaving them identify a *transport* kind, which is a different question from
 what an item in a project is, so they have their own palette rather than borrowing the `Data*` roles.
-Thirteen separated hues for fourteen kinds, none of them `Accent` or `AccentHover`:
+Fourteen separated hues for sixteen kinds, none of them `Accent` or `AccentHover`:
 
 | Socket kind | Palette token | Value | Hue |
 | --- | --- | --- | --- |
@@ -548,6 +548,7 @@ Thirteen separated hues for fourteen kinds, none of them `Accent` or `AccentHove
 | Color Field | `SocketColorField` | `#5A7CF0` | cornflower |
 | Path | `SocketPath` | `#8FC0E3` | pale steel blue |
 | Number List | `SocketNumberList` | `#B4E3AB` | pale mint |
+| Space | `SocketPath` | `#8FC0E3` | pale steel blue, square socket |
 
 A field socket (#525, `docs/architecture/fields.md`) is drawn as a diamond rather than a circle, and
 its links take the same ink: a field is a lazy function of position, not a value or an image, and the
@@ -557,6 +558,11 @@ Vector; Color Field takes the free cornflower, since no hue near Color's vermili
 The two vector widths share one token deliberately: they are one family, and giving them adjacent
 violets would have said "these connect" when a cross-width link is refused. What distinguishes them is
 the socket's own name and tooltip -- which is the rule below, not an exception to it.
+
+A coordinate space (#591, `docs/architecture/coordinate-spaces.md`) shares Path's ink: no hue is left
+20 degrees from every other socket role, and both are geometry. Its socket is a square instead of a
+circle -- the frame it carries -- so the two never rest on colour alone, and the name and tooltip say
+"Space".
 
 The same token inks the socket and every link leaving it. Socket labels must still identify the kind:
 color is never the only carrier.

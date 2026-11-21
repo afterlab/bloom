@@ -550,11 +550,15 @@ Function Plot samples a group's function over a range and answers the curve as a
 | `origin` | Vector 2 | 0, 0 | Where argument 0 with answer 0 lands, in pixels |
 | `pixelsPerUnit` | Vector 2 | 100, 100 | Pixels per unit along X and Y |
 | `smooth` | Boolean | on | Auto anchors, whose handles are derived, so the curve is smooth; off gives Corner anchors, a polyline |
+| `space` | Space (socket only) | none | A coordinate space to draw in (#591); when connected, it places every sample and `origin` and `pixelsPerUnit` are not read |
 
 Every parameter except `group` is an operand, so a wire can drive the range, the resolution and the
 placement. Sample `i` of `n` is at `x = start + (end - start) * i / (n - 1)`, and the last is exactly
 `end`. Its anchor is `origin + (x * pixelsPerUnit.x, -y * pixelsPerUnit.y)`: Y is up on the plot and down in the
 path's pixels, so a positive answer rises.
+With a `space` connected, the anchor is the space's map of `(x, y)` instead
+(`coordinate-spaces.md`); a space defined by origin and scale with no turn gives exactly the numbers
+above. A sample that a perspective space puts at or past its horizon is a gap, as a missing answer is.
 
 A Shape Source places a path about the center of its anchors' bounds, so the plot's position on the
 frame is set by the shape layer's Position as well as by `origin`; with the layer's Position at that
@@ -576,10 +580,11 @@ drawing is the shape's, with the parity `path-value.md` records for a driven pat
 
 ### Axes and Axis Tick
 
-A plot's frame is two nodes, in Text & Paths beside Function Plot. There is no shared coordinate space
-yet (#591), so each takes the same explicit range, `origin` and `pixelsPerUnit` that Function Plot does; put
-the same numbers (or one set of shared value nodes, wired to all three) on each and they agree.
-Placement is in pixels with Y up on the plot, as in Function Plot.
+A plot's frame is two nodes, in Text & Paths beside Function Plot. Each takes the same explicit range,
+`origin` and `pixelsPerUnit` that Function Plot does, and an optional `space` input (#591,
+`coordinate-spaces.md`). Connect one Coordinate Space to the plot, the axes and every tick and they
+share one map, so they stay aligned however the space moves; without a space, put the same numbers on
+each. Placement is in pixels with Y up on the plot, as in Function Plot.
 
 **Axes** (`bloom.axes`) answers a Path of the two axes and their tick marks, and how many ticks each
 axis holds.
@@ -590,10 +595,15 @@ axis holds.
 | `xStep`, `yStep` | Scalar | 1, 1 | Spacing of the ticks on each axis |
 | `tickLength` | Scalar | 8 | Pixels a tick crosses the axis, centered on it |
 | `origin`, `pixelsPerUnit` | Vector 2 | (0, 0), (100, 100) | As in Function Plot |
+| `space` | Space (socket only) | none | As in Function Plot |
 
 Outputs: `path` (Path), `xTicks` and `yTicks` (Integer). The path is one open two-anchor contour for
 each axis and one for each tick. The axes cross at zero where zero is in range and at the nearest
 edge of the range where it is not.
+In a space, every point is the space's map of it, and a tick crosses its axis along the direction the
+other axis runs at that point, `tickLength` pixels long, so the marks turn and lean with a turned or
+perspective space. A point at or past a perspective space's horizon refuses the node ("Axes reach the
+space's horizon") with an empty path.
 
 **Axis Tick** (`bloom.axis-tick`) answers one mark's number, place and text, so a Text Source can
 label it: set `index` to `i` and drive the Text Source's text from `label` and its position from
@@ -607,6 +617,7 @@ label it: set `index` to `i` and drive the Text Source's text from `label` and i
 | `origin`, `pixelsPerUnit` | Vector 2 | (0, 0), (100, 100) | As in Function Plot |
 | `labelOffset` | Vector 2 | (0, 24) | Pixels from the mark to the label's position (below an X mark; use a negative X for a Y mark) |
 | `decimals` | Integer | 0 | Places shown, held to 0 through 9 |
+| `space` | Space (socket only) | none | As in Function Plot; the position is the map of the mark plus `labelOffset` pixels |
 
 Outputs: `value` (Scalar), `position` (Vector 2), `label` (String) and `valid` (Boolean).
 

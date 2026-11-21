@@ -660,6 +660,18 @@ class DepthScenario(unittest.TestCase):
             values = axes["values"]
             self.assertLessEqual((values[high] - values[low]) / values[step] + 1, 1024 + 1)
 
+    def test_coordinate_space_scenario_shares_one_space(self):
+        import scenario_spec as spec  # noqa: PLC0415
+        scenario = spec.SCENARIOS["coordinate-space-2k"]
+        self.assertEqual(suite.scenario_formats(scenario), [])
+        names = [layer.get("plotNode", layer.get("axesNode", {})).get("space")
+                 for layer in scenario["layers"]]
+        self.assertEqual(names, ["graph", "graph"], "the plot and the axes read one space")
+        self.assertIn("graph", scenario["spaces"])
+        keyed = {role for _, node_type, role in spec.keyed_roles(scenario)
+                 if node_type == "bloom.coordinate-space"}
+        self.assertEqual(keyed, {"origin", "pixelsPerUnit"})
+
     def test_path_processing_scenario_chains_every_path_node(self):
         import scenario_spec as spec  # noqa: PLC0415
         scenario = spec.SCENARIOS["path-processing-2k"]

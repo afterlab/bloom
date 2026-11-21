@@ -36,6 +36,7 @@ Bloom is in alpha. Download the latest alpha from the
    [`architecture/fields.md`](architecture/fields.md),
    [`architecture/path-value.md`](architecture/path-value.md),
    [`architecture/number-list.md`](architecture/number-list.md),
+   [`architecture/coordinate-spaces.md`](architecture/coordinate-spaces.md),
    [`architecture/vector-artwork.md`](architecture/vector-artwork.md),
    [`architecture/animation-and-time.md`](architecture/animation-and-time.md),
    [`architecture/layer-alignment.md`](architecture/layer-alignment.md),
@@ -114,6 +115,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Depth effects](user-guide/depth-effects.md) — Z Defocus and Depth Fog from any depth or mist
   pass: the depth channel and encoding, reading a pass as data, fog before defocus, the lens modes
   and bokeh, picking the focus in the Viewer and rack focus.
+- [Coordinate spaces](user-guide/coordinate-spaces.md) — a named graph space that a plot, its axes,
+  its labels and placed layers share, so they stay aligned while the space moves, scales or turns;
+  reading the space as numbers and converting points in and out of it.
 - [Strokes and glowing paths](user-guide/strokes-and-glowing-paths.md) — Path Stroke's write-on,
   tapers, dashes and brush stamps, stroking masks and letters with Mask Path and Text Outline,
   outlining an image's alpha with Alpha Contour, and the ready-made Saber, Beam, Vegas, Write-on and
