@@ -175,6 +175,21 @@ Shared test support lives in `tests/support`:
   test-mode folder, the macOS preferences or the Windows registry) that the same test of another
   build tree shares.
 
+No test reaches the user's own per-user folders on macOS either (#749). There every per-user
+folder is found from the home folder: Bloom's cache and data folders (`~/Library/Caches/bloom`,
+`~/Library/Application Support/Afterlab/Bloom`), Qt's standard locations and the preferences a
+native `QSettings` writes, and the `XDG_*` and `LOCALAPPDATA` overrides the runner and the fixtures
+set on Linux and Windows reach only the cache (`XDG_CACHE_HOME`). So `bloom_add_test` gives each
+test a home of its own on macOS, `<build>/test-home/<test name>`, in `HOME` and in
+`CFFIXED_USER_HOME` (the variable CoreFoundation and Foundation take the home from); a test that
+sets its own keeps it. Two checks hold it: `bloom.quality.test_private_home` reads the CTest files
+and fails for any registered test without that home (its self-test,
+`bloom.quality.test_private_home_rejects`, runs on every system), and
+`bloom.quality.private_home_locations` runs as a test and requires Bloom's cache, data and GPU
+pipeline cache folders, Qt's writable standard locations and a native `QSettings` file it writes to
+land in the test's own home and nowhere in the real home's folders. Both are registered on macOS
+only, because only there does a test need a home of its own.
+
 A Python fixture that starts a stdio server (`bloom-mcp`, the MCP HTTP test host) starts and ends
 it through `tests/fixtures/scripting/stdio_child.py` (#750). The server's standard error goes to a
 file, so it never blocks on a full pipe and a failure can show it. `end(process, timeout)` closes the

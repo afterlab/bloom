@@ -3419,6 +3419,17 @@ add_executable(bloom_application_identity_test application_identity_tests.cpp)
 target_link_libraries(bloom_application_identity_test PRIVATE bloom_ui Qt6::Core)
 bloom_enable_warnings(bloom_application_identity_test)
 bloom_add_test(NAME bloom.ui.application-identity COMMAND bloom_application_identity_test LABELS ui unit TIMEOUT 30 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+# #749: every per-user location a test reaches through Bloom or Qt is in the test's own home, not
+# the real one (cmake/BloomTesting.cmake). Registered on macOS only: only there does a test have a
+# home of its own, because only there are those folders found from the home; Linux and Windows
+# find them from XDG_* and LOCALAPPDATA, which the runner and the fixtures set.
+if(APPLE)
+    add_executable(bloom_private_home_locations_test private_home_locations_tests.cpp)
+    target_link_libraries(bloom_private_home_locations_test PRIVATE bloom_platform Qt6::Core)
+    bloom_enable_warnings(bloom_private_home_locations_test)
+    bloom_add_test(NAME bloom.quality.private_home_locations
+        COMMAND bloom_private_home_locations_test LABELS quality unit TIMEOUT 30)
+endif()
 
 # #489: the font picker and field, and the Qt network transport against a loopback server.
 add_executable(bloom_font_picker_test font_picker_tests.cpp)
