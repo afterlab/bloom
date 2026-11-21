@@ -67,7 +67,9 @@ CompositionSession::liveValue(const document::ParameterId parameterId) const {
         const auto* constant = std::get_if<document::ConstantValueSource>(&parameter->source);
         if (constant && (std::holds_alternative<document::PathValue>(constant->value) ||
                          std::holds_alternative<document::GradientValue>(constant->value) ||
-                         std::holds_alternative<document::NumberListValue>(constant->value)))
+                         std::holds_alternative<document::NumberListValue>(constant->value) ||
+                         // #752: a typed cue list (a Timeline cue drag previews through it).
+                         std::holds_alternative<document::CueListValue>(constant->value)))
             return constant->value;
         // #493: an animated Path (a Curves curve) at the playhead on its own clock.
         if (const auto* animated = std::get_if<document::AnimationCurveSource>(&parameter->source);

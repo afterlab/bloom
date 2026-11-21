@@ -498,6 +498,11 @@ target_sources(
         entry_layer_session_operations.hpp
         composition_session_keyframes.cpp
         composition_session_masks.cpp
+        composition_session_subtitles.cpp
+        subtitles_editing.cpp
+        subtitles_editing.hpp
+        subtitles_inspector.cpp
+        subtitles_inspector.hpp
         driven_value_resolver.cpp
         editor_area.cpp
         editor_chrome.cpp
@@ -936,7 +941,7 @@ target_link_libraries(bloom_ui PUBLIC bloom_mcp)
 # #736: the next-start crash notice reads the crash folder.
 target_link_libraries(bloom_ui PUBLIC bloom_crash)
 target_link_libraries(bloom_ui PRIVATE bloom_runtime_compiler bloom_media_image bloom_media_cache
-                                        bloom_media_vector)
+                                        bloom_media_vector bloom_subtitles)
 # ADR 0034: the live session adapter feeds scripting::LiveSessionHost.
 target_link_libraries(bloom_ui PUBLIC bloom_scripting)
 # ADR 0041: the update service runs the Qt-free update core as background jobs.

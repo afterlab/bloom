@@ -30,6 +30,7 @@
 #include <filesystem>
 #include <QRectF>
 #include <QString>
+#include <QStringList>
 #include <QTransform>
 
 #include <bloom/commands/result.hpp>
@@ -98,6 +99,16 @@ struct MaskSelection final {
     document::LayerMaskId mask;
 
     friend bool operator==(const MaskSelection&, const MaskSelection&) = default;
+};
+
+// #752: the subtitle cue the Properties cue list, the Timeline cue blocks and the Viewer outline
+// share. Session/UI state only: never saved, never part of undo; selectedCue() answers nothing once
+// the cue or its Subtitles node is gone.
+struct CueSelection final {
+    document::NodeId node;
+    std::uint64_t cue = 0;
+
+    friend bool operator==(const CueSelection&, const CueSelection&) = default;
 };
 
 // #645: the Viewer's drill level. `groups` are the entered group layers, outermost first, each a
@@ -434,6 +445,18 @@ class CompositionSession final : public QObject {
     void selectMask(document::LayerId layerId, document::LayerMaskId maskId);
     void clearMaskSelection();
     [[nodiscard]] std::optional<MaskSelection> selectedMask() const;
+    // #752: the shared cue selection (CueSelection). selectCue() emits cueSelectionChanged() when
+    // it changes; it does not change the layer or node selection.
+    void selectCue(document::NodeId node, std::uint64_t cue);
+    void clearCueSelection();
+    [[nodiscard]] std::optional<CueSelection> selectedCue() const;
+    // #752: the report rows of the last load into a Subtitles node (the features its file dropped
+    // or drew differently), for the Source row. Session state; an empty list clears it.
+    void setSubtitlesLoadReport(document::NodeId node, QStringList rows);
+    [[nodiscard]] QStringList subtitlesLoadReport(document::NodeId node) const;
+    // #752: the one background inspection of the composition's Subtitles nodes (the cue blocks the
+    // Viewer outlines, each cue's checks, a linked file's state), created on first use.
+    [[nodiscard]] class SubtitlesInspector& subtitlesInspector();
     // Selecting a keyframe REPLACES the primary selection like every other select* method (one
     // primary/contextual selection truth -- docs/roadmap.md, Selection And Direct Manipulation).
     // A missing curve/key reports unavailable and leaves the selection untouched, mirroring
@@ -1066,6 +1089,8 @@ class CompositionSession final : public QObject {
     void currentTimeChanged();
     void selectionChanged();
     void maskSelectionChanged();
+    // #752: selectCue() / clearCueSelection() changed the shared cue selection.
+    void cueSelectionChanged();
     // #645: the Viewer's drill level changed (viewerLevel()).
     void viewerLevelChanged();
     void historyChanged();
@@ -1344,6 +1369,9 @@ class CompositionSession final : public QObject {
     core::RationalTime currentTime_ = core::RationalTime::fromInteger(0);
     CompositionSelection selection_;
     std::optional<MaskSelection> maskSelection_;
+    std::optional<CueSelection> cueSelection_;
+    std::map<document::NodeId, QStringList> subtitlesLoadReports_;
+    class SubtitlesInspector* subtitlesInspector_ = nullptr;
     ViewerLevel viewerLevel_;
     struct EnclosingGroupsCache final {
         const void* project = nullptr;
