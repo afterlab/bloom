@@ -149,6 +149,7 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                    [](const CompiledCompositionSource&) {},
                    [](const CompiledChannelShuffle&) {},
                    [](const CompiledCryptomatte&) {},
+                   [](const CompiledSubtitles&) {},
                    [&function](const CompiledLayerOutput& layer) {
                        function(layer.input);
                        if (layer.parent)

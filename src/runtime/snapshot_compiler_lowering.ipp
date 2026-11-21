@@ -1622,20 +1622,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         break;
     case NodeLoweringKind::Text:
         return lowerText(node);
-    case NodeLoweringKind::Subtitles: {
-        // #752 (SB1): the node's definition, ports and cue list exist; its picture is a
-        // transparent canvas the size of the composition frame (the node's content bounds) until
-        // the subtitles render replaces this lowering. A canvas Solid is covered GPU work.
-        const auto& format = composition_->format();
-        return runtime::CompiledSolid{
-            node.id,
-            runtime::CompiledColorParameter{document::ParameterId{},
-                                            core::Color4d{0.0, 0.0, 0.0, 0.0}},
-            runtime::CompiledScalarParameter{document::ParameterId{},
-                                             static_cast<double>(format.width())},
-            runtime::CompiledScalarParameter{document::ParameterId{},
-                                             static_cast<double>(format.height())}};
-    }
+    case NodeLoweringKind::Subtitles:
+        return lowerSubtitles(node);
     case NodeLoweringKind::LayerOutput:
         return lowerLayerOutput(node, indices);
     case NodeLoweringKind::LayerStack:
@@ -3416,6 +3404,216 @@ lowerShape(const document::NodeRecord& node) {
     shape.drivenStrokeEnabled = drivenStroke;
     shape.drivenPath = drivenPath;
     return shape;
+}
+
+// #752: every cue of a constant list holding text in a script that needs shaping gets a warning
+// naming it (the per-cue check says the same in the read-backs). A list with many such cues names
+// the first few and counts the rest, so one file never floods the diagnostics.
+void warnUnshapedCues(const document::NodeRecord& node, const document::ParameterBinding& binding,
+                      const document::CueListValue& list) {
+    constexpr std::size_t kNamedCues = 16;
+    std::size_t found = 0;
+    for (const auto& cue : list.cues) {
+        const auto plain = document::cue_markup::plainText(cue->text);
+        std::u32string scalars;
+        for (std::size_t cursor = 0; cursor < plain.size();) {
+            const auto scalar = core::decodeUtf8Scalar(plain, cursor);
+            if (!scalar.isValid() || scalar.length == 0)
+                break;
+            cursor += scalar.length;
+            scalars.push_back(scalar.value);
+        }
+        const auto script = render::firstShapedScript(scalars);
+        if (!script)
+            continue;
+        if (++found > kNamedCues)
+            continue;
+        auto diagnosticSubject = subject(node.id, std::string(document::kSubtitlesCuesRole));
+        diagnosticSubject.parameterId = binding.parameterId;
+        addWarning(runtime::CompileDiagnosticCode::UnshapedScript, std::move(diagnosticSubject),
+                   "Cue " + std::to_string(cue->id) + " contains " + std::string(*script) +
+                       " text; Bloom lays text out without shaping, so it will not read correctly",
+                   {});
+    }
+    if (found > kNamedCues) {
+        auto diagnosticSubject = subject(node.id, std::string(document::kSubtitlesCuesRole));
+        diagnosticSubject.parameterId = binding.parameterId;
+        addWarning(runtime::CompileDiagnosticCode::UnshapedScript, std::move(diagnosticSubject),
+                   std::to_string(found - kNamedCues) +
+                       " more cues contain text Bloom lays out without shaping",
+                   {});
+    }
+}
+
+// #752: a Subtitles node (docs/architecture/subtitles.md, "Rendering"). The cue list is the
+// constant, or the value-graph output that supplies it; the styling operands animate; every other
+// parameter is a constant. The four faces are resolved here, once per plan.
+[[nodiscard]] std::optional<runtime::CompiledOperation>
+lowerSubtitles(const document::NodeRecord& node) {
+    using namespace document;
+    runtime::CompiledSubtitles lowered;
+    lowered.sourceNodeId = node.id;
+    const auto role = [&](const std::string_view name) { return findParameterBinding(node, name); };
+    const auto* cuesBinding = role(kSubtitlesCuesRole);
+    if (cuesBinding == nullptr) {
+        addTopologyFailure(node.id, "Validated subtitles parameters could not be lowered.");
+        return std::nullopt;
+    }
+    lowered.cuesParameterId = cuesBinding->parameterId;
+    lowered.drivenCues = drivenOutput(cuesBinding, runtime::SocketValueKind::CueList);
+    if (!lowered.drivenCues) {
+        const auto* list = parameterConstant<CueListValue>(cuesBinding);
+        if (list == nullptr) {
+            addTopologyFailure(node.id, "Validated subtitles cues could not be lowered.");
+            return std::nullopt;
+        }
+        lowered.cues = runtime::CompiledCueList{*list};
+        warnUnshapedCues(node, *cuesBinding, *list);
+    }
+    const auto scalar = [&](const std::string_view name) {
+        return compiledScalarParameter(role(name));
+    };
+    const auto color = [&](const std::string_view name) {
+        return compiledColorParameter(role(name));
+    };
+    const auto size = scalar("size");
+    const auto outlineWidth = scalar("outlineWidth");
+    const auto lineHeight = scalar("lineHeight");
+    const auto letterSpacing = scalar("letterSpacing");
+    const auto opacity = scalar("opacity");
+    const auto fill = color("fill");
+    const auto outlineColor = color("outlineColor");
+    const auto boxColor = color("boxColor");
+    const auto offset = compiledVec2Parameter(role("offset"));
+    if (!size || !outlineWidth || !lineHeight || !letterSpacing || !opacity || !fill ||
+        !outlineColor || !boxColor || !offset) {
+        addTopologyFailure(node.id, "Validated subtitles styling could not be lowered.");
+        return std::nullopt;
+    }
+    lowered.size = *size;
+    lowered.outlineWidth = *outlineWidth;
+    lowered.lineHeight = *lineHeight;
+    lowered.letterSpacing = *letterSpacing;
+    lowered.opacity = *opacity;
+    lowered.fill = *fill;
+    lowered.outlineColor = *outlineColor;
+    lowered.boxColor = *boxColor;
+    lowered.offset = *offset;
+    // The constants; a missing one keeps its registry default.
+    auto& settings = lowered.settings;
+    const auto whole = [&](const std::string_view name, std::int64_t& target) {
+        if (const auto* stored = parameterConstant<std::int64_t>(role(name)))
+            target = *stored;
+    };
+    const auto number = [&](const std::string_view name, double& target) {
+        if (const auto* stored = parameterConstant<double>(role(name)))
+            target = *stored;
+    };
+    const auto flag = [&](const std::string_view name, bool& target) {
+        if (const auto* stored = parameterConstant<bool>(role(name)))
+            target = *stored;
+    };
+    whole("box", settings.box);
+    number("boxPadding", settings.boxPadding);
+    number("boxRadius", settings.boxRadius);
+    whole("safeArea", settings.safeArea);
+    number("marginX", settings.marginX);
+    number("marginY", settings.marginY);
+    whole("anchor", settings.anchor);
+    number("maxWidth", settings.maxWidth);
+    whole("wrap", settings.wrap);
+    whole("maxLines", settings.maxLines);
+    whole("overflow", settings.overflow);
+    whole("textAlign", settings.textAlign);
+    flag("useCuePositions", settings.useCuePositions);
+    flag("useFileStyles", settings.useFileStyles);
+    number("fadeIn", settings.fadeIn);
+    number("fadeOut", settings.fadeOut);
+    whole("showSpeaker", settings.showSpeaker);
+    flag("burnIn", settings.burnIn);
+    whole("maxCharactersPerLine", settings.maxCharactersPerLine);
+    number("maxReadingSpeed", settings.maxReadingSpeed);
+    number("minDuration", settings.minDuration);
+    whole("minGap", settings.minGap);
+    settings.frameWidth = static_cast<double>(composition_->format().width());
+    settings.frameHeight = static_cast<double>(composition_->format().height());
+    settings.titleSafe = composition_->safeAreas().title;
+    settings.actionSafe = composition_->safeAreas().action;
+
+    // The faces: the node's font, then its bold, italic and bold italic styles. A style the font
+    // lacks is drawn by the upright face: an italic as its synthesized oblique, a bold at the
+    // regular weight with the font-missing warning.
+    auto fontId = defaultFontId();
+    const auto* fontBinding = role("font");
+    if (fontBinding != nullptr) {
+        const auto* stored = parameterConstant<std::string>(fontBinding);
+        if (const auto decoded = stored != nullptr ? decodeFontId(*stored) : std::nullopt)
+            fontId = *decoded;
+    }
+    auto& resolver =
+        request_.fontResolver ? *request_.fontResolver : runtime::fonts::processFontResolver();
+    const auto resolve = [&](const FontId& id) -> std::pair<render::TextFont, bool> {
+        const auto resolution = resolver.resolve(
+            id, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
+        render::TextFont face = render::EmbeddedFace::DejaVuSans;
+        if (resolution.bytes)
+            face = render::ExternalFontFile{resolution.bytes, resolution.digest,
+                                            resolution.faceIndex};
+        else
+            face = static_cast<render::EmbeddedFace>(resolution.builtinFace);
+        return {face, resolution.isFallback()};
+    };
+    const auto regular = [&] {
+        const auto resolution = resolver.resolve(
+            fontId, request_.fontFetch, [this] { return cancellation_.isCancellationRequested(); });
+        lowered.fontMissing = resolution.missing();
+        lowered.fontPending = resolution.pendingDownload();
+        if (lowered.fontMissing && fontBinding != nullptr) {
+            auto diagnosticSubject = subject(node.id, "font");
+            diagnosticSubject.parameterId = fontBinding->parameterId;
+            addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
+                       "Subtitles font is missing", resolution.diagnostic);
+        }
+        if (resolution.bytes)
+            return render::TextFont{render::ExternalFontFile{resolution.bytes, resolution.digest,
+                                                             resolution.faceIndex}};
+        return render::TextFont{static_cast<render::EmbeddedFace>(resolution.builtinFace)};
+    }();
+    lowered.fontId = encodeFontId(fontId);
+    auto& faces = lowered.faces;
+    faces.faces = {regular, regular, regular, regular};
+    faces.oblique = {false, false, true, true};
+    faces.boldMissing = true;
+    if (fontId.source != FontSource::Builtin && !lowered.fontMissing) {
+        const auto styled = [&](const std::int32_t weight, const bool italic,
+                                const std::string_view style) {
+            auto variant = fontId;
+            variant.weight = weight;
+            variant.italic = italic;
+            variant.style = std::string(style);
+            variant.postscriptName.clear();
+            variant.axes.clear();
+            return resolve(variant);
+        };
+        const auto [bold, boldFallback] = styled(700, false, "Bold");
+        const auto [italic, italicFallback] = styled(fontId.weight, true, "Italic");
+        const auto [boldItalic, boldItalicFallback] = styled(700, true, "Bold Italic");
+        if (!boldFallback) {
+            faces.faces[1] = bold;
+            faces.boldMissing = false;
+        }
+        if (!italicFallback) {
+            faces.faces[2] = italic;
+            faces.oblique[2] = false;
+        }
+        if (!boldItalicFallback) {
+            faces.faces[3] = boldItalic;
+            faces.oblique[3] = false;
+        } else if (!boldFallback) {
+            faces.faces[3] = bold;
+        }
+    }
+    return runtime::CompiledOperation{std::move(lowered)};
 }
 
 [[nodiscard]] std::optional<runtime::CompiledOperation>

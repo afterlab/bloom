@@ -162,6 +162,51 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
                                            {ParameterId::fromRaw(idBase + 6), 0.0}}};
 }
 
+// #752: a Subtitles source on the 16 x 12 base frame: one cue with italic and colored runs, shown
+// from 0 s to 20 s, with the box, outline width and fade-out the fixture asks for (a fade-out
+// longer than the cue keeps the fade running at the fixture's time).
+[[nodiscard]] inline bloom::runtime::CompiledSubtitles
+subtitlesSource(const std::uint64_t idBase, const std::int64_t box, const double outline,
+                const double fadeOut, const bool stacked = false) {
+    bloom::runtime::CompiledSubtitles value;
+    value.sourceNodeId = NodeId::fromRaw(idBase);
+    value.cuesParameterId = ParameterId::fromRaw(idBase + 1);
+    bloom::document::CueListValue list;
+    auto cue = std::make_shared<bloom::document::Cue>();
+    cue->id = 1;
+    cue->start = RationalTime::fromInteger(0);
+    cue->end = RationalTime::fromInteger(20);
+    cue->text = "<i>gp</i> <c.yellow>u</c>";
+    list.cues.push_back(std::move(cue));
+    list.nextCueId = 2;
+    if (stacked) {
+        // A second cue on screen at once stacks above the first.
+        auto second = std::make_shared<bloom::document::Cue>();
+        second->id = 2;
+        second->start = RationalTime::fromInteger(0);
+        second->end = RationalTime::fromInteger(20);
+        second->text = "<b>k</b>";
+        list.cues.push_back(std::move(second));
+        list.nextCueId = 3;
+    }
+    value.cues = bloom::runtime::CompiledCueList{std::move(list)};
+    value.size = {ParameterId::fromRaw(idBase + 2), 6.0};
+    value.fill = {ParameterId::fromRaw(idBase + 3), Color4d{1.0, 1.0, 1.0, 1.0}};
+    value.outlineColor = {ParameterId::fromRaw(idBase + 4), Color4d{0.0, 0.0, 0.0, 1.0}};
+    value.outlineWidth = {ParameterId::fromRaw(idBase + 5), outline};
+    value.boxColor = {ParameterId::fromRaw(idBase + 6), Color4d{0.1, 0.2, 0.3, 0.6}};
+    value.lineHeight = {ParameterId::fromRaw(idBase + 7), 1.15};
+    value.letterSpacing = {ParameterId::fromRaw(idBase + 8), 0.0};
+    value.opacity = {ParameterId::fromRaw(idBase + 9), 1.0};
+    value.offset = {ParameterId::fromRaw(idBase + 10), Vec2d{0.25, -0.5}};
+    value.settings.box = box;
+    value.settings.safeArea = 2;
+    value.settings.fadeOut = fadeOut;
+    value.settings.frameWidth = 16.0;
+    value.settings.frameHeight = 12.0;
+    return value;
+}
+
 [[nodiscard]] inline CompiledImageEffect effect(const ImageEffectKernel& kernel,
                                                 const std::uint64_t idBase) {
     return CompiledImageEffect{NodeId::fromRaw(idBase), OperationIndex::fromRaw(0), kernel, false,

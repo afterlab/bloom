@@ -12,6 +12,7 @@
 #include "gpu_scene_preparation_builders.hpp"
 #include "gpu_scene_preparation_leaf_emission.hpp"
 #include "gpu_scene_preparation_private.hpp"
+#include "gpu_scene_subtitles_emission.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
 #include "operation_key.hpp"
@@ -83,7 +84,9 @@ using detail::GpuSceneVectorChain;
            std::holds_alternative<CompiledCompositionSource>(operation) ||
            std::holds_alternative<CompiledCompositionOutput>(operation) ||
            std::holds_alternative<CompiledChannelShuffle>(operation) ||
-           std::holds_alternative<CompiledCryptomatte>(operation);
+           std::holds_alternative<CompiledCryptomatte>(operation) ||
+           // #752: its colors are working-space values, premultiplied like a Text's.
+           std::holds_alternative<CompiledSubtitles>(operation);
 }
 
 // Retained scene storage past the stated allowance is claimed in steps, so a dense scene takes the
@@ -527,6 +530,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             for (std::size_t index = 0; index < operationCount; ++index) {
                 if (reachable[index] &&
                     (std::holds_alternative<CompiledText>(plan->operations()[index]) ||
+                     std::holds_alternative<CompiledSubtitles>(plan->operations()[index]) ||
                      std::holds_alternative<CompiledShape>(plan->operations()[index]))) {
                     return fail(
                         PreparedGpuSceneDiagnosticCode::BudgetRefused,
@@ -769,6 +773,17 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     *checker, *plan, resolved, index, operationIndex, fullDisplayWindow,
                     fullPixelAspect, hScale, vScale, emit, chargeTransient, commandForOperation,
                     keyOf, outputWindowOf, bounds)) {
+                return fail(error->code, error->message);
+            }
+            continue;
+        }
+
+        if (const auto* subtitles = std::get_if<CompiledSubtitles>(&operation)) {
+            if (const auto error = detail::emitSubtitlesCommands(
+                    *subtitles, *plan, resolved, *operandTime, index, operationIndex,
+                    fullDisplayWindow, fullPixelAspect, coverageCache_, cancellation, emit,
+                    chargeTransient, chargeCoverage, commandForOperation, keyOf, outputWindowOf,
+                    bounds)) {
                 return fail(error->code, error->message);
             }
             continue;

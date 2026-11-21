@@ -21,6 +21,10 @@
 #include <bloom/runtime/layer_time_projection.hpp>
 
 #include <bloom/document/drill_levels.hpp>
+#include <bloom/core/utf8.hpp>
+#include <bloom/document/cue_markup.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
+#include <bloom/render/styled_text.hpp>
 #include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/resample_filter.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>

@@ -132,6 +132,7 @@ using bloom::gpu_coverage_plans::nestedParentPlan;
 using bloom::gpu_coverage_plans::parentedPlan;
 using bloom::gpu_coverage_plans::rasterAffinePlan;
 using bloom::gpu_coverage_plans::shape;
+using bloom::gpu_coverage_plans::subtitlesSource;
 using bloom::gpu_coverage_plans::text;
 using bloom::gpu_coverage_plans::withSource;
 
@@ -389,6 +390,9 @@ displayProofRunner(const bool customView) {
     add("operation.CompiledText", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(95000), 95000, nullptr, 0.6)); });
+    add("operation.CompiledSubtitles", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Subtitles CPU and native parity tests",
+        [] { return runBuilder(withSource(subtitlesSource(96500, 2, 0.5, 0.0), 96500)); });
     add("operation.CompiledShape", GpuCoverageFixtureCriterion::Prepared,
         "src/render PathRaster + shape source tests", [] {
             return runBuilder(
@@ -669,16 +673,20 @@ displayProofRunner(const bool customView) {
     // explicit list cannot satisfy it, so it cannot reuse another node's fixture.
     add("node.bloom.solid-source", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
-    // #752: Subtitles lowers to a transparent canvas Solid the size of the frame until the
-    // subtitles render replaces that lowering; the fixture prepares exactly that operation.
+    // #752: the Subtitles node's own fixture: italic and colored runs in a block box with an
+    // outline, and a second cue stacked above it.
     add("node.bloom.subtitles", GpuCoverageFixtureCriterion::Prepared,
-        "src/runtime Subtitles lowering (transparent frame canvas)", [] {
-            const bloom::runtime::CompiledSolid canvas{NodeId::fromRaw(108900),
-                                       {ParameterId::fromRaw(108901), bloom::core::Color4d{0.0, 0.0, 0.0, 0.0}},
-                                       {ParameterId::fromRaw(108902), 16.0},
-                                       {ParameterId::fromRaw(108903), 12.0}};
-            return runBuilder(withSource(canvas, 108900));
-        });
+        "src/runtime Subtitles CPU and native parity tests",
+        [] { return runBuilder(withSource(subtitlesSource(108900, 2, 0.5, 0.0, true), 108900)); });
+    add("feature.subtitles.box", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Subtitles CPU and native parity tests",
+        [] { return runBuilder(withSource(subtitlesSource(108950, 1, 0.0, 0.0), 108950)); });
+    add("feature.subtitles.outline", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Subtitles CPU and native parity tests",
+        [] { return runBuilder(withSource(subtitlesSource(108970, 0, 0.75, 0.0), 108970)); });
+    add("feature.subtitles.fade", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Subtitles CPU and native parity tests",
+        [] { return runBuilder(withSource(subtitlesSource(108990, 0, 0.0, 30.0), 108990)); });
     addImageEffectPlan("node.bloom.resize", bloom::runtime::ResizeFitKernel{10, 7}, 104000,
                        "src/runtime Resize production affine preparation");
     addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,

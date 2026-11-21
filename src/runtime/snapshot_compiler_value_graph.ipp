@@ -405,6 +405,22 @@ lowerShakeKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     return runtime::CompiledValueKernel{std::move(shake)};
 }
 
+// #752: a Subtitles node's value outputs (CompiledValueSubtitles): its cue list, constant or
+// supplied by another node, read at the frame's time.
+[[nodiscard]] std::optional<runtime::CompiledValueKernel>
+lowerSubtitlesValueKernel(const document::NodeRecord& node,
+                          const runtime::NodeDefinition& definition) {
+    auto cues = valueOperand(node, definition, document::kSubtitlesCuesRole);
+    const auto* speaker = parameterConstant<std::int64_t>(
+        runtime::detail::findParameterBinding(node, "showSpeaker"));
+    if (!cues)
+        return std::nullopt;
+    runtime::CompiledValueSubtitles kernel;
+    kernel.cues = *std::move(cues);
+    kernel.speakerPrefix = speaker != nullptr && *speaker == document::kSubtitlesSpeakerPrefix;
+    return runtime::CompiledValueKernel{std::move(kernel)};
+}
+
 // #568 Rolling Shutter: the Camera Shake behind its camera offset and roll, read at three moments of
 // the readout (the first row, the middle and the last, -1/2, 0 and +1/2 of the readout after the
 // frame's time). Each is a copy of the shake's operation that publishes (offset x, offset y, roll)
@@ -1145,15 +1161,19 @@ void swapValueProgram(FunctionBodyBuild& build) {
         const auto* node = findNode(nodeId);
         const auto definition = definitions_.find(nodeId);
         const bool shake = node != nullptr && node->typeId == document::kCameraShakeNodeType;
+        // #752: a Subtitles node is an image node that also publishes values.
+        const bool subtitles = node != nullptr && node->typeId == document::kSubtitlesNodeType;
         if (node != nullptr && definition != definitions_.end() &&
             node->typeId == document::kRollingShutterNodeType) {
             return appendRollingShutterSamples(*node, *definition->second);
         }
-        if (node == nullptr || definition == definitions_.end() || (!isValueNode(nodeId) && !shake)) {
+        if (node == nullptr || definition == definitions_.end() ||
+            (!isValueNode(nodeId) && !shake && !subtitles)) {
             return true;
         }
-        auto kernel = shake ? lowerShakeKernel(*node, *definition->second)
-                            : lowerValueKernel(*node, *definition->second);
+        auto kernel = shake       ? lowerShakeKernel(*node, *definition->second)
+                      : subtitles ? lowerSubtitlesValueKernel(*node, *definition->second)
+                                  : lowerValueKernel(*node, *definition->second);
         if (!kernel.has_value()) {
             addTopologyFailure(nodeId, "A reachable value node could not be lowered.");
             return false;

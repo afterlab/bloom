@@ -38,7 +38,8 @@ namespace bloom::runtime::detail {
            std::holds_alternative<CompiledCompositionOutput>(operation) ||
            std::holds_alternative<CompiledCompositionSource>(operation) ||
            std::holds_alternative<CompiledChannelShuffle>(operation) ||
-           std::holds_alternative<CompiledCryptomatte>(operation);
+           std::holds_alternative<CompiledCryptomatte>(operation) ||
+           std::holds_alternative<CompiledSubtitles>(operation);
 }
 
 // Computes the reachable operation mask from the terminal output, following pixel inputs and layer

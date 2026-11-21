@@ -26,6 +26,11 @@ CompiledText text(const bool missing) {
     result.fontMissing = missing;
     return result;
 }
+CompiledSubtitles subtitles(const bool missing) {
+    CompiledSubtitles result;
+    result.fontMissing = missing;
+    return result;
+}
 CompiledImageEffect effect(const std::size_t input) {
     CompiledImageEffect result{{}, at(input), {}};
     return result;
@@ -60,6 +65,10 @@ int main() {
     operations.emplace_back(merge({1, 4})); // 11: a stack of layers
     operations.emplace_back(effect(11));    // 12: an adjustment reading the stack
     operations.emplace_back(layer(12));     // 13: an adjustment layer is not a text layer
+    operations.emplace_back(subtitles(true));  // 14: Subtitles in a fallback face
+    operations.emplace_back(layer(14));        // 15
+    operations.emplace_back(subtitles(false)); // 16: Subtitles whose font is available
+    operations.emplace_back(layer(16));        // 17
 
     const auto marked = layersUsingMissingFont(operations);
     expect(marked.size() == operations.size(), "one answer per operation");
@@ -69,6 +78,8 @@ int main() {
     expect(!marked[9], "a text whose font is available is not marked");
     expect(!marked[10], "a layer whose transform parent uses the missing font is not marked");
     expect(!marked[13], "an adjustment reading a stack with a missing-font layer is not marked");
+    expect(marked[15], "a Subtitles node with a missing font is marked");
+    expect(!marked[17], "a Subtitles node whose font is available is not marked");
     expect(!marked[0] && !marked[2] && !marked[5] && !marked[11],
            "only Layer Output operations are marked");
     return failures == 0 ? 0 : 1;

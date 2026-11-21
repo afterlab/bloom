@@ -1,3 +1,4 @@
+#include <bloom/document/cue_markup.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -546,6 +547,8 @@ class Evaluator final {
                         const runtime::CompiledValueRandom& kernel);
     void evaluateShake(const runtime::CompiledValueOperation& operation,
                        const runtime::CompiledValueShake& kernel);
+    void evaluateSubtitles(const runtime::CompiledValueOperation& operation,
+                           const runtime::CompiledValueSubtitles& kernel);
     void evaluatePromotion(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValuePromotion& kernel);
     void evaluateUtility(const runtime::CompiledValueOperation& operation,
@@ -621,6 +624,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateRandom(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueShake>) {
                 evaluateShake(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueSubtitles>) {
+                evaluateSubtitles(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueUtility>) {
                 evaluateUtility(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledBoundsReadout>) {
@@ -1608,6 +1613,43 @@ void Evaluator::evaluateRandom(const runtime::CompiledValueOperation& operation,
              "The minimum bound was substituted.");
     }
     write(operation, 0, outcome.value);
+}
+
+void Evaluator::evaluateSubtitles(const runtime::CompiledValueOperation& operation,
+                                  const runtime::CompiledValueSubtitles& kernel) {
+    write(operation, 0, 0.0);
+    const auto* list = std::get_if<runtime::CompiledCueList>(operandOf(kernel.cues));
+    if (list == nullptr) {
+        fail(operation, kernel.cues.id, "Subtitles cues have the wrong kind",
+             "The Cues input must reach the node as a cue list.");
+        write(operation, 1, runtime::CompiledCueList{});
+        write(operation, 2, std::string{});
+        write(operation, 3, std::int64_t{-1});
+        write(operation, 4, 0.0);
+        return;
+    }
+    write(operation, 1, *list);
+    const auto active = list->activeAt(time_);
+    std::string text;
+    for (const auto index : active) {
+        const auto& cue = *list->list->cues[index];
+        if (!text.empty())
+            text.push_back('\n');
+        if (kernel.speakerPrefix && !cue.speaker.empty())
+            text += cue.speaker + ": ";
+        text += document::cue_markup::plainText(cue.text);
+    }
+    write(operation, 2, std::move(text));
+    if (active.empty()) {
+        write(operation, 3, std::int64_t{-1});
+        write(operation, 4, 0.0);
+        return;
+    }
+    const auto& first = *list->list->cues[active.front()];
+    write(operation, 3, static_cast<std::int64_t>(active.front()));
+    const double span = first.end.toSeconds() - first.start.toSeconds();
+    const double into = time_.toSeconds() - first.start.toSeconds();
+    write(operation, 4, span > 0.0 ? std::clamp(into / span, 0.0, 1.0) : 0.0);
 }
 
 void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,

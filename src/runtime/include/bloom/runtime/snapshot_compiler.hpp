@@ -58,6 +58,9 @@ enum class CompileDiagnosticCode {
     LayerExtentUnresolved,
     // #502: an Adjustment's chain reaches more than one Merge entry; the Adjustment draws nothing.
     AdjustmentTargetAmbiguous,
+    // #752: a subtitle cue holds text in a script that needs shaping (Arabic, an Indic script),
+    // which Bloom draws without shaping; the warning names the cue.
+    UnshapedScript,
 };
 
 [[nodiscard]] std::string_view compileDiagnosticCodeId(CompileDiagnosticCode code) noexcept;

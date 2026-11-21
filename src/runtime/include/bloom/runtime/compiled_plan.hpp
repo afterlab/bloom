@@ -1703,6 +1703,80 @@ struct CompiledText {
     friend bool operator==(const CompiledText&, const CompiledText&) = default;
 };
 
+// #752: a lowered Subtitles node (docs/architecture/subtitles.md, "Rendering"). The cue list is
+// the authored constant, or the value-graph output that supplies it (an edge into the Cues input or
+// a driver). Host preparation (subtitles_frame.hpp) selects the cues active at the operation's time,
+// lays them out with the styled text layout and builds their box, outline and fill geometry; the CPU
+// reference fills it through the path coverage reference and the GPU through native coverage
+// commands. The node's content bounds are the composition frame.
+struct CompiledSubtitlesSettings final {
+    std::int64_t box = 0;
+    double boxPadding = 0.25;
+    double boxRadius = 0.0;
+    std::int64_t safeArea = 0;
+    double marginX = 0.1;
+    double marginY = 0.1;
+    std::int64_t anchor = 7;
+    double maxWidth = 1.0;
+    std::int64_t wrap = 0;
+    std::int64_t maxLines = 2;
+    std::int64_t overflow = 0;
+    std::int64_t textAlign = 1;
+    bool useCuePositions = true;
+    bool useFileStyles = true;
+    double fadeIn = 0.0;
+    double fadeOut = 0.0;
+    std::int64_t showSpeaker = 0;
+    bool burnIn = true;
+    // The composition frame, in author pixels, and its safe areas (Composition Settings).
+    double frameWidth = 0.0;
+    double frameHeight = 0.0;
+    double titleSafe = 0.80;
+    double actionSafe = 0.90;
+    // The checks' limits: a readout, never part of the picture.
+    std::int64_t maxCharactersPerLine = 42;
+    double maxReadingSpeed = 20.0;
+    double minDuration = 5.0 / 6.0;
+    std::int64_t minGap = 2;
+    friend bool operator==(const CompiledSubtitlesSettings&,
+                           const CompiledSubtitlesSettings&) = default;
+};
+
+// The four faces a cue's runs draw with: regular, bold, italic and bold italic. A style the font
+// lacks is drawn with a stand-in: a missing italic as the synthesized oblique of the upright face
+// (`oblique`), a missing bold as the regular weight (`boldMissing`, warned at compile time).
+struct CompiledSubtitlesFaces final {
+    std::array<render::TextFont, 4> faces{render::EmbeddedFace::DejaVuSans,
+                                          render::EmbeddedFace::DejaVuSans,
+                                          render::EmbeddedFace::DejaVuSans,
+                                          render::EmbeddedFace::DejaVuSans};
+    std::array<bool, 4> oblique{false, false, true, true};
+    bool boldMissing = true;
+    friend bool operator==(const CompiledSubtitlesFaces&, const CompiledSubtitlesFaces&) = default;
+};
+
+struct CompiledSubtitles {
+    document::NodeId sourceNodeId;
+    document::ParameterId cuesParameterId;
+    CompiledCueList cues;
+    std::optional<ValueOutputIndex> drivenCues{};
+    CompiledScalarParameter size;
+    CompiledColorParameter fill;
+    CompiledColorParameter outlineColor;
+    CompiledScalarParameter outlineWidth;
+    CompiledColorParameter boxColor;
+    CompiledScalarParameter lineHeight;
+    CompiledScalarParameter letterSpacing;
+    CompiledScalarParameter opacity;
+    CompiledVec2Parameter offset;
+    CompiledSubtitlesSettings settings;
+    CompiledSubtitlesFaces faces;
+    std::string fontId;
+    bool fontMissing = false;
+    bool fontPending = false;
+    friend bool operator==(const CompiledSubtitles&, const CompiledSubtitles&) = default;
+};
+
 // A lowered Layer Output boundary. The six parameters appear in the registered authoring order --
 // position, anchor, scale, rotation, opacity, blend mode -- and each one carries its own parameter
 // identity so a diagnostic can name the exact parameter that failed. The first five are animatable,
@@ -1837,7 +1911,7 @@ using CompiledOperation =
     std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource,
                  CompiledVideoSource, CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput,
                  CompiledShape, CompiledCompositionSource, CompiledImageEffect,
-                 CompiledChannelShuffle, CompiledCryptomatte>;
+                 CompiledChannelShuffle, CompiledCryptomatte, CompiledSubtitles>;
 
 // ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
 // parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer

@@ -102,6 +102,7 @@ target_sources(
     bloom_runtime_compiler
     PRIVATE
         compile_diagnostics.cpp
+        compiled_cue_list.cpp
         compiled_plan.cpp
         compiled_plan_cache.cpp
         composition_time.cpp
@@ -328,7 +329,10 @@ target_sources(
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
-        compiled_cue_list.cpp
+        subtitles_frame.cpp
+        subtitles_frame.hpp
+        gpu_scene_subtitles_emission.hpp
+        subtitles_layout.cpp
         function_body.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp
@@ -354,6 +358,7 @@ target_sources(
         FILES
             include/bloom/runtime/operation_cache.hpp
             include/bloom/runtime/text_metrics.hpp
+            include/bloom/runtime/subtitles_layout.hpp
             include/bloom/runtime/animation_sampling.hpp
             include/bloom/runtime/grade_curve.hpp
             include/bloom/runtime/keyframe_easing.hpp

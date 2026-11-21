@@ -5,7 +5,7 @@
 namespace bloom::runtime {
 
 std::vector<bool> layersUsingMissingFont(const std::span<const CompiledOperation> operations) {
-    // `reaches[i]`: operation i's picture contains a Text with a missing font. Operations are in
+    // `reaches[i]`: operation i's picture contains a Text or Subtitles with a missing font. Operations are in
     // topological order (an input precedes its consumer), so one sweep settles every entry.
     std::vector<bool> reaches(operations.size(), false);
     std::vector<bool> layers(operations.size(), false);
@@ -13,6 +13,11 @@ std::vector<bool> layersUsingMissingFont(const std::span<const CompiledOperation
         const auto& operation = operations[index];
         if (const auto* text = std::get_if<CompiledText>(&operation)) {
             reaches[index] = text->fontMissing;
+            continue;
+        }
+        // #752: a Subtitles node whose font is missing draws its cues in the fallback face.
+        if (const auto* subtitles = std::get_if<CompiledSubtitles>(&operation)) {
+            reaches[index] = subtitles->fontMissing;
             continue;
         }
         if (const auto* layer = std::get_if<CompiledLayerOutput>(&operation)) {

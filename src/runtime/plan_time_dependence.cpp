@@ -34,6 +34,8 @@ void analyzeValueOperations(const std::span<const CompiledValueOperation> operat
         bool dependent =
             fieldAnimated || std::holds_alternative<CompiledValueTime>(operation.kernel) ||
             std::holds_alternative<CompiledValueShake>(operation.kernel) ||
+            // #752: the cues active at the frame.
+            std::holds_alternative<CompiledValueSubtitles>(operation.kernel) ||
             (sample != nullptr &&
              std::holds_alternative<CompiledGradientCurve>(sample->gradient)) ||
             std::holds_alternative<CompiledBoundsReadout>(operation.kernel) ||
@@ -233,6 +235,15 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                            parameter(step.position) || parameter(step.anchor) ||
                            parameter(step.scale) || parameter(step.rotation) ||
                            parameter(step.opacity) || driven(step.drivenBlendMode);
+                // #752: the cues on screen change with the frame (the cue boundaries), and so does
+                // any animated styling.
+                else if constexpr (std::is_same_v<Step, CompiledSubtitles>)
+                    return driven(step.drivenCues) || !step.cues.list->cues.empty() ||
+                           parameter(step.size) || parameter(step.fill) ||
+                           parameter(step.outlineColor) || parameter(step.outlineWidth) ||
+                           parameter(step.boxColor) || parameter(step.lineHeight) ||
+                           parameter(step.letterSpacing) || parameter(step.opacity) ||
+                           parameter(step.offset);
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });

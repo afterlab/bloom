@@ -96,6 +96,7 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledCompositionSource, "nested composition sour
 BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledChannelShuffle, "channel shuffle (ADR 0026)");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledCryptomatte, "Cryptomatte matte (#364)");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledSubtitles, "subtitles (#752)");
 
 #define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                              \
     template <> struct GpuImageEffectCoverageTraits<Alternative> final {                           \
@@ -320,6 +321,16 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     // the executor runs the native GpuPathCoverage producer; the genuine fixture lives in the
     // executor native coverage tests and must observe a positive cold coverage dispatch and zero
     // warm. The fixture owner below names the native gate that carries that evidence.
+    // #752: the Subtitles node's box, glyph outline and fade, each drawn by native coverage.
+    out.push_back(GpuFeatureCoverageEntry{"feature.subtitles.box", "subtitles box axis",
+                                          GpuCoverageDisposition::Required,
+                                          "src/runtime Subtitles CPU and native parity tests"});
+    out.push_back(GpuFeatureCoverageEntry{"feature.subtitles.outline", "subtitles outline axis",
+                                          GpuCoverageDisposition::Required,
+                                          "src/runtime Subtitles CPU and native parity tests"});
+    out.push_back(GpuFeatureCoverageEntry{"feature.subtitles.fade", "subtitles fade axis",
+                                          GpuCoverageDisposition::Required,
+                                          "src/runtime Subtitles CPU and native parity tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
         GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor native coverage tests"});
@@ -783,9 +794,10 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     switch (lowering) {
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Gradient:
-    // #752 (SB1): a Subtitles node lowers to a transparent canvas Solid until its render lands.
-    case NodeLoweringKind::Subtitles:
         return "operation.CompiledSolid";
+    // #752: a Subtitles node's cues.
+    case NodeLoweringKind::Subtitles:
+        return "operation.CompiledSubtitles";
     case NodeLoweringKind::Checker:
         return "operation.CompiledChecker";
     case NodeLoweringKind::Shape:

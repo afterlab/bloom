@@ -439,6 +439,17 @@ struct CompiledValueShake final {
     friend bool operator==(const CompiledValueShake&, const CompiledValueShake&) = default;
 };
 
+// #752: a Subtitles node's value outputs at the frame's time, in the definition's order: a
+// placeholder for the image slot, the resolved cue list, the active cues' plain text (one cue per
+// line, with the speaker prefix when the node shows speakers), the first active cue's sorted index
+// (-1 when none shows) and the progress through it (0 to 1). Like a Time node it varies with the
+// frame, which analyzeTimeDependence knows.
+struct CompiledValueSubtitles final {
+    CompiledValueOperand cues;
+    bool speakerPrefix = false;
+    friend bool operator==(const CompiledValueSubtitles&, const CompiledValueSubtitles&) = default;
+};
+
 // #342: Group Input and Group Output. One operand per output slot, copied through in order. A slot
 // the node cannot carry as a value (an Image, Mask or ChannelSet, which the expansion joined by
 // edges) holds a constant placeholder that nothing reads.
@@ -547,7 +558,7 @@ using CompiledValueKernel =
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
                  CompiledValueFunctionPlot, CompiledValueAudioAmplitude,
                  CompiledValueImageStatistics, CompiledValueWarpFunction,
-                 CompiledValueAudioTable>;
+                 CompiledValueAudioTable, CompiledValueSubtitles>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -576,6 +587,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                     visit(operand);
             } else if constexpr (std::is_same_v<Step, CompiledValueImageStatistics>) {
                 // The statistics are of a picture: no operand of this plan.
+            } else if constexpr (std::is_same_v<Step, CompiledValueSubtitles>) {
+                visit(step.cues);
             } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {
                 visit(step.amplitudeX);
                 visit(step.amplitudeY);
