@@ -814,7 +814,12 @@ namespace {
             state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "pixelArt"));
             return false;
         }
-        out.pixelArt = *enabled;
+        // Present only when on, as the writer emits it: `false` is not canonical.
+        if (!*enabled) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "pixelArt"));
+            return false;
+        }
+        out.pixelArt = true;
     }
     return true;
 }

@@ -271,6 +271,11 @@ void invalidValuesAreRefused() {
     auto notBoolean = text;
     notBoolean.replace(at, std::string_view("\"pixelArt\": true").size(), "\"pixelArt\": 1");
     expect(!decodeText(notBoolean), "a pixelArt member that is not a Boolean is refused");
+    auto falseMember = text;
+    falseMember.replace(at, std::string_view("\"pixelArt\": true").size(), "\"pixelArt\": false");
+    const auto falseResult = decodeText(falseMember);
+    expect(!falseResult && falseResult.error() == DocumentDecodeError::DomainViolation,
+           "a pixelArt member of false is refused: the member is present only when on");
 }
 
 } // namespace
