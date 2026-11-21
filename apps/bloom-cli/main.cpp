@@ -2,10 +2,14 @@
 #include "runtime.hpp"
 #endif
 
+#include <bloom/commands/export_queue_operations.hpp>
+#include <bloom/commands/transaction.hpp>
 #include <bloom/core/standard_streams.hpp>
 #include <bloom/core/version.hpp>
 #include <bloom/crash/crash_reporter.hpp>
+#include <bloom/document/export_queue.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/host/export_verification.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/host/linked_subtitle_files.hpp>
@@ -79,8 +83,10 @@ void printUsage() {
     std::cerr << "usage: bloom-cli --version | new <file> | open <file> | "
                  "run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
-                 "<dir> [--replace] [--require-device] | export --project <file> (--all | --job "
-                 "<id>...) [--replace] [--save] | "
+                 "<dir> [--replace] [--require-device] [--subtitles srt,vtt,ttml] "
+                 "[--subtitle-nodes <id>,...] | export --project <file> (--all | --job "
+                 "<id>...) [--replace] [--save] [--subtitles srt,vtt,ttml] [--embed-subtitles] "
+                 "[--subtitle-nodes <id>,...] | "
                  "help [<name>] [--json]\n"
                  "Run `bloom-cli help` for every command, operation and tool, or `bloom-cli help "
                  "<command>` for one in full.\n";
@@ -129,6 +135,81 @@ void printUsage() {
     } catch (...) {
         return std::nullopt;
     }
+}
+
+// The subtitle options of render and export (#752): --subtitles srt,vtt,ttml (any order, each
+// once), --embed-subtitles and --subtitle-nodes 12,15. The same rules as the MCP `subtitles`
+// argument.
+struct SubtitleOptions final {
+    std::optional<std::vector<document::ExportSubtitleFormat>> sidecars;
+    bool embed = false;
+    std::optional<std::vector<document::NodeId>> nodes;
+};
+
+[[nodiscard]] std::vector<std::string_view> splitList(std::string_view text) {
+    std::vector<std::string_view> parts;
+    while (true) {
+        const auto comma = text.find(',');
+        parts.push_back(text.substr(0, comma));
+        if (comma == std::string_view::npos)
+            return parts;
+        text.remove_prefix(comma + 1);
+    }
+}
+
+// Reads the --subtitles list; a message when it is not srt, vtt and ttml, each at most once.
+[[nodiscard]] std::optional<std::string> parseSubtitleFormats(std::string_view text,
+                                                              SubtitleOptions& options) {
+    std::vector<document::ExportSubtitleFormat> formats;
+    for (const auto part : splitList(text)) {
+        const auto format = document::parseExportSubtitleFormat(part);
+        if (!format)
+            return "--subtitles formats are srt, vtt and ttml, separated by commas";
+        if (std::ranges::find(formats, *format) != formats.end())
+            return "--subtitles names each format at most once";
+        formats.push_back(*format);
+    }
+    std::ranges::sort(formats);
+    options.sidecars = std::move(formats);
+    return std::nullopt;
+}
+
+[[nodiscard]] std::optional<std::string> parseSubtitleNodes(std::string_view text,
+                                                            SubtitleOptions& options) {
+    std::vector<document::NodeId> nodes;
+    for (const auto part : splitList(text)) {
+        const auto id = unsignedInteger(part);
+        if (!id || *id == 0)
+            return "--subtitle-nodes are positive node ids separated by commas";
+        const auto node = document::NodeId::fromRaw(*id);
+        if (std::ranges::find(nodes, node) != nodes.end())
+            return "--subtitle-nodes names each node at most once";
+        nodes.push_back(node);
+    }
+    if (nodes.size() > document::kExportSubtitleMaximumNodes)
+        return "--subtitle-nodes lists at most " +
+               std::to_string(document::kExportSubtitleMaximumNodes) + " nodes";
+    std::ranges::sort(nodes);
+    options.nodes = std::move(nodes);
+    return std::nullopt;
+}
+
+// The setting the options ask for; absent when none was given. A message when --subtitle-nodes is
+// given without --subtitles or --embed-subtitles.
+[[nodiscard]] std::optional<std::string>
+subtitleSetting(const SubtitleOptions& options, std::optional<document::ExportSubtitles>& setting) {
+    if (!options.sidecars && !options.embed) {
+        if (options.nodes)
+            return "--subtitle-nodes needs --subtitles or --embed-subtitles";
+        return std::nullopt;
+    }
+    document::ExportSubtitles subtitles;
+    if (options.sidecars)
+        subtitles.sidecars = *options.sidecars;
+    subtitles.embed = options.embed;
+    subtitles.nodes = options.nodes;
+    setting = std::move(subtitles);
+    return std::nullopt;
 }
 
 [[nodiscard]] std::optional<output::OutputPresetV1> preset(std::string_view id) {
@@ -277,10 +358,13 @@ frameRange(std::string_view value) {
     bool all = false;
     bool replace = false;
     bool save = false;
+    SubtitleOptions subtitleOptions;
     std::vector<document::ExportJobId> jobs;
     for (int index = 2; index < argc; ++index) {
         const std::string_view option = argv[index];
-        if ((option == "--project" || option == "--job") && index + 1 >= argc) {
+        if ((option == "--project" || option == "--job" || option == "--subtitles" ||
+             option == "--subtitle-nodes") &&
+            index + 1 >= argc) {
             std::cerr << "error[bloom-cli.option]: " << option << " needs a value\n";
             return 2;
         }
@@ -299,6 +383,16 @@ frameRange(std::string_view value) {
             replace = true;
         } else if (option == "--save") {
             save = true;
+        } else if (option == "--subtitles" || option == "--subtitle-nodes") {
+            const auto refusal = option == "--subtitles"
+                                     ? parseSubtitleFormats(argv[++index], subtitleOptions)
+                                     : parseSubtitleNodes(argv[++index], subtitleOptions);
+            if (refusal) {
+                std::cerr << "error[bloom-cli.subtitles]: " << *refusal << '\n';
+                return 2;
+            }
+        } else if (option == "--embed-subtitles") {
+            subtitleOptions.embed = true;
         } else {
             std::cerr << "error[bloom-cli.option]: unknown option " << option << '\n';
             return 2;
@@ -306,6 +400,11 @@ frameRange(std::string_view value) {
     }
     if (!project || all == !jobs.empty()) {
         printUsage();
+        return 2;
+    }
+    std::optional<document::ExportSubtitles> subtitles;
+    if (const auto refusal = subtitleSetting(subtitleOptions, subtitles)) {
+        std::cerr << "error[bloom-cli.subtitles]: " << *refusal << '\n';
         return 2;
     }
     auto opened = scripting::Session::open(*project);
@@ -324,6 +423,30 @@ frameRange(std::string_view value) {
             std::cerr << "error[bloom-cli.export."
                       << static_cast<int>(bloom::host::ExportUnavailableCode::UnknownJob)
                       << "]: The job does not exist: " << id.value() << '\n';
+            return 5;
+        }
+    }
+    // #752: --subtitles and --embed-subtitles replace the subtitles setting of every output of the
+    // selected jobs for this run, in one edit. The saved settings are put back exactly (the same
+    // settings records, in one edit) before --save writes the project.
+    std::vector<std::pair<document::ExportOutputId, document::ExportOutputSettings>> original;
+    if (subtitles) {
+        const auto current = session->snapshot();
+        bloom::commands::Transaction change("Export subtitles for this run", current.revision());
+        const auto queued = current.project().exportJobs();
+        for (const auto& job : queued) {
+            if (!all && std::ranges::find(jobs, job.id) == jobs.end())
+                continue;
+            for (const auto& output : job.outputs) {
+                auto changed = output.settings;
+                changed.subtitles = subtitles;
+                change.emplace<bloom::commands::SetExportOutputSettings>(output.id,
+                                                                         std::move(changed));
+                original.emplace_back(output.id, output.settings);
+            }
+        }
+        if (!original.empty() && !session->execute(std::move(change)).succeeded()) {
+            std::cerr << "error[bloom-cli.subtitles]: the subtitle settings were refused\n";
             return 5;
         }
     }
@@ -380,6 +503,15 @@ frameRange(std::string_view value) {
                 status = 6;
         std::cout << scripting::exportEventsJson(service.events(0)) << '\n';
     }
+    if (!original.empty()) {
+        bloom::commands::Transaction restore("Restore the saved export subtitles",
+                                             session->snapshot().revision());
+        for (const auto& [output, settings] : original)
+            restore.emplace<bloom::commands::SetExportOutputSettings>(output, settings);
+        if (!session->execute(std::move(restore)).succeeded())
+            std::cerr << "warning[bloom-cli.subtitles]: the saved subtitle settings could not be "
+                         "restored\n";
+    }
     if (save) {
         const auto saved = session->save();
         if (!saved.succeeded()) {
@@ -400,10 +532,15 @@ frameRange(std::string_view value) {
     std::filesystem::path outputDirectory;
     bool replace = false;
     bool requireDevice = false;
+    SubtitleOptions subtitleOptions;
     for (int index = 2; index < argc; ++index) {
         const std::string_view option = argv[index];
         if (option == "--replace") {
             replace = true;
+            continue;
+        }
+        if (option == "--embed-subtitles") {
+            subtitleOptions.embed = true;
             continue;
         }
         if (option == "--require-device") {
@@ -411,7 +548,8 @@ frameRange(std::string_view value) {
             continue;
         }
         if ((option == "--project" || option == "--out" || option == "--preset" ||
-             option == "--frame" || option == "--range") &&
+             option == "--frame" || option == "--range" || option == "--subtitles" ||
+             option == "--subtitle-nodes") &&
             index + 1 >= argc) {
             std::cerr << "error[bloom-cli.option]: " << option << " needs a value\n";
             return 2;
@@ -438,6 +576,14 @@ frameRange(std::string_view value) {
             }
         } else if (option == "--out") {
             outputDirectory = argv[++index];
+        } else if (option == "--subtitles" || option == "--subtitle-nodes") {
+            const auto refusal = option == "--subtitles"
+                                     ? parseSubtitleFormats(argv[++index], subtitleOptions)
+                                     : parseSubtitleNodes(argv[++index], subtitleOptions);
+            if (refusal) {
+                std::cerr << "error[bloom-cli.subtitles]: " << *refusal << '\n';
+                return 2;
+            }
         } else {
             std::cerr << "error[bloom-cli.option]: unknown option " << option << '\n';
             return 2;
@@ -446,6 +592,17 @@ frameRange(std::string_view value) {
     if ((frame.has_value() == range.has_value()) || !selectedPreset.has_value() ||
         outputDirectory.empty()) {
         printUsage();
+        return 2;
+    }
+    std::optional<document::ExportSubtitles> subtitles;
+    if (const auto refusal = subtitleSetting(subtitleOptions, subtitles)) {
+        std::cerr << "error[bloom-cli.subtitles]: " << *refusal << '\n';
+        return 2;
+    }
+    // An image carries no subtitle track: sidecar files are the delivery for a render.
+    if (subtitles && subtitles->embed) {
+        std::cerr << "error[bloom-cli.subtitles]: --embed-subtitles needs a movie: "
+                  << bloom::host::kSubtitleEmbedUnsupportedReason << '\n';
         return 2;
     }
     std::unique_ptr<scripting::Session> session;
@@ -504,15 +661,20 @@ frameRange(std::string_view value) {
     auto gpuProvider = bloom::host::GpuExportProvider::create(std::move(gpuOptions));
     ExportProviderTeardown providerTeardown(gpuProvider);
     gpuProvider->prepare(scheduler);
-    const auto result = scripting::Render::run(*session, scheduler, compiler,
-                                               {.composition = composition,
-                                                .frame = frame,
-                                                .range = range,
-                                                .preset = *selectedPreset,
-                                                .destination = destination,
-                                                .replaceExisting = replace,
-                                                .requireDevice = requireDevice},
-                                               {}, gpuProvider);
+    const auto result =
+        scripting::Render::run(*session, scheduler, compiler,
+                               {.composition = composition,
+                                .frame = frame,
+                                .range = range,
+                                .preset = *selectedPreset,
+                                .destination = destination,
+                                .replaceExisting = replace,
+                                .requireDevice = requireDevice,
+                                .workerLimits = {},
+                                .loudness = std::nullopt,
+                                .encoder = document::ExportEncoderPreference::Automatic,
+                                .subtitles = subtitles},
+                               {}, gpuProvider);
     providerTeardown.finish();
     std::cout << result.preservationReport << '\n';
     // Which device evaluated the frames (#452): a CPU reference frame is reported, never hidden.
@@ -532,6 +694,21 @@ frameRange(std::string_view value) {
         std::cerr << "warning[bloom-cli.render.cpu-reference]: " << result.cpuReferenceFrames
                   << " frame(s) were evaluated on the CPU reference path; pass --require-device "
                      "to fail instead\n";
+    // #752: every subtitle sidecar the render delivered, with its cue count and SHA-256.
+    for (const auto& track : result.subtitles) {
+        std::cout << "subtitles node=" << track.node.value() << " language=" << track.language
+                  << " format="
+                  << (track.sidecar ? document::exportSubtitleFormatToken(*track.sidecar)
+                                    : std::string_view("embedded"))
+                  << " cues=" << track.cues << " path=";
+        const auto path = track.path.u8string();
+        std::cout << std::string_view(reinterpret_cast<const char*>(path.data()), path.size());
+        if (track.digest) {
+            const auto hex = track.digest->toLowercaseHex();
+            std::cout << " sha256=" << std::string_view(hex.data(), hex.size());
+        }
+        std::cout << '\n';
+    }
     std::cout << "rendered " << result.publishedFrames << " frame(s) to " << outputDirectory
               << '\n';
     return 0;

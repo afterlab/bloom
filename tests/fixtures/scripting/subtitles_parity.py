@@ -3,8 +3,13 @@ stdio server), Python (bloom.ops.subtitles and bloom.data.subtitles) and `bloom-
 same lists from the same arguments, take the same time forms (frames, [n, d] seconds and
 "HH:MM:SS.mmm"), read data files (fromFile), and refuse the same subtitle limits naming the bound.
 
+The #752 export settings travel the same way: the `subtitles` argument of render and export
+(MCP), bloom.render's subtitles (Python), bloom-cli render and export --subtitles, an output's
+saved settings, and the script export.script writes.
+
 Arguments: bloom-mcp, bloom-cli, and the staged Python package folder (or "-" without Python).
 """
+import hashlib
 import json
 import os
 import pathlib
@@ -29,6 +34,28 @@ ASS = ("[Script Info]\nScriptType: v4.00+\nPlayResX: 384\nPlayResY: 288\n\n"
        "Style: Default,Arial,20,&H00FFFFFF,0,0,2\n\n"
        "[Events]\nFormat: Layer, Start, End, Style, Text\n"
        "Dialogue: 0,0:00:01.00,0:00:02.00,Default,{\\move(0,0,10,10)}Moving\n")
+
+
+def sha256(path):
+    return 'sha256:' + hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+
+def settings_json(subtitles=None):
+    """A complete PNG sequence output settings object, with the optional subtitles setting."""
+    settings = {'format': 'png', 'codecProfile': '', 'compression': '', 'outputColorSpace': '',
+                'display': '', 'view': '', 'bakeLook': True, 'includeAudio': False,
+                'audioSampleRate': 48000, 'encoder': 'automatic',
+                'naming': {'framePadding': 4, 'pattern': '<base>.####.<ext>'}}
+    if subtitles is not None:
+        settings['subtitles'] = subtitles
+    return settings
+
+
+def png_output(path, subtitles=None):
+    return json.dumps({'preset': 'builtin:png-sequence', 'settings': settings_json(subtitles),
+                       'destination': {'portability': 'project-relative', 'path': path,
+                                       'overwrite': 'replace'},
+                       'enabled': True, 'importIntoAssets': False})
 
 
 def outputs(result, name):
@@ -301,6 +328,111 @@ class Mcp(unittest.TestCase):
                           'unit': 'bytes'})
 
 
+    def test_render_and_export_deliver_sidecars(self):
+        node, _ = self.add([{'start': 0, 'end': '00:00:00.500', 'text': 'Hello'},
+                            {'start': '00:00:00.500', 'end': '00:00:01.000', 'text': 'World'}])
+        frames = self.root / 'frames.png'
+        # Formats may come in any order; the result lists the tracks in format order.
+        rendered = self.server.tool('render', {
+            'composition': 1, 'first': 0, 'last': 2, 'preset': 'PngRgba8SrgbV1',
+            'destination': str(frames), 'overwrite': 'replace',
+            'subtitles': {'sidecar': ['vtt', 'srt'], 'nodes': [node]}})
+        self.assertNotIn('error', rendered, json.dumps(rendered))
+        tracks = rendered['subtitles']
+        self.assertEqual([track['format'] for track in tracks], ['srt', 'vtt'])
+        listed = {item['path']: item['digest'] for item in rendered['files']}
+        for track in tracks:
+            self.assertEqual(track['node'], node)
+            self.assertEqual(track['cues'], 1)  # frames 0-2 show only the first cue
+            self.assertEqual(track['bytes'], os.path.getsize(track['path']))
+            self.assertEqual(track['sha256'], sha256(track['path']))
+            self.assertEqual(listed[track['path']], sha256(track['path']))
+            self.assertIn('Hello', pathlib.Path(track['path']).read_text())
+        self.assertEqual(len(rendered['files']), 3 + 2)
+        # A render without the argument delivers none.
+        plain = self.server.tool('render', {
+            'composition': 1, 'first': 0, 'last': 0, 'preset': 'PngRgba8SrgbV1',
+            'destination': str(self.root / 'plain.png'), 'overwrite': 'replace'})
+        self.assertNotIn('subtitles', plain)
+        self.assertEqual(len(plain['files']), 1)
+        # Export takes the same argument for a movie.
+        exported = self.server.tool('export', {
+            'composition': 1, 'first': 0, 'last': 11, 'preset': 'builtin:prores-422hq-mov',
+            'destination': str(self.root / 'movie.mov'), 'overwrite': 'replace',
+            'subtitles': {'sidecar': ['ttml', 'srt']}})
+        self.assertNotIn('error', exported, json.dumps(exported))
+        self.assertEqual([track['format'] for track in exported['subtitles']], ['srt', 'ttml'])
+        digests = {item['path']: item['digest'] for item in exported['files']}
+        for track in exported['subtitles']:
+            self.assertEqual(digests[track['path']], sha256(track['path']))
+            self.assertEqual(track['sha256'], sha256(track['path']))
+        self.assertEqual({item['path'] for item in exported['files']},
+                         {str(self.root / 'movie.mov')} |
+                         {track['path'] for track in exported['subtitles']})
+
+    def test_subtitles_argument_is_checked(self):
+        self.add([{'start': 0, 'end': '00:00:01.000', 'text': 'Hello'}])
+        destination = str(self.root / 'refused.mov')
+        def refused(subtitles, preset='builtin:prores-422hq-mov', tool='export', **extra):
+            response = self.server.tool(tool, {
+                'composition': 1, 'frame': 0, 'preset': preset, 'destination': destination,
+                'subtitles': subtitles, **extra})
+            self.assertIn('error', response, json.dumps(subtitles))
+            self.assertEqual(response['error']['code'], -32602, json.dumps(response))
+            return response['error']['message']
+        self.assertIn('srt, vtt and ttml', refused({'sidecar': ['ass']}))
+        self.assertIn('at most once', refused({'sidecar': ['srt', 'srt']}))
+        self.assertIn('sidecar format', refused({}))
+        self.assertIn('sidecar format', refused({'sidecar': []}))
+        self.assertIn('sidecar format', refused({'embed': False}))
+        self.assertIn('Unknown member', refused({'sidecar': ['srt'], 'format': 'srt'}))
+        self.assertIn('1 to 256', refused({'sidecar': ['srt'], 'nodes': list(range(1, 258))}))
+        self.assertIn('1 to 256', refused({'sidecar': ['srt'], 'nodes': []}))
+        self.assertIn('positive', refused({'sidecar': ['srt'], 'nodes': [0]}))
+        self.assertIn('at most once', refused({'sidecar': ['srt'], 'nodes': [3, 3]}))
+        refused('srt')
+        # A container with no subtitle track refuses embed, naming the sidecar formats.
+        for preset in ('builtin:dnxhr-hq-mxf', 'builtin:wav', 'builtin:png-sequence'):
+            self.assertIn('SRT, WebVTT or TTML sidecar files',
+                          refused({'sidecar': ['srt'], 'embed': True}, preset=preset))
+        self.assertIn('SRT, WebVTT or TTML sidecar files',
+                      refused({'embed': True}, preset='PngRgba8SrgbV1', tool='render'))
+        # Nothing was written by a refused call.
+        self.assertEqual(list(self.root.glob('*')), [])
+
+    def test_export_script_reproduces_the_subtitles_setting(self):
+        node, _ = self.add([{'start': 0, 'end': '00:00:01.000', 'text': 'Hello'}])
+        setting = {'sidecar': ['srt', 'vtt'], 'embed': False, 'nodes': [str(node)]}
+        added = self.server.transact({'op': 'bloom.export.add-job', 'args': {
+            'composition': 1, 'range': 'frame', 'first': 0,
+            'outputs': [png_output('Exports/{name}.png', setting)]}})
+        self.assertTrue(added['succeeded'], json.dumps(added))
+        job = outputs(added, 'exportJob')[0]
+        status = self.server.tool('export.status', {})
+        view = next(item for item in status['jobs'] if item['id'] == str(job))
+        self.assertEqual(view['outputs'][0]['subtitles'],
+                         {'sidecar': ['srt', 'vtt'], 'embed': False, 'nodes': [node]})
+        for form in ('python', 'cli-json'):
+            script = self.server.tool('export.script', {'job': job, 'format': form})['script']
+            self.assertIn('subtitles', script, form)
+            self.assertIn('sidecar', script, form)
+            self.assertIn('vtt', script, form)
+        script = self.server.tool('export.script', {'job': job, 'format': 'cli-json'})['script']
+        self.assertIn('\\"sidecar\\":[\\"srt\\",\\"vtt\\"],\\"embed\\":false', script)
+        # Running the generated script (without its start) recreates the setting.
+        recreated = json.loads(self.server.tool(
+            'export.script', {'job': job, 'format': 'cli-json'})['script'])
+        recreated = [operation for operation in recreated if operation['op'] != 'export.start']
+        recreated.append({'op': 'export.status', 'args': {}})
+        with tempfile.TemporaryDirectory(prefix='bloom-subtitles-script-') as directory:
+            script = pathlib.Path(directory) / 'script.json'
+            script.write_text(json.dumps(recreated))
+            run = subprocess.run([CLI, 'run', str(script)], capture_output=True, timeout=120)
+        self.assertEqual(run.returncode, 0, run.stderr.decode())
+        self.assertIn('"subtitles":{"sidecar":["srt","vtt"],"embed":false,"nodes":[',
+                      run.stdout.decode())
+
+
 @unittest.skipIf(PYTHON == '-', 'built without Python')
 class Python(unittest.TestCase):
     """The same steps from Python: bloom.ops.subtitles and bloom.data.subtitles."""
@@ -368,6 +500,153 @@ class Python(unittest.TestCase):
         detail = raised.exception.diagnostics[0]
         self.assertEqual(dict(detail['limit']), {'name': 'subtitleCueTextBytes', 'value': 4096,
                                                  'actual': 4097})
+
+    def add_cues(self):
+        added = bloom.ops.layer.add_subtitles(cues=(
+            {'start': 0, 'end': '00:00:00.500', 'text': 'Hello'},
+            {'start': '00:00:00.500', 'end': '00:00:01.000', 'text': 'World'}))
+        return outputs(added, 'subtitlesNode')[0]
+
+    def test_render_delivers_sidecars(self):
+        node = self.add_cues()
+        result = bloom.render.range(0, 2, out=self.root / 'frames.png',
+                                    subtitles={'sidecar': ['vtt', 'srt'], 'nodes': [node]})
+        self.assertEqual([track.format for track in result.subtitles], ['srt', 'vtt'])
+        digests = {item.path: item.digest for item in result.files}
+        for track in result.subtitles:
+            self.assertEqual((track.node, track.cues), (node, 1))  # frames 0-2: the first cue
+            self.assertEqual(track.bytes, os.path.getsize(track.path))
+            self.assertEqual(track.sha256, sha256(track.path))
+            self.assertEqual(digests[track.path], sha256(track.path))
+            self.assertIn('Hello', pathlib.Path(track.path).read_text())
+        self.assertEqual(len(result.files), 3 + 2)
+        # One frame, and no subtitles at all.
+        single = bloom.render.frame(0, out=self.root / 'one.png', subtitles={'sidecar': ['ttml']})
+        self.assertEqual([track.format for track in single.subtitles], ['ttml'])
+        plain = bloom.render.frame(0, out=self.root / 'plain.png')
+        self.assertEqual((plain.subtitles, len(plain.files)), ((), 1))
+
+    def test_render_refuses_a_bad_subtitles_dict(self):
+        self.add_cues()
+        for subtitles in ({'sidecar': ['ass']}, {'sidecar': ['srt', 'srt']}, {}, {'sidecar': []},
+                          {'embed': False}, {'sidecar': ['srt'], 'format': 'srt'},
+                          {'sidecar': ['srt'], 'nodes': []}, {'sidecar': ['srt'], 'nodes': [0]},
+                          {'sidecar': ['srt'], 'nodes': [2, 2]}, 'srt', ['srt'],
+                          {'sidecar': ['srt'], 'nodes': list(range(1, 258))}):
+            with self.assertRaises(ValueError, msg=repr(subtitles)):
+                bloom.render.frame(0, out=self.root / 'bad.png', subtitles=subtitles)
+        # An image carries no track: embed names the sidecar formats.
+        with self.assertRaises(RuntimeError) as raised:
+            bloom.render.frame(0, out=self.root / 'embed.png',
+                               subtitles={'sidecar': ['srt'], 'embed': True})
+        self.assertIn('SRT, WebVTT or TTML sidecar files', str(raised.exception))
+        self.assertEqual(list(self.root.glob('*')), [])
+
+    def saved_project(self, subtitles=None):
+        """A saved project with the cues and one PNG output export job."""
+        node = self.add_cues()
+        setting = None if subtitles is None else {**subtitles, 'nodes': [str(node)]}
+        added = bloom.ops.export.add_job(composition=bloom.context.composition, range='frame',
+                                         first=0, outputs=(png_output('Exports/{name}.png',
+                                                                     setting),))
+        self.assertTrue(added['succeeded'], added)
+        project = self.root / 'shot.bloom'
+        self.host.save(str(project))
+        return project
+
+    def test_a_saved_output_setting_round_trips_and_exports(self):
+        project = self.saved_project({'sidecar': ['srt', 'vtt'], 'embed': False})
+        command = subprocess.run([CLI, 'export', '--project', str(project), '--all'],
+                                 capture_output=True, timeout=180)
+        self.assertEqual(command.returncode, 0, command.stderr.decode())
+        report = json.loads(command.stdout.decode().splitlines()[-1])
+        delivered = [track for event in report['events'] for output in event.get('outputs', [])
+                     for track in output.get('subtitles', [])]
+        self.assertEqual(sorted(track['format'] for track in delivered), ['srt', 'vtt'], report)
+        for track in delivered:
+            self.assertEqual('sha256:' + track['sha256'], sha256(track['path']))
+            self.assertEqual(track['cues'], 1)  # the one frame shows the first cue
+        self.assertEqual(len(list((self.root / 'Exports').glob('*.srt'))), 1)
+        self.assertEqual(len(list((self.root / 'Exports').glob('*.vtt'))), 1)
+
+    def test_cli_export_subtitles_option(self):
+        project = self.saved_project()
+        refused = subprocess.run([CLI, 'export', '--project', str(project), '--all',
+                                  '--subtitles', 'srt,ass'], capture_output=True, timeout=60)
+        self.assertEqual(refused.returncode, 2)
+        self.assertIn(b'error[bloom-cli.subtitles]', refused.stderr)
+        for arguments in (['--subtitles', 'srt,srt'], ['--subtitle-nodes', '3'],
+                          ['--subtitles', 'srt', '--subtitle-nodes', '0'],
+                          ['--subtitles', 'srt', '--subtitle-nodes', '4,4']):
+            result = subprocess.run([CLI, 'export', '--project', str(project), '--all'] + arguments,
+                                    capture_output=True, timeout=60)
+            self.assertEqual(result.returncode, 2, arguments)
+            self.assertIn(b'error[bloom-cli.subtitles]', result.stderr, arguments)
+        self.assertEqual(list((self.root / 'Exports').glob('*')) if (self.root / 'Exports').exists()
+                         else [], [])
+        # vtt,srt in any order; the output had no subtitles setting.
+        command = subprocess.run([CLI, 'export', '--project', str(project), '--all',
+                                  '--subtitles', 'vtt,srt,ttml'],
+                                 capture_output=True, timeout=180)
+        self.assertEqual(command.returncode, 0, command.stderr.decode())
+        for extension in ('srt', 'vtt', 'ttml'):
+            self.assertEqual(len(list((self.root / 'Exports').glob('*.' + extension))), 1,
+                             extension)
+        # The saved project is untouched: a run without the option writes no sidecar.
+        for sidecar in (self.root / 'Exports').glob('*.*t*'):
+            if sidecar.suffix != '.png':
+                sidecar.unlink()
+        again = subprocess.run([CLI, 'export', '--project', str(project), '--all', '--replace'],
+                               capture_output=True, timeout=180)
+        self.assertEqual(again.returncode, 0, again.stderr.decode())
+        self.assertEqual([item for item in (self.root / 'Exports').glob('*')
+                          if item.suffix != '.png'], [])
+        # --save writes back the settings as they were saved, not the run's subtitles.
+        before = project.read_bytes()
+        saved = subprocess.run([CLI, 'export', '--project', str(project), '--all', '--replace',
+                                '--save', '--subtitles', 'srt'], capture_output=True, timeout=180)
+        self.assertEqual(saved.returncode, 0, saved.stderr.decode())
+        self.assertEqual(len(list((self.root / 'Exports').glob('*.srt'))), 1)
+        self.assertNotIn(b'"subtitles"', project.read_bytes())
+        self.assertEqual(project.read_bytes(), before)
+
+    def test_cli_render_subtitles_option(self):
+        self.add_cues()
+        project = self.root / 'scene.bloom'
+        self.host.save(str(project))
+        render = [CLI, 'render', '--project', str(project), '--range', '0-2', '--preset',
+                  'PngRgba8SrgbV1']
+        command = subprocess.run(render + ['--out', str(self.root / 'frames'),
+                                           '--subtitles', 'vtt,srt'],
+                                 capture_output=True, timeout=180)
+        self.assertEqual(command.returncode, 0, command.stderr.decode())
+        lines = [line for line in command.stdout.decode().splitlines()
+                 if line.startswith('subtitles node=')]
+        self.assertEqual(len(lines), 2, command.stdout.decode())
+        self.assertIn('format=srt', lines[0])
+        self.assertIn('format=vtt', lines[1])
+        for line, extension in zip(lines, ('srt', 'vtt')):
+            fields = dict(item.split('=', 1) for item in line.split()[1:])
+            self.assertEqual(fields['cues'], '1')  # frames 0-2 show the first cue only
+            self.assertEqual('sha256:' + fields['sha256'], sha256(fields['path']))
+            self.assertTrue(fields['path'].endswith('.' + extension), line)
+        # No option, no sidecar.
+        plain = subprocess.run(render + ['--out', str(self.root / 'plain')],
+                               capture_output=True, timeout=180)
+        self.assertEqual(plain.returncode, 0, plain.stderr.decode())
+        self.assertEqual(sorted(item.suffix for item in (self.root / 'plain').glob('*')),
+                         ['.png'] * 3)
+        for arguments, message in ((['--subtitles', 'srt,ass'], b'srt, vtt and ttml'),
+                                   (['--subtitles', 'srt,srt'], b'at most once'),
+                                   (['--subtitle-nodes', '3'], b'needs --subtitles'),
+                                   (['--subtitles', 'srt', '--subtitle-nodes', 'x'], b'node ids'),
+                                   (['--subtitles', 'srt', '--embed-subtitles'],
+                                    b'SRT, WebVTT or TTML sidecar files')):
+            refused = subprocess.run(render + ['--out', str(self.root / 'refused')] + arguments,
+                                     capture_output=True, timeout=60)
+            self.assertEqual(refused.returncode, 2, arguments)
+            self.assertIn(message, refused.stderr, arguments)
+        self.assertFalse((self.root / 'refused').exists())
 
 
 class Cli(unittest.TestCase):
