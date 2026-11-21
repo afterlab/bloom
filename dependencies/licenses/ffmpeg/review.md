@@ -54,6 +54,12 @@ The configure vector is checked byte-for-byte against
   `libsvtav1` (AV1), `libvpx-vp9` (VP9), `libopus` (Opus), `prores_ks`, DNxHD, TIFF, AAC, the
   NVIDIA NVENC (`h264_nvenc`, `hevc_nvenc`) and VA-API H.264/HEVC hardware encoders, and the
   explicitly enumerated native PCM encoders.
+- Subtitle tracks (issue #752): the `movtext` encoder (3GPP Timed Text, codec name `mov_text`) for
+  MOV and MP4 and the `webvtt` encoder for WebM, both FFmpeg-native LGPL text encoders with no
+  external library, no patent claim and no new license duty. They take ASS dialogue text from the
+  worker and write text samples only. No subtitle decoder is enabled: the worker's reopen check
+  reads the text samples' bytes from the demuxed packets directly (a 3GPP Timed Text sample's
+  16-bit length and text, a WebVTT block's payload), so the decode surface does not grow.
 - Parsers and bitstream filters are limited to the entries needed by those paths; the file
   protocol is the only protocol.
 - Programs, documentation, network access, autodetection, and all unspecified components remain

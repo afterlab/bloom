@@ -40,9 +40,9 @@
     "modified": true,
     "reviewRecord": {
       "path": "dependencies/licenses/ffmpeg/review.md",
-      "sha256": "sha256:1125922e5a54fcb334580c95d7006582ecd0ae6b7ac0cc59ae33eeb7a5de12a7"
+      "sha256": "sha256:b2f8f47f8e4b850429672d06591ed1ce22abd808b3266ee3777256d77cfc0df9"
     },
-    "reviewedAt": "2026-11-02"
+    "reviewedAt": "2026-11-22"
   },
   "patches": [
     {
@@ -149,6 +149,11 @@
           "reason": "Opus audio encode through the libopus wrapper (libopus 1.5.2 is a static archive linked into libavcodec) and FFmpeg's native Opus decoder and parser for the reopen check"
         },
         {
+          "id": "bloom.feature.ffmpeg-subtitle-tracks",
+          "state": "enabled",
+          "reason": "3GPP Timed Text (movtext, FFmpeg's mov_text) and WebVTT encoders: an export's cue track embedded in MOV, MP4 and WebM; the reopen check reads the track's packets back through the existing MOV and Matroska demuxers, so no subtitle decoder is enabled"
+        },
+        {
           "id": "bloom.feature.ffmpeg-svt-av1",
           "state": "enabled",
           "reason": "AV1 software encode (8-bit and 10-bit) through the libsvtav1 wrapper; SVT-AV1 4.2.0 is a static archive linked into libavcodec"
@@ -192,6 +197,7 @@
         "bloom.capability.ffmpeg.nvdec-decode",
         "bloom.capability.ffmpeg.opus-encode-libopus",
         "bloom.capability.ffmpeg.prores-preview",
+        "bloom.capability.ffmpeg.subtitle-tracks",
         "bloom.capability.ffmpeg.vaapi",
         "bloom.capability.ffmpeg.vp9-decode",
         "bloom.capability.ffmpeg.vp9-software-libvpx",

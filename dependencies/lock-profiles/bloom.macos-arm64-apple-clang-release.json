@@ -354,6 +354,7 @@
         "bloom.capability.ffmpeg.hevc-software-kvazaar",
         "bloom.capability.ffmpeg.opus-encode-libopus",
         "bloom.capability.ffmpeg.prores-preview",
+        "bloom.capability.ffmpeg.subtitle-tracks",
         "bloom.capability.ffmpeg.vp9-decode",
         "bloom.capability.ffmpeg.vp9-software-libvpx",
         "bloom.capability.ffmpeg.webm-mux"

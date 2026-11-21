@@ -120,6 +120,8 @@
 --enable-encoder=pcm_u32le
 --enable-encoder=pcm_u8
 --enable-encoder=pcm_vidc
+--enable-encoder=movtext
+--enable-encoder=webvtt
 --enable-parser=aac
 --enable-parser=ac3
 --enable-parser=av1

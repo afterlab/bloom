@@ -207,6 +207,13 @@ NVENC uses nv-codec-headers, recorded with `header-only` linkage and an FFmpeg `
 superbuild installs the MIT headers and `ffnvcodec.pc` (Linux and Windows), and FFmpeg's NVENC
 encoders load the NVIDIA driver at run time, so no NVIDIA code is linked or shipped.
 
+Embedded subtitle tracks (issue #752) add two FFmpeg-native encoders and nothing else: `movtext`
+(3GPP Timed Text in MOV and MP4) and `webvtt` (WebVTT in WebM). The lock records them as the
+`bloom.feature.ffmpeg-subtitle-tracks` feature decision and the
+`bloom.capability.ffmpeg.subtitle-tracks` capability of every profile; the reviewed allow-list is
+`dependencies/licenses/ffmpeg/review.md`. No decoder is added, since the reopen check reads the
+text samples from the demuxed packets.
+
 FFmpeg's x86 SIMD is enabled. NASM 2.16.03 is a source-built, build-host-only tool recorded with
 `executable` linkage and no shipping roles; FFmpeg depends on it with the `build` relationship. It is
 installed into a superbuild-private `tools/` directory rather than the dependency prefix and is
