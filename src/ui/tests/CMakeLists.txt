@@ -1670,6 +1670,18 @@ foreach(scale IN ITEMS 1 1.5)
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
+# #763: each scale variant runs at its scale. Registered the way every UI scale variant is, and
+# reads the platform, device pixel ratio, grab size and reduced-motion switch the process got.
+add_executable(bloom_ui_test_display_scale_test test_display_scale_tests.cpp)
+target_link_libraries(bloom_ui_test_display_scale_test PRIVATE bloom_ui Qt6::Widgets)
+bloom_enable_warnings(bloom_ui_test_display_scale_test)
+foreach(scale IN ITEMS 1 1.5 2)
+    bloom_add_test(NAME bloom.ui.test-display-scale.dpr${scale}
+        COMMAND bloom_ui_test_display_scale_test --scale ${scale}
+        LABELS ui unit TIMEOUT 30
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
+endforeach()
+
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
 target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_window_golden_test PRIVATE
@@ -1682,7 +1694,8 @@ bloom_enable_warnings(bloom_window_golden_test)
 # references exist.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(scale IN ITEMS 1 1.5)
-        bloom_add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test
+        bloom_add_test(NAME bloom.ui.window_golden.dpr${scale}
+            COMMAND bloom_window_golden_test --scale ${scale}
             LABELS ui golden TIMEOUT 60
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
     endforeach()

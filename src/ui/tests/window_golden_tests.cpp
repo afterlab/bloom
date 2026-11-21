@@ -16,6 +16,14 @@ int run(int argc, char** argv) {
         std::cerr << "Goldens require DPR 1 or 1.5\n";
         return 1;
     }
+    // #763: the registration names its scale; a window at another ratio would be compared with the
+    // other golden and pass for the wrong reason.
+    const auto scaleArgument = app.arguments().indexOf(QStringLiteral("--scale"));
+    if (scaleArgument < 0 || scaleArgument + 1 >= app.arguments().size() ||
+        app.arguments().at(scaleArgument + 1).toDouble() != ratio) {
+        std::cerr << "The window runs at DPR " << ratio << ", not the --scale it was registered for\n";
+        return 1;
+    }
     if (app.arguments().contains("--layout-report")) {
         for (auto* widget : fixture.window->findChildren<QWidget*>()) {
             if (widget->property("collapseThreshold").isValid()) {
