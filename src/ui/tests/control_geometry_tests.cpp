@@ -39,6 +39,9 @@ struct Control {
     QRectF body; // In the root's coordinates.
     Recipe recipe = Recipe::None;
     bool cell = false;
+    // The part of the body on screen (root coordinates): the body itself unless a parent's
+    // viewport clips it, as a row partly scrolled past the edge of its list.
+    QRectF onScreen;
 };
 
 // A dense strip's fixed-pitch cell: a timeline layer switch. The tools are ordinary Control-sized
@@ -91,10 +94,43 @@ std::vector<Control> controlsIn(QWidget& root, const bool onScreenOnly = true) {
         // narrower box.
         const auto* value = qobject_cast<kit::KValueField*>(widget);
         const QRectF body = value != nullptr ? value->cellRect() : kit::controlBody(*widget);
-        found.push_back({widget, body.translated(widget->mapTo(&root, QPoint())), *recipe,
-                         isCell(*widget)});
+        const QPointF origin(widget->mapTo(&root, QPoint()));
+        const QRectF placed = body.translated(origin);
+        const QRectF onScreen =
+            onScreenOnly ? placed.intersected(
+                               QRectF(widget->visibleRegion().boundingRect()).translated(origin))
+                         : placed;
+        if (onScreenOnly && onScreen.isEmpty())
+            continue;
+        found.push_back({widget, placed, *recipe, isCell(*widget), onScreen});
     }
     return found;
+}
+
+// Bodies whose on-screen parts overlap vertically are one row, and one row has one centre. A fully
+// visible control's on-screen part is its body, so it is measured as it always was; only the part
+// of a clipped row that a viewport hides is left out, because it is not on the row beside it.
+std::vector<QString> rowCentreFailures(const std::vector<Control>& controls) {
+    std::vector<QString> failures;
+    for (std::size_t a = 0; a < controls.size(); ++a)
+        for (std::size_t b = a + 1; b < controls.size(); ++b) {
+            const auto& first = controls[a].onScreen;
+            const auto& second = controls[b].onScreen;
+            const bool overlap = first.top() < second.bottom() && second.top() < first.bottom();
+            const qreal firstCentre = controls[a].body.center().y();
+            const qreal secondCentre = controls[b].body.center().y();
+            if (overlap && std::abs(firstCentre - secondCentre) > 0.01)
+                failures.push_back(
+                    QStringLiteral("%1 %2 and %3 %4 share a row but not a center "
+                                   "(%5 vs %6)")
+                        .arg(QString::fromLatin1(controls[a].widget->metaObject()->className()))
+                        .arg(controls[a].widget->objectName())
+                        .arg(QString::fromLatin1(controls[b].widget->metaObject()->className()))
+                        .arg(controls[b].widget->objectName())
+                        .arg(firstCentre)
+                        .arg(secondCentre));
+        }
+    return failures;
 }
 
 QString nameOf(const QWidget& widget) {
@@ -169,20 +205,51 @@ int run(int argc, char** argv) {
                      QStringLiteral(" shows %1 inside its body, not the recipe's %2")
                          .arg(seen.name(), wanted.name()));
         }
-        // Bodies that overlap vertically are one row, and one row has one centre.
-        for (std::size_t a = 0; a < controls.size(); ++a)
-            for (std::size_t b = a + 1; b < controls.size(); ++b) {
-                const auto& first = controls[a].body;
-                const auto& second = controls[b].body;
-                const bool overlap = first.top() < second.bottom() && second.top() < first.bottom();
-                if (overlap && std::abs(first.center().y() - second.center().y()) > 0.01)
-                    fail(label + ": " + nameOf(*controls[a].widget) + " and " +
-                         nameOf(*controls[b].widget) +
-                         QStringLiteral(" share a row but not a center (%1 vs %2)")
-                             .arg(first.center().y())
-                             .arg(second.center().y()));
-            }
+        for (const auto& failure : rowCentreFailures(controls))
+            fail(label + ": " + failure);
     };
+
+    // The row rule itself, on planted layouts: two fully visible controls a few pixels apart fail;
+    // a control a viewport clips beside a footer below the viewport does not; the same control
+    // painting over the footer (not clipped) fails.
+    {
+        const int h = controlHeight;
+        QWidget root;
+        root.resize(400, 10 * h);
+        auto* first = new kit::KDropdown(&root);
+        first->addItem(QStringLiteral("First"));
+        first->setGeometry(0, 0, 120, h);
+        auto* second = new kit::KDropdown(&root);
+        second->addItem(QStringLiteral("Second"));
+        second->setGeometry(140, 3, 120, h);
+        root.show();
+        QApplication::processEvents();
+        if (rowCentreFailures(controlsIn(root)).empty())
+            fail(QStringLiteral("the row rule passes two fully visible controls 3 px apart"));
+    }
+    for (const bool clipped : {true, false}) {
+        const int h = controlHeight;
+        QWidget root;
+        root.resize(400, 10 * h);
+        auto* viewport = new QWidget(&root);
+        viewport->setGeometry(0, 0, 400, 4 * h);
+        auto* footer = new kit::KIconButton(&root);
+        footer->setIcon(kit::icon(kit::IconId::Play, kit::IconRole::Control));
+        footer->setGeometry(200, 4 * h, h, h);
+        // A row whose lower half lies past the viewport's bottom edge, where the footer row is.
+        auto* row = new kit::KDropdown(clipped ? viewport : &root);
+        row->addItem(QStringLiteral("Row"));
+        row->setGeometry(0, 4 * h - h / 2, 120, h);
+        row->raise();
+        root.show();
+        QApplication::processEvents();
+        const auto rowFailures = rowCentreFailures(controlsIn(root));
+        if (clipped && !rowFailures.empty())
+            fail(QStringLiteral("the row rule measures the hidden part of a clipped row: ") +
+                 rowFailures.front());
+        if (!clipped && rowFailures.empty())
+            fail(QStringLiteral("the row rule passes a control painting over the footer row"));
+    }
 
     fixture.clearInteraction();
     const QImage image = fixture.window->grab().toImage();
