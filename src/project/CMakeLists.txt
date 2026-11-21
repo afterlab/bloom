@@ -480,6 +480,18 @@ if(BUILD_TESTING)
         LABELS unit persistence
     )
 
+    # #757: a Text Source's styling saved, reopened and re-encoded byte for byte; an older node
+    # without it opens unchanged.
+    add_executable(bloom_project_text_styling_test tests/text_styling_persistence_tests.cpp)
+    target_include_directories(bloom_project_text_styling_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(bloom_project_text_styling_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_text_styling_test)
+    bloom_add_test(
+        NAME bloom.project.text-styling
+        COMMAND bloom_project_text_styling_test
+        LABELS unit persistence
+    )
+
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)
     target_include_directories(
         bloom_project_open_archive_test
