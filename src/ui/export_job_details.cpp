@@ -134,6 +134,19 @@ struct Line final {
                 add(name.isEmpty() ? tr("Colors tagged correctly")
                                    : tr("Colors tagged as %1").arg(name),
                     StatusTone::Neutral);
+            } else if (check.check == host::ExportCheck::Subtitles) {
+                // #752: each sidecar file and embedded track, read back and equal to its track.
+                QStringList files;
+                for (const auto& file : verification.subtitles) {
+                    const auto name =
+                        file.sidecar ? QString::fromStdU16String(file.path.filename().u16string())
+                                     : tr("%1 (track in the movie)")
+                                           .arg(qs(file.language + " " + file.title));
+                    files.push_back(file.cues == 1 ? tr("%1: 1 cue").arg(name)
+                                                   : tr("%1: %2 cues").arg(name).arg(file.cues));
+                }
+                add(tr("Subtitles match the picture"), StatusTone::Neutral,
+                    files.join(QLatin1Char('\n')));
             }
             continue;
         case host::ExportCheckOutcome::Warning:
