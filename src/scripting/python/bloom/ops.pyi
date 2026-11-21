@@ -4614,7 +4614,7 @@ class LayerOps:
           opacityParameter parameter
           blendModeParameter parameter
           imageToLayerEdge imageToLayerEdge
-          layerToStackEdge layerToStackEdge
+          layerToStackEdge edge
 
         Prerequisites:
           - The current revision, from any query result, as transact's expectedRevision.
@@ -4968,6 +4968,105 @@ class LayerOps:
 
         Related: query:layers, bloom.parameter.set-source,
         bloom.animation.set-keyframe-at-time-for-parameter, transact
+        """
+        ...
+    def add_subtitles(self, cues: tuple = ..., file: str = ..., text: str = ..., format: str = ..., encoding: str = ..., link: bool = ..., name: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.add-subtitles  (operation, layer)
+        Adds a Subtitles layer on top of the layer stack: a Subtitles node drawing its cue list into the
+        frame, connected to a Layer Output. The list comes from `cues`, a subtitle `file` (SRT, WebVTT,
+        TTML/IMSC or ASS) or its `text`, or is empty. The cues are held in the project; with link=true
+        the list also follows the file (bloom.subtitles.reload). A load's dropped or approximated
+        features are operation warnings, each naming its line, column and code.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          cues  array  optional
+              The cues, each {id?, start, end, text, speaker?, style?, placement?}: times are a whole
+              frame, exact seconds [n, d] or "HH:MM:SS.mmm"; text is WebVTT cue-text markup. At most
+              50000 cues (subtitleCues). A large list goes in {"fromFile": "/abs/cues.json"}.
+          file  str  optional
+              The absolute path of a subtitle file to read (SRT, WebVTT, TTML/IMSC or ASS; at most 16
+              MiB, subtitleFileBytes). Give cues, file or text, or none for an empty list; given
+              several, cues wins, then text.
+          text  str  optional
+              A subtitle file's text, read as the file would be.
+          format  str  optional
+              The file's format: auto (sniffed from the text and the file name, the default), srt, vtt,
+              ttml or ass (read only).
+          encoding  str  optional
+              The file's text encoding: auto (a UTF-8 or UTF-16 byte order mark, else UTF-8; the
+              default), utf-8, utf-16le, utf-16be, or a WHATWG single-byte encoding label such as
+              windows-1252 or iso-8859-2.
+          link  bool  optional
+              With file: follow the file. The cues are still held in the project; the desktop
+              application reloads them when the file changes, and headless renders warn.
+          name  str  optional
+              The layer's name.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          layer layer
+          slot layer-slot
+          subtitlesNode node
+          layerOutputNode node
+          subtitlesToLayerEdge edge
+          layerToStackEdge edge
+          positionParameter parameter
+          anchorParameter parameter
+          scaleParameter parameter
+          rotationParameter parameter
+          opacityParameter parameter
+          blendModeParameter parameter
+          cue cue repeated - one per cue of the list
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
+          subtitlesNode, layerOutputNode, subtitlesToLayerEdge, layerToStackEdge, positionParameter,
+          anchorParameter, scaleParameter, rotationParameter, opacityParameter, blendModeParameter, cue
+          (repeated) (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: A cue misses start, end or text, or a time is not a whole frame, [n, d] seconds or
+              "HH:MM:SS.mmm"
+              Do: give every cue {start, end, text}.
+          bloom.scripting.invalid-argument
+              When: A list, a cue's text, a file or the styles is past its limit (subtitleCues,
+              subtitleCueTextBytes, subtitleFileBytes, subtitleStyles)
+              Do: split the list or the file; the refusal names the limit, its value and the actual
+              amount.
+          bloom.scripting.invalid-argument
+              When: The file cannot be read, is not a subtitle format Bloom reads, or does not decode in
+              the encoding
+              Do: the message names the line and column; convert SCC, EBU STL, SBV, LRC and image
+              subtitles to SRT, WebVTT or TTML first.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.add-subtitles","args":{"cues":[{"start":"00:00:01.000","end":"00:00:03.500","text":"Hello"},{"start":"00:00:04.000","end":"00:00:06.000","text":"<i>World</i>"}]}}]}}
+          Python:
+            bloom.ops.layer.add_subtitles(cues=({"start": "00:00:01.000", "end": "00:00:03.500", "text": "Hello"}, {"start": "00:00:04.000", "end": "00:00:06.000", "text": "<i>World</i>"}))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.add-subtitles","args":{"cues":[{"start":"00:00:01.000","end":"00:00:03.500","text":"Hello"},{"start":"00:00:04.000","end":"00:00:06.000","text":"<i>World</i>"}]}}]
+
+        Related: query:subtitles, bloom.subtitles.set-cues, bloom.subtitles.load, transact
         """
         ...
     def add_svg(self, path: str, name: str = ..., fit: bool = ..., projectDirectory: str = ..., mode: str = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
@@ -9742,6 +9841,714 @@ class ProjectOps:
         ...
 
 project: ProjectOps
+
+class SubtitlesOps:
+    def edit_cue(self, node: int | Proxy, cue: int | Proxy = ..., index: int = ..., start: Time = ..., end: Time = ..., text: str = ..., speaker: str = ..., style: str = ..., placement: Mapping[str, Any] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.edit-cue  (operation, subtitles)
+        Changes the members of one cue, named by its id (`cue`) or its position (`index`); every member
+        not given keeps its value. The cue keeps its id.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          cue  id  optional
+              Id. The cue to edit (query kind=subtitles lists the ids). Give cue or index; cue wins when
+              both are given.
+              Unit: stable id (a positive integer)
+              Range: >= 1
+          index  int  optional
+              The cue's position in the list, 0 first. Give cue or index.
+              Unit: zero-based position
+              Range: >= 0
+          start  time  optional
+              The cue's first time: a whole frame (an integer), exact seconds [numerator, denominator],
+              or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads).
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          end  time  optional
+              The time the cue stops showing (exclusive): a whole frame (an integer), exact seconds
+              [numerator, denominator], or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads).
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          text  str  optional
+              The cue's text in WebVTT cue-text markup (<i>, <b>, <u>, <c.class>, <v Speaker>, <lang>,
+              <ruby>, character references); a line break is "\\n". At most 4096 bytes
+              (subtitleCueTextBytes).
+          speaker  str  optional
+              Who speaks the cue; empty text clears it.
+          style  str  optional
+              The name of a style of the list (or a WebVTT color class such as yellow); empty text
+              clears it.
+          placement  mapping  optional, default top
+              Where the cue asks to be drawn: {anchor?, positionX?, positionY?, lineOffset?, width?,
+              textAlign?}. anchor is top-left, top, top-right, left, center, right, bottom-left, bottom
+              or bottom-right; positions and width are fractions of the frame; lineOffset is whole lines
+              from the anchored edge; textAlign is left, center or right. It replaces the whole
+              placement; {} clears it.
+              Values:
+                "top"  Above every layer
+                "bottom"  Below every layer
+                "before"  Directly above the layer `before`
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue - the edited cue
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (each
+          {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: A cue id the list does not have, or an index past its last cue
+              Do: query kind=subtitles lists the cues with their ids and indices.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.edit-cue","args":{"node":2,"cue":1}}]}}
+          Python:
+            bloom.ops.subtitles.edit_cue(node=2, cue=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.edit-cue","args":{"node":2,"cue":1}}]
+
+        Related: query:subtitles, bloom.subtitles.set-cues, transact
+        """
+        ...
+    def insert_cue(self, node: int | Proxy, start: Time, end: Time, text: str, speaker: str = ..., style: str = ..., placement: Mapping[str, Any] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.insert-cue  (operation, subtitles)
+        Adds one cue to a Subtitles node's list with the list's next id.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          start  time  required
+              The cue's first time: a whole frame (an integer), exact seconds [numerator, denominator],
+              or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads).
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          end  time  required
+              The time the cue stops showing (exclusive): a whole frame (an integer), exact seconds
+              [numerator, denominator], or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads).
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          text  str  required
+              The cue's text in WebVTT cue-text markup (<i>, <b>, <u>, <c.class>, <v Speaker>, <lang>,
+              <ruby>, character references); a line break is "\\n". At most 4096 bytes
+              (subtitleCueTextBytes).
+          speaker  str  optional
+              Who speaks the cue; empty text clears it.
+          style  str  optional
+              The name of a style of the list (or a WebVTT color class such as yellow); empty text
+              clears it.
+          placement  mapping  optional, default top
+              Where the cue asks to be drawn: {anchor?, positionX?, positionY?, lineOffset?, width?,
+              textAlign?}. anchor is top-left, top, top-right, left, center, right, bottom-left, bottom
+              or bottom-right; positions and width are fractions of the frame; lineOffset is whole lines
+              from the anchored edge; textAlign is left, center or right. It replaces the whole
+              placement; {} clears it.
+              Values:
+                "top"  Above every layer
+                "bottom"  Below every layer
+                "before"  Directly above the layer `before`
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue - the new cue
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (each
+          {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The node's cues come from another node, or are linked to a file
+              Do: edit that node or the file, or disconnect or unlink first.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.insert-cue","args":{"node":2,"start":24,"end":84,"text":"Hello"}}]}}
+          Python:
+            bloom.ops.subtitles.insert_cue(node=2, start=24, end=84, text="Hello")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.insert-cue","args":{"node":2,"start":24,"end":84,"text":"Hello"}}]
+
+        Related: query:subtitles, bloom.subtitles.edit-cue, transact
+        """
+        ...
+    def load(self, node: int | Proxy, file: str = ..., text: str = ..., format: str = ..., encoding: str = ..., link: bool = ..., strict: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.load  (operation, subtitles)
+        Replaces a Subtitles node's list with one read from a subtitle `file` or `text` (SRT, WebVTT,
+        TTML/IMSC or ASS) in one undo step. New cues take the ids of the cues they match in the current
+        list (same times and text, then same times, then same text), so references to unchanged cues
+        hold. link=true makes the list follow the file. Dropped and approximated features are operation
+        warnings naming line, column and code; strict refuses the load instead.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          file  str  optional
+              The absolute path of the file to read (at most 16 MiB, subtitleFileBytes). Give file or
+              text; text wins when both are given.
+          text  str  optional
+              The file's text, instead of a file.
+          format  str  optional
+              The file's format: auto (sniffed from the text and the file name, the default), srt, vtt,
+              ttml or ass (read only).
+          encoding  str  optional
+              The file's text encoding: auto (a UTF-8 or UTF-16 byte order mark, else UTF-8; the
+              default), utf-8, utf-16le, utf-16be, or a WHATWG single-byte encoding label such as
+              windows-1252 or iso-8859-2.
+          link  bool  optional
+              Follow the file: the list records its path, digest and stamp, edits other than reload and
+              unlink are refused, and the desktop application reloads it when the file changes.
+          strict  bool  optional
+              Refuse the whole load when the reader would skip a cue or drop or approximate a feature,
+              instead of reporting each as a warning.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue repeated - one per cue of the loaded list; their count is the list's cueCount
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (repeated)
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The file is missing, unreadable, larger than 16 MiB (subtitleFileBytes), not a
+              format Bloom reads, or not decodable in the encoding
+              Do: the message names the line and column, or the limit.
+          bloom.scripting.invalid-argument
+              When: strict and the reader reported a row
+              Do: load without strict to see each row as a warning.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.load","args":{"node":2,"text":"1\\n00:00:01,000 --> 00:00:03,500\\nHello\\n"}}]}}
+          Python:
+            bloom.ops.subtitles.load(node=2, text="1
+            00:00:01,000 --> 00:00:03,500
+            Hello
+            ")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.load","args":{"node":2,"text":"1\\n00:00:01,000 --> 00:00:03,500\\nHello\\n"}}]
+
+        Related: query:subtitles, bloom.subtitles.reload, bloom.subtitles.unlink, transact
+        """
+        ...
+    def reload(self, node: int | Proxy, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.reload  (operation, subtitles)
+        Reads a linked list's file again and replaces the list with it in one undo step, keeping the ids
+        of the cues it matches. The desktop application does this itself when the file changes (origin
+        host); headless renders never do, and warn bloom.subtitles.linked-file-changed instead.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue repeated - one per cue of the reloaded list
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (repeated)
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The list is not linked to a file
+              Do: load a file with link=true.
+          bloom.scripting.invalid-argument
+              When: The file is missing or cannot be read
+              Do: the cues are unchanged; restore the file or unlink.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.reload","args":{"node":2}}]}}
+          Python:
+            bloom.ops.subtitles.reload(node=2)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.reload","args":{"node":2}}]
+
+        Related: query:subtitles, bloom.subtitles.unlink, transact
+        """
+        ...
+    def remove_cues(self, node: int | Proxy, cues: tuple = ..., indices: tuple = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.remove-cues  (operation, subtitles)
+        Removes cues, named by their ids (`cues`) or positions (`indices`), in one undo step.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          cues  array  optional
+              The ids of the cues to remove. Give cues or indices; cues wins when both are given.
+          indices  array  optional
+              The positions of the cues to remove, 0 first. Give cues or indices.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          removedCue cue repeated - one per cue removed
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: removedCue
+          (repeated) (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: A cue id the list does not have, or an index past its last cue
+              Do: query kind=subtitles lists them.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.remove-cues","args":{"node":2,"cues":[1]}}]}}
+          Python:
+            bloom.ops.subtitles.remove_cues(node=2, cues=(1,))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.remove-cues","args":{"node":2,"cues":[1]}}]
+
+        Related: query:subtitles, transact
+        """
+        ...
+    def scale_cues(self, node: int | Proxy, factor: tuple, origin: Time = ..., cues: tuple = ..., indices: tuple = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.scale-cues  (operation, subtitles)
+        Scales cue times about `origin` by the exact ratio `factor`: each time t becomes origin + (t -
+        origin) * factor, so a frame-rate conversion (25/24, 1001/1000) stays exact.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          factor  array  required
+              The exact positive ratio [numerator, denominator] times are scaled by about origin: [25,
+              24] retimes 24 fps cues for 25 fps playback of the same frames; [1001, 1000] converts 24
+              to 23.976.
+          origin  time  optional
+              The time that stays put: a whole frame (an integer), exact seconds [numerator,
+              denominator], or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads). Defaults to 0.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          cues  array  optional
+              The ids of the cues to scale. Omitted, every cue is scaled.
+          indices  array  optional
+              The positions of the cues to scale, instead of cues.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue repeated - one per cue scaled
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (repeated)
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The factor is not a positive ratio
+              Do: give [numerator, denominator], both positive.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.scale-cues","args":{"node":2,"factor":[1001,1000]}}]}}
+          Python:
+            bloom.ops.subtitles.scale_cues(node=2, factor=(1001, 1000))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.scale-cues","args":{"node":2,"factor":[1001,1000]}}]
+
+        Related: query:subtitles, bloom.subtitles.shift-cues, transact
+        """
+        ...
+    def set_cues(self, node: int | Proxy, cues: tuple, styles: tuple = ..., language: str = ..., provenance: Mapping[str, Any] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.set-cues  (operation, subtitles)
+        Replaces a Subtitles node's whole cue list in one undo step. A cue that names an `id` the list
+        has keeps it, so read (query kind=subtitles), modify and write back keeps every id; the other
+        cues take fresh ids, which the outputs list. Cues that did not change are shared with the
+        previous list, and the edit's render footprint is the changed cues' spans.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          cues  array  required
+              The cues, each {id?, start, end, text, speaker?, style?, placement?}: times are a whole
+              frame, exact seconds [n, d] or "HH:MM:SS.mmm"; text is WebVTT cue-text markup. At most
+              50000 cues (subtitleCues). A large list goes in {"fromFile": "/abs/cues.json"}.
+          styles  array  optional
+              The list's named styles, each {name, color?, backgroundColor?, outlineColor?,
+              outlineWidth?, bold?, italic?, underline?, fontFamily?, fontSize?}: colors are [r, g, b]
+              or [r, g, b, a] display sRGB 0 to 1; sizes are fractions of the frame height. At most 256
+              (subtitleStyles). Omitted, the styles stay.
+          language  str  optional
+              The list's BCP 47 language tag (und when unknown). Omitted, it stays.
+          provenance  mapping  optional
+              Where the list came from: {kind: "authored"} or {kind: "producer", name, version?,
+              parametersDigest?}. A linked file is set by bloom.subtitles.load. Omitted, it stays.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue repeated - one per cue added or changed
+          removedCue cue repeated - one per cue removed
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue
+          (repeated), removedCue (repeated) (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The node's cues come from another node (an edge or a driver into its Cues input)
+              Do: edit that node, or disconnect it.
+          bloom.scripting.command-rejected
+              When: The list is linked to a file
+              Do: edit the file (the application reloads it), or bloom.subtitles.unlink first.
+          bloom.scripting.command-rejected
+              When: Two cues name one id, a cue ends before it starts, or a text is not WebVTT cue-text
+              markup
+              Do: the message names the cue and the rule.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.set-cues","args":{"node":2,"cues":[{"start":"00:00:01.000","end":"00:00:03.500","text":"Hello"},{"start":"00:00:04.000","end":"00:00:06.000","text":"<i>World</i>"}]}}]}}
+          Python:
+            bloom.ops.subtitles.set_cues(node=2, cues=({"start": "00:00:01.000", "end": "00:00:03.500", "text": "Hello"}, {"start": "00:00:04.000", "end": "00:00:06.000", "text": "<i>World</i>"}))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.set-cues","args":{"node":2,"cues":[{"start":"00:00:01.000","end":"00:00:03.500","text":"Hello"},{"start":"00:00:04.000","end":"00:00:06.000","text":"<i>World</i>"}]}}]
+
+        Related: query:subtitles, bloom.subtitles.edit-cue, bloom.subtitles.insert-cue, transact
+        """
+        ...
+    def shift_cues(self, node: int | Proxy, by: Time, cues: tuple = ..., indices: tuple = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.shift-cues  (operation, subtitles)
+        Moves cues (every cue when none are named) by `by`, keeping their ids and lengths.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          by  time  required
+              How far to move the cues: a whole frame (an integer), exact seconds [numerator,
+              denominator], or a timestamp text HH:MM:SS.mmm (HH:MM:SS,mmm also reads); negative is
+              earlier. A cue may not start before 0.
+              Unit: frames at the composition's frame rate (an integer), or exact seconds as [numerator,
+              denominator]
+          cues  array  optional
+              The ids of the cues to move. Omitted, every cue moves.
+          indices  array  optional
+              The positions of the cues to move, instead of cues.
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          cue cue repeated - one per cue moved
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: cue (repeated)
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: A cue would start before 0
+              Do: shift by less; the message names the first such cue.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.shift-cues","args":{"node":2,"by":[-1,2]}}]}}
+          Python:
+            bloom.ops.subtitles.shift_cues(node=2, by=(-1, 2))
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.shift-cues","args":{"node":2,"by":[-1,2]}}]
+
+        Related: query:subtitles, bloom.subtitles.scale-cues, transact
+        """
+        ...
+    def unlink(self, node: int | Proxy, *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.unlink  (operation, subtitles)
+        Stops a list following its file: the cues stay and become the project's own, editable by every
+        subtitle edit.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.unlink","args":{"node":2}}]}}
+          Python:
+            bloom.ops.subtitles.unlink(node=2)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.unlink","args":{"node":2}}]
+
+        Related: query:subtitles, bloom.subtitles.load, transact
+        """
+        ...
+    def write_file(self, node: int | Proxy, path: str, format: str, overwrite: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.subtitles.write-file  (operation, subtitles)
+        Writes a Subtitles node's list to a file as SRT, WebVTT or TTML (IMSC 1.1 Text), atomically: a
+        temporary file in the same folder is renamed over the target. It is not an undo step and changes
+        nothing in the project. What the format cannot carry (styles in SRT, placement) is reported as
+        warnings.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              Id. The composition the Subtitles node is in (its frame rate counts integer times).
+              Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          node  id  required
+              Id. The Subtitles node (the subtitlesNode output of bloom.layer.add-subtitles, or
+              query:nodes).
+              Unit: node id (query:nodes)
+              Range: >= 1
+          path  str  required
+              The absolute path of the file to write. It is written atomically: a temporary file in the
+              same folder is renamed over it.
+          format  str  required
+              The file's format: srt, vtt (WebVTT) or ttml (IMSC 1.1 Text).
+          overwrite  bool  optional, default ask
+              Replace an existing file. Defaults to false, which refuses one.
+              Values:
+                "ask"  Ask before replacing (the run stops at the existing file until export.confirm-replace)
+                "replace"  Replace the existing file
+                "refuse"  Fail when the file exists
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+          - Existing ids for the id arguments; each argument's unit names the query that lists them.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. This operation creates no
+          ids, so outputs is empty.
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The file exists and overwrite is false
+              Do: pass overwrite=true.
+          bloom.scripting.invalid-argument
+              When: The folder does not exist or cannot be written
+              Do: the message names the system's reason.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.subtitles.write-file","args":{"node":2,"path":"/deliveries/episode.srt","format":"srt"}}]}}
+          Python:
+            bloom.ops.subtitles.write_file(node=2, path="/deliveries/episode.srt", format="srt")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.subtitles.write-file","args":{"node":2,"path":"/deliveries/episode.srt","format":"srt"}}]
+
+        Related: query:subtitles, transact
+        """
+        ...
+
+subtitles: SubtitlesOps
 
 def registry() -> Mapping[str, Operation]: ...
 def get(operation_id: str) -> Operation: ...

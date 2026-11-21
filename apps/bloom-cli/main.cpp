@@ -8,6 +8,7 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/gpu_export_tool_package.hpp>
+#include <bloom/host/linked_subtitle_files.hpp>
 #include <bloom/media/cache/source_mirror_settings.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/platform/cache_directory.hpp>
@@ -228,7 +229,12 @@ frameRange(std::string_view value) {
         if (result.diagnostic.has_value()) {
             std::cerr << "error[" << result.diagnostic->code << "] "
                       << result.diagnostic->operationId << " " << result.diagnostic->argument
-                      << ": " << result.diagnostic->message << '\n';
+                      << ": " << result.diagnostic->message;
+            // #752: a limit refusal names the bound, its value and the actual amount.
+            if (const auto& limit = result.diagnostic->limit)
+                std::cerr << " (limit " << limit->name << " " << limit->value << ", actual "
+                          << limit->actual << ")";
+            std::cerr << '\n';
             return 4;
         }
         if (!result.succeeded()) {
@@ -466,6 +472,12 @@ frameRange(std::string_view value) {
         return 4;
     }
     const auto destination = outputDirectory / ("frame" + std::string(extension));
+    // #752: a linked subtitle file that changed, is missing or cannot be read. A render never
+    // reloads: it uses the cues saved in the project, and says so.
+    for (const auto& warning : bloom::host::linkedFileWarnings(
+             snapshot.project(), project.has_value() ? project->parent_path()
+                                                     : std::filesystem::path{}))
+        std::cerr << "warning[" << warning.code << "]: " << warning.message << '\n';
     runtime::TaskSchedulerConfig config = runtime::TaskSchedulerConfig::defaults();
     config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
     runtime::TaskScheduler scheduler(config);

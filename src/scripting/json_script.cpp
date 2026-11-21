@@ -657,6 +657,20 @@ class Parser final {
                     return numberListOf(value);
                 if (auto reference = referenceOf(value))
                     return reference;
+                // #752: a record (a cue, a style, a placement, a provenance): any other
+                // non-empty object without a path's members.
+                if (!value.empty() && !value.contains("closed") && !value.contains("anchors") &&
+                    !value.contains("contours")) {
+                    ValueMapping mapping;
+                    for (const auto& [key, field] : value) {
+                        auto converted = convert(field);
+                        if (!converted)
+                            return std::nullopt;
+                        mapping.keys.push_back(key);
+                        mapping.values.push_back(std::move(*converted));
+                    }
+                    return Value{std::move(mapping)};
+                }
                 return pathOf(value);
             } else if constexpr (std::is_same_v<Type, std::nullptr_t>) {
                 return std::nullopt;

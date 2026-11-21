@@ -46,6 +46,12 @@ constexpr std::array<TimeList, 1> kTrackTimes{{
     {"bloom.animation.set-key-tracks", "tracks"},
 }};
 
+// #752: the start and end of each cue mapping in a list argument: {operation, argument}.
+constexpr std::array<TimeList, 2> kCueTimes{{
+    {"bloom.layer.add-subtitles", "cues"},
+    {"bloom.subtitles.set-cues", "cues"},
+}};
+
 bool isFrameCount(const Value& value) {
     if (std::holds_alternative<std::int64_t>(value.storage))
         return true;
@@ -91,6 +97,21 @@ void forEachFrameTime(const OperationSchema& schema, Arguments& arguments, Visit
                 for (auto& time : track->times)
                     if (isFrameCount(time))
                         visit(time);
+    }
+    for (const auto& cues : kCueTimes) {
+        if (cues.operation != schema.typeId)
+            continue;
+        const auto found = arguments.find(cues.argument);
+        auto* list =
+            found == arguments.end() ? nullptr : std::get_if<ValueArray>(&found->second.storage);
+        if (list == nullptr)
+            continue;
+        for (auto& item : *list)
+            if (auto* cue = std::get_if<ValueMapping>(&item.storage))
+                for (std::size_t index = 0; index < cue->keys.size(); ++index)
+                    if ((cue->keys[index] == "start" || cue->keys[index] == "end") &&
+                        index < cue->values.size() && isFrameCount(cue->values[index]))
+                        visit(cue->values[index]);
     }
     for (const auto& flat : kTimeLists) {
         if (flat.operation != schema.typeId)

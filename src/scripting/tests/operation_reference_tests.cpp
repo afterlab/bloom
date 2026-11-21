@@ -61,7 +61,9 @@ void everyOperationIsDescribed() {
             // A structured object (a path, or an output given as JSON) describes its fields, not a
             // closed vocabulary.
             const bool structured = argument.kind == ValueKind::Array ||
-                                    argument.kind == ValueKind::Path || contains(summary, "JSON");
+                                    argument.kind == ValueKind::Path ||
+                                    argument.kind == ValueKind::Mapping ||
+                                    contains(summary, "JSON");
             if (listsValues && !structured)
                 expect(!argument.choices.empty(), where + " names values but lists no choices");
         }

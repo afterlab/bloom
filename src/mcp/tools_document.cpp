@@ -446,6 +446,19 @@ scripting::Value value(yyjson_val* item, const std::size_t depth) {
         return scripting::Value(gradientValue(item));
     if (yyjson_is_obj(item) && yyjson_obj_get(item, "values") != nullptr)
         return scripting::Value(numberListValue(item));
+    // #752: a record (a cue, a style, a placement, a provenance) is any other non-empty object
+    // without a path's members; the operation reads its keys.
+    if (yyjson_is_obj(item) && yyjson_obj_size(item) != 0 &&
+        yyjson_obj_get(item, "closed") == nullptr && yyjson_obj_get(item, "anchors") == nullptr &&
+        yyjson_obj_get(item, "contours") == nullptr) {
+        scripting::ValueMapping mapping;
+        yyjson_obj_iter iterator = yyjson_obj_iter_with(item);
+        while (auto* key = yyjson_obj_iter_next(&iterator)) {
+            mapping.keys.emplace_back(yyjson_get_str(key), yyjson_get_len(key));
+            mapping.values.push_back(value(yyjson_obj_iter_get_val(key), depth + 1));
+        }
+        return scripting::Value(std::move(mapping));
+    }
     if (yyjson_is_obj(item))
         return scripting::Value(pathValue(item));
     throw InvalidInput(
@@ -570,6 +583,7 @@ bool matches(yyjson_val* value, const scripting::ValueKind kind) {
     case Kind::Array:
         return yyjson_is_arr(value);
     case Kind::Path:
+    case Kind::Mapping:
         return yyjson_is_obj(value);
     case Kind::Time:
         return yyjson_is_int(value) || (yyjson_is_arr(value) && yyjson_arr_size(value) == 2 &&
@@ -1055,7 +1069,10 @@ yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call
                 throw InvalidInput(at + " (" + id + "): unknown argument \"" + name +
                                    "\"; the example is " +
                                    scripting::exampleCall(descriptor->schema) + argumentHelp(id));
-            if (!matches(item, schema->kind))
+            // #752: a subtitle time may also be a timestamp "HH:MM:SS.mmm".
+            const bool timestamp = schema->kind == scripting::ValueKind::Time &&
+                                   yyjson_is_str(item) && id.starts_with("bloom.subtitles.");
+            if (!matches(item, schema->kind) && !timestamp)
                 throw InvalidInput(at + " (" + id + "): argument \"" + name + "\" expects " +
                                    std::string(scripting::valueKindName(schema->kind)) +
                                    "; the example is " +
@@ -1078,11 +1095,28 @@ yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call
             out.set(result, "succeeded", out.boolean(false));
             auto* diagnostics = out.array();
             auto* diagnostic = out.object();
-            out.set(diagnostic, "code", out.text(created.diagnostic()->code));
+            const auto& refusal = *created.diagnostic();
+            // #752: a subtitle limit is refused with its bound: the limit's own code and
+            // {name, value, actual, unit}, as every MCP limit refusal is.
+            std::optional<McpLimit> bound;
+            if (refusal.limit)
+                for (std::size_t index = 0; index < kMcpLimitCount; ++index)
+                    if (describeLimit(static_cast<McpLimit>(index)).name == refusal.limit->name)
+                        bound = static_cast<McpLimit>(index);
+            out.set(diagnostic, "code",
+                    out.text(bound ? describeLimit(*bound).code : std::string_view(refusal.code)));
             out.set(diagnostic, "operationIndex", out.number(operationIndex));
-            out.set(diagnostic, "operation", out.text(created.diagnostic()->operationId));
-            out.set(diagnostic, "argument", out.text(created.diagnostic()->argument));
-            out.set(diagnostic, "message", out.text(created.diagnostic()->message));
+            out.set(diagnostic, "operation", out.text(refusal.operationId));
+            out.set(diagnostic, "argument", out.text(refusal.argument));
+            out.set(diagnostic, "message", out.text(refusal.message));
+            if (bound) {
+                auto* limit = out.object();
+                out.set(limit, "name", out.text(describeLimit(*bound).name));
+                out.set(limit, "value", out.number(refusal.limit->value));
+                out.set(limit, "actual", out.number(refusal.limit->actual));
+                out.set(limit, "unit", out.text(describeLimit(*bound).unit));
+                out.set(diagnostic, "limit", limit);
+            }
             out.append(diagnostics, diagnostic);
             out.set(result, "diagnostics", diagnostics);
             return result;

@@ -60,6 +60,8 @@ void expect(const bool condition, const std::string& what) {
         return !std::holds_alternative<std::string>(value.storage);
     case ValueKind::Path:
         return std::holds_alternative<bloom::document::PathValue>(value.storage);
+    case ValueKind::Mapping:
+        return std::holds_alternative<bloom::scripting::ValueMapping>(value.storage);
     }
     return false;
 }
@@ -68,7 +70,7 @@ void expect(const bool condition, const std::string& what) {
     const std::set<std::string> sessionSourceOperations{
         "bloom.asset.reload", "bloom.cryptomatte.pick", "bloom.layer.set-anchor-preset",
         "bloom.node.bake-to-keyframes", "bloom.node.write-to-number-list",
-        "bloom.node.write-to-path"};
+        "bloom.node.write-to-path", "bloom.subtitles.reload", "bloom.subtitles.write-file"};
     const auto registry = OperationRegistry::builtIn();
     expect(!registry.descriptors().empty(), "the registry has operations");
 

@@ -17,7 +17,8 @@ _TYPES = {"bool": bool, "int": int, "float": float, "str": str, "id": int,
           "vec2": tuple[float, float], "vec3": tuple[float, float, float],
           "color4": tuple[float, float, float, float], "array": tuple,
           "time": int | tuple[int, int] | Fraction | float,
-          "value": float | bool | str | tuple[float, ...] | Mapping, "path": Mapping}
+          "value": float | bool | str | tuple[float, ...] | Mapping, "path": Mapping,
+          "mapping": Mapping}
 
 _EXPECTED = {
     "bool": "true or false",
@@ -39,6 +40,7 @@ _EXPECTED = {
             "'auto'}, ...]} (mode optional), or {'contours': [...], 'fill_rule': 'nonZero' | "
             "'evenOdd', 'groups': [{'key': text, 'first_contour': n, 'contour_count': n, 'color': "
             "(r, g, b, a)}, ...]} (fill_rule, groups and color optional)",
+    "mapping": "a dict of named members",
 }
 
 _HANDLES = ("in_handle", "out_handle", "inHandle", "outHandle")
@@ -51,6 +53,26 @@ _CONTEXT_DEFAULTS = {
     "selection": "bloom.context.selection",
     "layers": "bloom.context.layers",
 }
+
+
+# #752: subtitle times may also be a timestamp "HH:MM:SS.mmm" or "HH:MM:SS,mmm", and a cue's start
+# and end take the same forms as a time argument (a float is exact seconds).
+_SUBTITLE_OPERATIONS = ("bloom.subtitles.", "bloom.layer.add-subtitles")
+
+
+def _cue_times(value):
+    """Cue mappings with float start/end times as exact (numerator, denominator) seconds."""
+    if not isinstance(value, tuple):
+        return value
+    cues = []
+    for cue in value:
+        if isinstance(cue, dict):
+            cue = {key: (item.as_integer_ratio()
+                         if key in ("start", "end") and type(item) is float
+                         and math.isfinite(item) else item)
+                   for key, item in cue.items()}
+        cues.append(cue)
+    return tuple(cues)
 
 
 def _plain(value):
@@ -149,6 +171,8 @@ def _valid(value, kind):
                     and all(_contour(contour) for contour in value["contours"])
                     and isinstance(value.get("groups", ()), tuple))
         return _contour(value)
+    if kind == "mapping":
+        return isinstance(value, dict) and all(type(key) is str for key in value)
     return True
 
 
@@ -252,6 +276,12 @@ class Operation:
             value = _plain(raw)
             if argument["kind"] == "time" and type(value) is float and math.isfinite(value):
                 value = value.as_integer_ratio()
+            subtitles = self.id.startswith(_SUBTITLE_OPERATIONS)
+            if subtitles and name == "cues":
+                value = _cue_times(value)
+            if subtitles and argument["kind"] == "time" and type(value) is str:
+                converted[name] = value
+                continue
             if not _valid(value, argument["kind"]):
                 self._reject(name, f"argument '{name}' expects {_EXPECTED[argument['kind']]}, "
                                    f"got {type(raw).__name__}")

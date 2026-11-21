@@ -394,6 +394,13 @@ std::string valueJson(const Value& value) {
                 if (held.replace)
                     text += std::string(",\"replace\":") + (*held.replace ? "true" : "false");
                 return text + "}";
+            } else if constexpr (std::is_same_v<Held, ValueMapping>) {
+                // #752: {"key": value, ...} in the caller's order.
+                std::string text = "{";
+                for (std::size_t index = 0; index < held.keys.size(); ++index)
+                    text += (index == 0 ? "" : ",") + jsonQuote(held.keys[index]) + ":" +
+                            valueJson(held.values.at(index));
+                return text + "}";
             } else {
                 std::string text = "[";
                 for (std::size_t index = 0; index < held.size(); ++index)

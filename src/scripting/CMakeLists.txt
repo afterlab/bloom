@@ -34,6 +34,8 @@ target_sources(
         operation_registry_alignment.cpp
         operation_registry_evaluated.cpp
         operation_registry_export.cpp
+        operation_registry_subtitles.cpp
+        subtitles_query.cpp
         operation_frame_times.cpp
         operation_references.cpp
         operation_references.hpp
@@ -58,6 +60,7 @@ target_sources(
             include/bloom/scripting/export.hpp
             include/bloom/scripting/facade.hpp
             include/bloom/scripting/json_script.hpp
+            include/bloom/scripting/subtitles_query.hpp
             include/bloom/scripting/live_session_host.hpp
             include/bloom/scripting/merge_entry_view.hpp
             include/bloom/scripting/node_path_query.hpp
@@ -76,7 +79,7 @@ target_sources(
 target_compile_features(bloom_scripting PUBLIC cxx_std_20)
 target_link_libraries(
     bloom_scripting
-    PUBLIC bloom_commands bloom_core bloom_document bloom_host bloom_runtime
+    PUBLIC bloom_commands bloom_core bloom_document bloom_host bloom_runtime bloom_subtitles
     PRIVATE bloom_platform_process
 )
 bloom_enable_warnings(bloom_scripting)

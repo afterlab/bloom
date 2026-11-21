@@ -11,6 +11,7 @@
 #include <bloom/runtime/profiler_snapshot.hpp>
 #include <bloom/scripting/node_reference.hpp>
 #include <bloom/scripting/readings.hpp>
+#include <bloom/scripting/subtitles_query.hpp>
 
 #include <algorithm>
 #include <cctype>
@@ -607,12 +608,209 @@ yyjson_mut_val* renderRouteQuery(McpServerCore::State& core, Json& out, McpCall&
     return result;
 }
 
+// #752: kind=subtitles, the shared read (scripting::readSubtitles) as JSON.
+yyjson_mut_val* colorValue(Json& out, const core::Color4d& color) {
+    auto* value = out.array();
+    for (const double part : {color.red, color.green, color.blue, color.alpha})
+        out.append(value, out.real(part));
+    return value;
+}
+
+yyjson_mut_val* placementValue(Json& out, const document::CuePlacement& placement) {
+    auto* value = out.object();
+    if (placement.anchor)
+        out.set(value, "anchor", out.text(document::cueAnchorName(*placement.anchor)));
+    if (placement.positionX)
+        out.set(value, "positionX", out.real(*placement.positionX));
+    if (placement.positionY)
+        out.set(value, "positionY", out.real(*placement.positionY));
+    if (placement.lineOffset)
+        out.set(value, "lineOffset", out.signedNumber(*placement.lineOffset));
+    if (placement.width)
+        out.set(value, "width", out.real(*placement.width));
+    if (placement.textAlign)
+        out.set(value, "textAlign", out.text(document::cueTextAlignName(*placement.textAlign)));
+    return value;
+}
+
+yyjson_mut_val* styleValue(Json& out, const document::CueStyle& style) {
+    auto* value = out.object();
+    out.set(value, "name", out.text(style.name));
+    if (style.color)
+        out.set(value, "color", colorValue(out, *style.color));
+    if (style.backgroundColor)
+        out.set(value, "backgroundColor", colorValue(out, *style.backgroundColor));
+    if (style.outlineColor)
+        out.set(value, "outlineColor", colorValue(out, *style.outlineColor));
+    if (style.outlineWidth)
+        out.set(value, "outlineWidth", out.real(*style.outlineWidth));
+    if (style.bold)
+        out.set(value, "bold", out.boolean(*style.bold));
+    if (style.italic)
+        out.set(value, "italic", out.boolean(*style.italic));
+    if (style.underline)
+        out.set(value, "underline", out.boolean(*style.underline));
+    if (style.fontFamily)
+        out.set(value, "fontFamily", out.text(*style.fontFamily));
+    if (style.fontSize)
+        out.set(value, "fontSize", out.real(*style.fontSize));
+    return value;
+}
+
+yyjson_mut_val* provenanceValue(Json& out, const document::CueProvenance& provenance) {
+    auto* value = out.object();
+    if (const auto* file = std::get_if<document::CueFileProvenance>(&provenance)) {
+        out.set(value, "kind", out.text("file"));
+        out.set(value, "portability", out.text(file->portability));
+        out.set(value, "path", out.text(file->path));
+        out.set(value, "format", out.text(file->format));
+        out.set(value, "encoding", out.text(file->encoding));
+        out.set(value, "digest", out.text(file->digest));
+        out.set(value, "size", out.number(file->size));
+    } else if (const auto* producer = std::get_if<document::CueProducerProvenance>(&provenance)) {
+        out.set(value, "kind", out.text("producer"));
+        out.set(value, "name", out.text(producer->name));
+        if (!producer->version.empty())
+            out.set(value, "version", out.text(producer->version));
+        if (!producer->parametersDigest.empty())
+            out.set(value, "parametersDigest", out.text(producer->parametersDigest));
+    } else {
+        out.set(value, "kind", out.text("authored"));
+    }
+    return value;
+}
+
+// A subtitle time: an integer frame, [n, d] seconds or "HH:MM:SS.mmm".
+core::RationalTime subtitleTime(yyjson_val* value, const document::Snapshot& snapshot,
+                                const std::uint64_t composition, const char* name) {
+    if (yyjson_is_str(value)) {
+        const auto time =
+            scripting::parseCueTimestamp(std::string_view(yyjson_get_str(value), yyjson_get_len(value)));
+        if (!time)
+            throw InvalidInput(std::string(name) + " is a whole frame, [numerator, denominator] "
+                                                   "seconds or \"HH:MM:SS.mmm\"");
+        return *time;
+    }
+    return frameOrSecondsArgument(value, snapshot, composition);
+}
+
+yyjson_mut_val* subtitlesQuery(Json& out, McpCall& call, yyjson_val* arguments) {
+    members(arguments,
+            {"kind", "composition", "node", "at", "from", "to", "pageSize", "cursor", "format"},
+            {"kind"});
+    const auto snapshot = call.session.snapshot();
+    std::uint64_t compositionId = 0;
+    if (auto* requested = member(arguments, "composition"))
+        compositionId = integer(requested);
+    else if (call.context.composition && *call.context.composition != 0)
+        compositionId = *call.context.composition;
+    else if (!snapshot.project().compositions().empty())
+        compositionId = snapshot.project().compositions().front().id().value();
+    if (compositionId == 0)
+        throw InvalidInput("composition is an id (query kind=compositions)");
+    scripting::SubtitlesQuery query;
+    query.composition = document::CompositionId::fromRaw(compositionId);
+    if (auto* node = member(arguments, "node"))
+        query.node = document::NodeId::fromRaw(integer(node));
+    if (auto* at = member(arguments, "at"))
+        query.at = subtitleTime(at, snapshot, compositionId, "at");
+    if (auto* from = member(arguments, "from"))
+        query.from = subtitleTime(from, snapshot, compositionId, "from");
+    if (auto* to = member(arguments, "to"))
+        query.to = subtitleTime(to, snapshot, compositionId, "to");
+    if (auto* size = member(arguments, "pageSize"))
+        query.pageSize = static_cast<std::size_t>(integer(size));
+    if (auto* cursor = member(arguments, "cursor"))
+        query.cursor = string(cursor, 160);
+    if (auto* format = member(arguments, "format")) {
+        const auto name = string(format, 8);
+        if (name == "srt")
+            query.format = scripting::SubtitlesQueryFormat::Srt;
+        else if (name == "vtt")
+            query.format = scripting::SubtitlesQueryFormat::Vtt;
+        else if (name != "json")
+            throw InvalidInput("format is json, srt or vtt");
+    }
+    std::filesystem::path base;
+    if (call.context.source)
+        if (const auto source = call.context.source())
+            base = source->assetBaseDirectory;
+    const auto reading = scripting::readSubtitles(snapshot, base, query, call.control.stop);
+    if (reading.status != scripting::SubtitlesQueryStatus::Read)
+        throw InvalidInput(reading.diagnostic);
+    const auto rate = reading.frameRate;
+    auto* result = out.object();
+    out.set(result, "revision", out.number(reading.revision));
+    out.set(result, "composition", out.number(compositionId));
+    if (!query.node) {
+        auto* nodes = out.array();
+        for (const auto& summary : reading.nodes) {
+            auto* row = out.object();
+            out.set(row, "node", out.number(summary.node.value()));
+            out.set(row, "count", summary.count ? out.number(*summary.count) : out.null());
+            if (summary.count)
+                out.set(row, "language", out.text(summary.language));
+            out.set(row, "provenance", out.text(summary.provenance));
+            out.append(nodes, row);
+        }
+        out.set(result, "nodes", nodes);
+        return result;
+    }
+    out.set(result, "node", out.number(query.node->value()));
+    out.set(result, "count", out.number(reading.count));
+    out.set(result, "language", out.text(reading.language));
+    out.set(result, "provenance", provenanceValue(out, reading.provenance));
+    out.set(result, "linkedFile", out.text(reading.linkedFile));
+    auto* styles = out.array();
+    for (const auto& style : reading.styles)
+        out.append(styles, styleValue(out, style));
+    out.set(result, "styles", styles);
+    if (reading.text) {
+        out.set(result, "format", out.text(query.format == scripting::SubtitlesQueryFormat::Srt
+                                               ? "srt"
+                                               : "vtt"));
+        out.set(result, "text", out.text(*reading.text));
+        auto* warnings = out.array();
+        for (const auto& warning : reading.textWarnings)
+            out.append(warnings, out.text(warning));
+        out.set(result, "warnings", warnings);
+        return result;
+    }
+    out.set(result, "matching", out.number(reading.matching));
+    auto* cues = out.array();
+    for (const auto& cue : reading.cues) {
+        auto* row = out.object();
+        out.set(row, "id", out.number(cue.id));
+        out.set(row, "index", out.number(cue.index));
+        out.set(row, "start", timeObject(out, cue.start, rate));
+        out.set(row, "end", timeObject(out, cue.end, rate));
+        out.set(row, "duration",
+                cue.duration ? timeObject(out, *cue.duration, rate) : out.null());
+        out.set(row, "timestamp", out.text(cue.timestamp));
+        out.set(row, "text", out.text(cue.text));
+        out.set(row, "plainText", out.text(cue.plainText));
+        out.set(row, "speaker", out.text(cue.speaker));
+        out.set(row, "style", out.text(cue.style));
+        out.set(row, "placement", placementValue(out, cue.placement));
+        auto* warnings = out.array();
+        for (const auto& warning : cue.warnings)
+            out.append(warnings, out.text(warning));
+        out.set(row, "warnings", warnings);
+        out.append(cues, row);
+    }
+    out.set(result, "cues", cues);
+    out.set(result, "nextCursor",
+            reading.nextCursor.empty() ? out.null() : out.text(reading.nextCursor));
+    return result;
+}
+
 } // namespace
 
 bool isInspectionQuery(const std::string_view kind) noexcept {
     return kind == "text-metrics" || kind == "layer-bounds" || kind == "history" ||
            kind == "viewer" || kind == "preview-cache" || kind == "jobs" ||
-           kind == "render-route" || kind == "pixels" || kind == "scopes" || kind == "outputs";
+           kind == "render-route" || kind == "pixels" || kind == "scopes" || kind == "outputs" ||
+           kind == "subtitles";
 }
 
 yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& call,
@@ -623,6 +821,8 @@ yyjson_mut_val* inspectionQuery(McpServerCore::State& core, Json& out, McpCall& 
         return layerBounds(out, call, arguments);
     if (kind == "outputs")
         return nodeOutputs(out, call, arguments);
+    if (kind == "subtitles")
+        return subtitlesQuery(out, call, arguments);
     if (kind == "history")
         return historyQuery(core, out, call, arguments);
     if (kind == "viewer")

@@ -7,6 +7,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -53,10 +54,19 @@ struct KeyTrack final {
 // each stop a `position` and a `color` [r, g, b, a].
 // #627: document::NumberListValue is a number list parameter's value, read from a mapping with
 // `values`, an array of numbers. (A bare array is already a vector, a colour or a list of ids.)
+// #752: a mapping of named values, an argument that is a record rather than one value: a cue
+// {start, end, text, ...}, a cue style, a placement or a provenance. Each client reads an object
+// that is none of the shapes above (no path members) as a mapping; the operation reads its keys.
+// `keys` and `values` are parallel and in the caller's order; keys are unique.
+struct ValueMapping final {
+    std::vector<std::string> keys;
+    ValueArray values;
+    [[nodiscard]] const Value* find(std::string_view key) const noexcept;
+};
 using ValueStorage =
     std::variant<bool, std::int64_t, double, std::string, document::Vec2d, document::Vec3d,
                  core::Color4d, StableId, ValueArray, document::PathValue, document::GradientValue,
-                 ObjectReference, document::NumberListValue, KeyTrack>;
+                 ObjectReference, document::NumberListValue, KeyTrack, ValueMapping>;
 
 struct Value final {
     ValueStorage storage;
@@ -78,7 +88,15 @@ struct Value final {
     Value(ObjectReference value) : storage(std::move(value)) {}
     Value(document::NumberListValue value) : storage(std::move(value)) {}
     Value(KeyTrack value) : storage(std::move(value)) {}
+    Value(ValueMapping value) : storage(std::move(value)) {}
 };
+
+inline const Value* ValueMapping::find(const std::string_view key) const noexcept {
+    for (std::size_t index = 0; index < keys.size() && index < values.size(); ++index)
+        if (keys[index] == key)
+            return &values[index];
+    return nullptr;
+}
 
 using Arguments = std::map<std::string, Value, std::less<>>;
 

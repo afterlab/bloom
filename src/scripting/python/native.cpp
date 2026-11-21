@@ -2,6 +2,8 @@
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/project_color_choice.hpp>
 #include <bloom/scripting/readings.hpp>
+#include <bloom/scripting/node_reference.hpp>
+#include <bloom/scripting/subtitles_query.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <nanobind/stl/map.h>
 #include <nanobind/stl/optional.h>
@@ -36,6 +38,14 @@ nb::dict failure(const OperationDiagnostic& diagnostic) {
     detail["operation_id"] = diagnostic.operationId;
     detail["argument"] = diagnostic.argument;
     detail["message"] = diagnostic.message;
+    // #752: a subtitle limit names its bound, as MCP's diagnostic.limit does.
+    if (diagnostic.limit) {
+        nb::dict limit;
+        limit["name"] = diagnostic.limit->name;
+        limit["value"] = diagnostic.limit->value;
+        limit["actual"] = diagnostic.limit->actual;
+        detail["limit"] = limit;
+    }
     nb::list diagnostics;
     diagnostics.append(detail);
     row["diagnostics"] = diagnostics;
@@ -543,6 +553,19 @@ Value scriptValue(const nb::handle value, const std::size_t depth) {
             return gradientValue(mapping);
         if (mapping.contains("values"))
             return numberListValue(mapping);
+        // #752: a record (a cue, a style, a placement, a provenance): any other non-empty dict
+        // without a path's keys. Keys are text; snake_case keys read as their camelCase names.
+        if (nb::len(mapping) != 0 && !mapping.contains("closed") && !mapping.contains("anchors") &&
+            !mapping.contains("contours")) {
+            ValueMapping record;
+            for (const auto [key, item] : mapping) {
+                if (!nb::isinstance<nb::str>(key))
+                    throw nb::type_error("A mapping argument's keys are text");
+                record.keys.push_back(nb::cast<std::string>(key));
+                record.values.push_back(scriptValue(item, depth + 1));
+            }
+            return Value(std::move(record));
+        }
         return pathValue(mapping);
     }
     throw nb::type_error(
@@ -775,6 +798,206 @@ nb::dict NativeHost::setColorSettings(const std::string& config,
         row["context"] = variables;
     }
     return row;
+}
+
+namespace {
+
+// #752: a subtitle time as bloom.data.subtitles passes it: (numerator, denominator) seconds or a
+// timestamp "HH:MM:SS.mmm".
+std::optional<core::RationalTime> subtitleTime(const nb::dict& request, const char* name) {
+    if (!request.contains(name) || request[name].is_none())
+        return std::nullopt;
+    const nb::object value = request[name];
+    if (nb::isinstance<nb::str>(value)) {
+        if (const auto time = parseCueTimestamp(nb::cast<std::string>(value)))
+            return time;
+    } else if (nb::isinstance<nb::tuple>(value) && nb::len(value) == 2) {
+        if (const auto time = core::RationalTime::create(nb::cast<std::int64_t>(value[0]),
+                                                         nb::cast<std::int64_t>(value[1])))
+            return time;
+    }
+    throw nb::value_error((std::string(name) + " is a whole frame, seconds (a Fraction, a number "
+                                               "or (numerator, denominator)) or \"HH:MM:SS.mmm\"")
+                              .c_str());
+}
+
+nb::tuple seconds(const core::RationalTime time) {
+    return nb::make_tuple(time.numerator(), time.denominator());
+}
+
+nb::tuple color(const core::Color4d& value) {
+    return nb::make_tuple(value.red, value.green, value.blue, value.alpha);
+}
+
+nb::dict placementRow(const document::CuePlacement& placement) {
+    nb::dict row;
+    if (placement.anchor)
+        row["anchor"] = std::string(document::cueAnchorName(*placement.anchor));
+    if (placement.positionX)
+        row["position_x"] = *placement.positionX;
+    if (placement.positionY)
+        row["position_y"] = *placement.positionY;
+    if (placement.lineOffset)
+        row["line_offset"] = *placement.lineOffset;
+    if (placement.width)
+        row["width"] = *placement.width;
+    if (placement.textAlign)
+        row["text_align"] = std::string(document::cueTextAlignName(*placement.textAlign));
+    return row;
+}
+
+nb::dict styleRow(const document::CueStyle& style) {
+    nb::dict row;
+    row["name"] = style.name;
+    if (style.color)
+        row["color"] = color(*style.color);
+    if (style.backgroundColor)
+        row["background_color"] = color(*style.backgroundColor);
+    if (style.outlineColor)
+        row["outline_color"] = color(*style.outlineColor);
+    if (style.outlineWidth)
+        row["outline_width"] = *style.outlineWidth;
+    if (style.bold)
+        row["bold"] = *style.bold;
+    if (style.italic)
+        row["italic"] = *style.italic;
+    if (style.underline)
+        row["underline"] = *style.underline;
+    if (style.fontFamily)
+        row["font_family"] = *style.fontFamily;
+    if (style.fontSize)
+        row["font_size"] = *style.fontSize;
+    return row;
+}
+
+nb::dict provenanceRow(const document::CueProvenance& provenance) {
+    nb::dict row;
+    if (const auto* file = std::get_if<document::CueFileProvenance>(&provenance)) {
+        row["kind"] = "file";
+        row["portability"] = file->portability;
+        row["path"] = file->path;
+        row["format"] = file->format;
+        row["encoding"] = file->encoding;
+        row["digest"] = file->digest;
+        row["size"] = file->size;
+    } else if (const auto* producer = std::get_if<document::CueProducerProvenance>(&provenance)) {
+        row["kind"] = "producer";
+        row["name"] = producer->name;
+        if (!producer->version.empty())
+            row["version"] = producer->version;
+        if (!producer->parametersDigest.empty())
+            row["parameters_digest"] = producer->parametersDigest;
+    } else {
+        row["kind"] = "authored";
+    }
+    return row;
+}
+
+} // namespace
+
+nb::dict NativeHost::subtitles(const nb::dict& request) {
+    SubtitlesQuery query;
+    query.composition = document::CompositionId::fromRaw(nb::cast<std::uint64_t>(request["composition"]));
+    if (request.contains("node") && !request["node"].is_none())
+        query.node = document::NodeId::fromRaw(nb::cast<std::uint64_t>(request["node"]));
+    query.at = subtitleTime(request, "at");
+    query.from = subtitleTime(request, "from");
+    query.to = subtitleTime(request, "to");
+    if (request.contains("page_size") && !request["page_size"].is_none())
+        query.pageSize = nb::cast<std::size_t>(request["page_size"]);
+    if (request.contains("cursor") && !request["cursor"].is_none())
+        query.cursor = nb::cast<std::string>(request["cursor"]);
+    if (request.contains("format") && !request["format"].is_none()) {
+        const auto name = nb::cast<std::string>(request["format"]);
+        if (name == "srt")
+            query.format = SubtitlesQueryFormat::Srt;
+        else if (name == "vtt")
+            query.format = SubtitlesQueryFormat::Vtt;
+        else if (name != "json")
+            throw nb::value_error("format is \"json\", \"srt\" or \"vtt\"");
+    }
+    const auto access = lockSession();
+    const auto context = operationContext();
+    const auto reading = [&] {
+        const nb::gil_scoped_release release;
+        const auto source = context.source ? context.source() : std::nullopt;
+        if (!source) {
+            SubtitlesReading missing;
+            missing.status = SubtitlesQueryStatus::MissingComposition;
+            missing.diagnostic = "The session has no project to read";
+            return missing;
+        }
+        return readSubtitles(source->snapshot, source->assetBaseDirectory, query, context.stop);
+    }();
+    if (reading.status != SubtitlesQueryStatus::Read)
+        throw nb::value_error(reading.diagnostic.c_str());
+    nb::dict result;
+    result["revision"] = reading.revision;
+    result["composition"] = query.composition.value();
+    if (!query.node) {
+        nb::list nodes;
+        for (const auto& summary : reading.nodes) {
+            nb::dict row;
+            row["node"] = summary.node.value();
+            row["count"] = summary.count ? nb::cast(*summary.count) : nb::none();
+            if (summary.count)
+                row["language"] = summary.language;
+            row["provenance"] = summary.provenance;
+            nodes.append(row);
+        }
+        result["nodes"] = nodes;
+        return result;
+    }
+    const auto rate = reading.frameRate;
+    const auto time = [&](const core::RationalTime value) {
+        nb::dict row;
+        const auto count = framesAt(value, rate);
+        row["frames"] = count.exact ? nb::cast(count.frames) : nb::cast(count.approximate);
+        row["seconds"] = seconds(value);
+        return row;
+    };
+    result["node"] = query.node->value();
+    result["count"] = reading.count;
+    result["language"] = reading.language;
+    result["provenance"] = provenanceRow(reading.provenance);
+    result["linked_file"] = reading.linkedFile;
+    nb::list styles;
+    for (const auto& style : reading.styles)
+        styles.append(styleRow(style));
+    result["styles"] = styles;
+    if (reading.text) {
+        result["format"] = query.format == SubtitlesQueryFormat::Srt ? "srt" : "vtt";
+        result["text"] = *reading.text;
+        nb::list warnings;
+        for (const auto& warning : reading.textWarnings)
+            warnings.append(warning);
+        result["warnings"] = warnings;
+        return result;
+    }
+    result["matching"] = reading.matching;
+    nb::list cues;
+    for (const auto& cue : reading.cues) {
+        nb::dict row;
+        row["id"] = cue.id;
+        row["index"] = cue.index;
+        row["start"] = time(cue.start);
+        row["end"] = time(cue.end);
+        row["duration"] = cue.duration ? nb::object(time(*cue.duration)) : nb::none();
+        row["timestamp"] = cue.timestamp;
+        row["text"] = cue.text;
+        row["plain_text"] = cue.plainText;
+        row["speaker"] = cue.speaker;
+        row["style"] = cue.style;
+        row["placement"] = placementRow(cue.placement);
+        nb::list warnings;
+        for (const auto& warning : cue.warnings)
+            warnings.append(warning);
+        row["warnings"] = warnings;
+        cues.append(row);
+    }
+    result["cues"] = cues;
+    result["next_cursor"] = reading.nextCursor.empty() ? nb::none() : nb::cast(reading.nextCursor);
+    return result;
 }
 
 nb::dict NativeHost::outputs(const std::uint64_t composition, const std::uint64_t node,

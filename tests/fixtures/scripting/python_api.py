@@ -24,7 +24,8 @@ STUB_TYPES = {"bool": "bool", "int": "int", "float": "float", "str": "str",
               "id": "int | Proxy", "vec2": "tuple[float, float]",
               "vec3": "tuple[float, float, float]",
               "color4": "tuple[float, float, float, float]", "array": "tuple",
-              "time": "Time", "value": "Value", "path": "Path"}
+              "time": "Time", "value": "Value", "path": "Path",
+              "mapping": "Mapping[str, Any]"}
 
 
 def operation_stub(schemas):

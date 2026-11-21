@@ -650,6 +650,102 @@ constexpr std::array kNotes{
         "the parameter's kind or range => query {kind:\"parameter\"} reports valueKind, range and "
         "choices."},
     OperationNotes{"bloom.project.set-name", "Renames the project.", "", "query:project", ""},
+    // --- subtitles (#752) ---------------------------------------------------------------------
+    OperationNotes{"bloom.layer.add-subtitles",
+        "Adds a Subtitles layer on top of the layer stack: a Subtitles node drawing its cue list "
+        "into the frame, connected to a Layer Output. The list comes from `cues`, a subtitle "
+        "`file` (SRT, WebVTT, TTML/IMSC or ASS) or its `text`, or is empty. The cues are held in "
+        "the project; with link=true the list also follows the file (bloom.subtitles.reload). A "
+        "load's dropped or approximated features are operation warnings, each naming its line, "
+        "column and code.",
+        "layer, slot, subtitlesNode, layerOutputNode, subtitlesToLayerEdge, layerToStackEdge, "
+        "positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter, "
+        "blendModeParameter, cue (one per cue of the list)",
+        "query:subtitles bloom.subtitles.set-cues bloom.subtitles.load",
+        "[invalid-argument] A cue misses start, end or text, or a time is not a whole frame, [n, "
+        "d] seconds or \"HH:MM:SS.mmm\" => give every cue {start, end, text}.\n"
+        "[invalid-argument] A list, a cue's text, a file or the styles is past its limit "
+        "(subtitleCues, subtitleCueTextBytes, subtitleFileBytes, subtitleStyles) => split the "
+        "list or the file; the refusal names the limit, its value and the actual amount.\n"
+        "[invalid-argument] The file cannot be read, is not a subtitle format Bloom reads, or "
+        "does not decode in the encoding => the message names the line and column; convert "
+        "SCC, EBU STL, SBV, LRC and image subtitles to SRT, WebVTT or TTML first."},
+    OperationNotes{"bloom.subtitles.set-cues",
+        "Replaces a Subtitles node's whole cue list in one undo step. A cue that names an `id` the "
+        "list has keeps it, so read (query kind=subtitles), modify and write back keeps every id; "
+        "the other cues take fresh ids, which the outputs list. Cues that did not change are "
+        "shared with the previous list, and the edit's render footprint is the changed cues' "
+        "spans.",
+        "cue (one per cue added or changed), removedCue (one per cue removed)",
+        "query:subtitles bloom.subtitles.edit-cue bloom.subtitles.insert-cue",
+        "The node's cues come from another node (an edge or a driver into its Cues input) => "
+        "edit that node, or disconnect it.\n"
+        "The list is linked to a file => edit the file (the application reloads it), or "
+        "bloom.subtitles.unlink first.\n"
+        "Two cues name one id, a cue ends before it starts, or a text is not WebVTT cue-text "
+        "markup => the message names the cue and the rule."},
+    OperationNotes{"bloom.subtitles.insert-cue",
+        "Adds one cue to a Subtitles node's list with the list's next id.",
+        "cue (the new cue)", "query:subtitles bloom.subtitles.edit-cue",
+        "The node's cues come from another node, or are linked to a file => edit that node or "
+        "the file, or disconnect or unlink first."},
+    OperationNotes{"bloom.subtitles.edit-cue",
+        "Changes the members of one cue, named by its id (`cue`) or its position (`index`); "
+        "every member not given keeps its value. The cue keeps its id.",
+        "cue (the edited cue)", "query:subtitles bloom.subtitles.set-cues",
+        "A cue id the list does not have, or an index past its last cue => query kind=subtitles "
+        "lists the cues with their ids and indices."},
+    OperationNotes{"bloom.subtitles.remove-cues",
+        "Removes cues, named by their ids (`cues`) or positions (`indices`), in one undo step.",
+        "removedCue (one per cue removed)", "query:subtitles",
+        "A cue id the list does not have, or an index past its last cue => query kind=subtitles "
+        "lists them."},
+    OperationNotes{"bloom.subtitles.shift-cues",
+        "Moves cues (every cue when none are named) by `by`, keeping their ids and lengths.",
+        "cue (one per cue moved)", "query:subtitles bloom.subtitles.scale-cues",
+        "A cue would start before 0 => shift by less; the message names the first such cue."},
+    OperationNotes{"bloom.subtitles.scale-cues",
+        "Scales cue times about `origin` by the exact ratio `factor`: each time t becomes origin "
+        "+ (t - origin) * factor, so a frame-rate conversion (25/24, 1001/1000) stays exact.",
+        "cue (one per cue scaled)", "query:subtitles bloom.subtitles.shift-cues",
+        "[invalid-argument] The factor is not a positive ratio => give [numerator, denominator], "
+        "both positive."},
+    OperationNotes{"bloom.subtitles.load",
+        "Replaces a Subtitles node's list with one read from a subtitle `file` or `text` (SRT, "
+        "WebVTT, TTML/IMSC or ASS) in one undo step. New cues take the ids of the cues they "
+        "match in the current list (same times and text, then same times, then same text), so "
+        "references to unchanged cues hold. link=true makes the list follow the file. Dropped "
+        "and approximated features are operation warnings naming line, column and code; strict "
+        "refuses the load instead.",
+        "cue (one per cue of the loaded list; their count is the list's cueCount)",
+        "query:subtitles bloom.subtitles.reload bloom.subtitles.unlink",
+        "[invalid-argument] The file is missing, unreadable, larger than 16 MiB "
+        "(subtitleFileBytes), not a format Bloom reads, or not decodable in the encoding => the "
+        "message names the line and column, or the limit.\n"
+        "[invalid-argument] strict and the reader reported a row => load without strict to see "
+        "each row as a warning."},
+    OperationNotes{"bloom.subtitles.reload",
+        "Reads a linked list's file again and replaces the list with it in one undo step, "
+        "keeping the ids of the cues it matches. The desktop application does this itself when "
+        "the file changes (origin host); headless renders never do, and warn "
+        "bloom.subtitles.linked-file-changed instead.",
+        "cue (one per cue of the reloaded list)", "query:subtitles bloom.subtitles.unlink",
+        "[invalid-argument] The list is not linked to a file => load a file with link=true.\n"
+        "[invalid-argument] The file is missing or cannot be read => the cues are unchanged; "
+        "restore the file or unlink."},
+    OperationNotes{"bloom.subtitles.unlink",
+        "Stops a list following its file: the cues stay and become the project's own, editable "
+        "by every subtitle edit.",
+        "", "query:subtitles bloom.subtitles.load", ""},
+    OperationNotes{"bloom.subtitles.write-file",
+        "Writes a Subtitles node's list to a file as SRT, WebVTT or TTML (IMSC 1.1 Text), "
+        "atomically: a temporary file in the same folder is renamed over the target. It is not "
+        "an undo step and changes nothing in the project. What the format cannot carry (styles "
+        "in SRT, placement) is reported as warnings.",
+        "", "query:subtitles",
+        "[invalid-argument] The file exists and overwrite is false => pass overwrite=true.\n"
+        "[invalid-argument] The folder does not exist or cannot be written => the message names "
+        "the system's reason."},
 };
 // clang-format on
 
@@ -1063,7 +1159,7 @@ constexpr std::array kSideEffects{
 [[nodiscard]] std::string outputKind(std::string_view name) {
     const auto dot = name.find('.');
     const auto base = name.substr(0, dot);
-    constexpr std::array<std::pair<std::string_view, std::string_view>, 24> kinds{{
+    constexpr std::array<std::pair<std::string_view, std::string_view>, 29> kinds{{
         {"layer", "layer"},
         {"movedLayer", "layer"},
         {"skippedLayer", "layer"},
@@ -1088,6 +1184,11 @@ constexpr std::array kSideEffects{
         {"exportOutput", "export-output"},
         {"dataBlock", "data-block"},
         {"nodeGroup", "node-group"},
+        {"subtitlesNode", "node"},
+        {"subtitlesToLayerEdge", "edge"},
+        {"layerToStackEdge", "edge"},
+        {"cue", "cue"},
+        {"removedCue", "cue"},
     }};
     for (const auto& [key, kind] : kinds)
         if (base == key)

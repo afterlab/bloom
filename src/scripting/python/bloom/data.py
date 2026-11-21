@@ -187,3 +187,52 @@ def outputs(node, *, composition=None, frame=None, time=None, expected_revision=
     answer["time"] = {"frames": int(frames) if frames.denominator == 1 else float(frames),
                       "seconds": (seconds.numerator, seconds.denominator)}
     return _state.freeze(answer)
+
+
+def subtitles(node=None, *, composition=None, at=None, from_=None, to=None, page_size=None,
+              cursor=None, format=None) -> Mapping:
+    """A Subtitles node's cues: what MCP's `query` kind `subtitles` answers (#752).
+
+    Without `node`, the composition's Subtitles nodes (`nodes`: each `node`, `count`, `language`
+    and `provenance`). With `node`: `count`, `language`, `provenance`, `linked_file` ("none",
+    "in-sync", "changed", "missing" or "unreadable"), `styles`, `matching`, `cues` and
+    `next_cursor` (pass it back as `cursor` for the next page). Each cue has `id`, `index`, `start`,
+    `end` and `duration` ({"frames", "seconds"}), `timestamp`, `text`, `plain_text`, `speaker`,
+    `style`, `placement` and `warnings`. `at` keeps the cues showing at that time; `from_` and `to`
+    keep those overlapping [from_, to). A time is a whole frame (an int), seconds (a Fraction, a
+    float or (numerator, denominator)) or a timestamp "HH:MM:SS.mmm". `format` "srt" or "vtt"
+    returns the whole list as `text` instead of `cues`. An unknown composition or node, a cursor
+    from another revision or a bad time raises ValueError.
+    """
+    from . import context  # context reads Proxy from this module
+
+    if composition is None:
+        composition = context.composition
+    if composition is None:
+        raise ValueError("The current project has no composition")
+    composition = int(composition)
+    view = _state.host().snapshot()
+    rate = next((item["frame_rate"] for item in view["compositions"] if item["id"] == composition),
+                None)
+    if rate is None:
+        raise ValueError(f"Composition {composition} does not exist; bloom.data.compositions lists "
+                         "them")
+
+    def seconds(name, value):
+        if value is None or type(value) is str:
+            return value
+        if type(value) is int:
+            exact = Fraction(value) * rate[1] / rate[0]
+        elif isinstance(value, tuple) and len(value) == 2:
+            exact = Fraction(value[0], value[1])
+        elif isinstance(value, (Fraction, float)):
+            exact = Fraction(value)
+        else:
+            raise ValueError(f"{name} is a whole frame, seconds (a Fraction, a float or "
+                             "(numerator, denominator)) or \"HH:MM:SS.mmm\"")
+        return (exact.numerator, exact.denominator)
+
+    request = {"composition": composition, "node": None if node is None else int(node),
+               "at": seconds("at", at), "from": seconds("from_", from_), "to": seconds("to", to),
+               "page_size": page_size, "cursor": cursor, "format": format}
+    return _state.freeze(_state.host().subtitles(request))

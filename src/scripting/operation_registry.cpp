@@ -1061,9 +1061,9 @@ void addDescriptor(std::vector<OperationDescriptor>& descriptors, std::string id
 } // namespace
 
 std::string_view valueKindName(const ValueKind kind) noexcept {
-    constexpr std::array<std::string_view, 12> names{"bool",  "int",  "float",  "str",
-                                                     "vec2",  "vec3", "color4", "id",
-                                                     "array", "time", "value",  "path"};
+    constexpr std::array<std::string_view, 13> names{
+        "bool", "int", "float", "str", "vec2", "vec3", "color4", "id", "array", "time", "value",
+        "path", "mapping"};
     const auto index = static_cast<std::size_t>(kind);
     return index < names.size() ? names[index] : "value";
 }
@@ -1209,6 +1209,23 @@ std::string pythonLiteral(const Value& value) {
                     text += ", \"interpolations\": " + column(*held.interpolations);
                 if (held.replace)
                     text += std::string(", \"replace\": ") + (*held.replace ? "True" : "False");
+                return text + "}";
+            } else if constexpr (std::is_same_v<Held, ValueMapping>) {
+                // #752: a dict, its keys in Python's snake_case ("position_x").
+                std::string text = "{";
+                for (std::size_t index = 0; index < held.keys.size(); ++index) {
+                    std::string key;
+                    for (const char letter : held.keys[index]) {
+                        if (letter >= 'A' && letter <= 'Z') {
+                            key += '_';
+                            key += static_cast<char>(letter - 'A' + 'a');
+                        } else {
+                            key += letter;
+                        }
+                    }
+                    text += (index == 0 ? std::string() : std::string(", ")) + "\"" + key +
+                            "\": " + pythonLiteral(held.values.at(index));
+                }
                 return text + "}";
             } else {
                 std::string text = "(";
@@ -4208,6 +4225,7 @@ OperationRegistry OperationRegistry::builtIn() {
 
     detail::addLayerAlignmentOperations(all);
     detail::addExportOperations(all);
+    detail::addSubtitlesOperations(all);
     detail::parity::addLayerAndNodeOperations(all);
     detail::parity::addProjectOperations(all);
     detail::parity::addFootageOperations(all);

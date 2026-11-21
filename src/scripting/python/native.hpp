@@ -60,6 +60,10 @@ class NativeHost final {
     // evaluated with the GIL released.
     [[nodiscard]] nb::dict outputs(std::uint64_t composition, std::uint64_t node,
                                    std::int64_t numerator, std::int64_t denominator);
+    // #752 bloom.data.subtitles: the shared subtitles read (subtitles_query.hpp). `request` has
+    // composition, node (None lists the Subtitles nodes), at, from and to ((numerator,
+    // denominator) seconds or "HH:MM:SS.mmm"), page_size, cursor and format.
+    [[nodiscard]] nb::dict subtitles(const nb::dict& request);
     [[nodiscard]] nb::list events();
     [[nodiscard]] nb::list tasks() const;
     [[nodiscard]] std::unique_ptr<TaskTicket> trackTask(std::string name) {

@@ -90,6 +90,28 @@ writes movies.
 To undo or redo a step, call `history` with `action` and `expectedRevision`, the current
 revision from any query or edit result; a stale revision changes nothing.
 
+### Subtitles
+
+A Subtitles layer draws timed cues. Give it the cues, a file's absolute path or its text; a cue's
+times also read as `"HH:MM:SS.mmm"`, the form an SRT file shows:
+
+```json
+{"name":"transact","arguments":{"expectedRevision":2,"label":"Subtitles","operations":[
+  {"op":"bloom.layer.add-subtitles","args":{"composition":1,"cues":[{"start":"00:00:00.500","end":"00:00:01.500","text":"Hello"},{"start":"00:00:01.500","end":"00:00:02.000","text":"<i>again</i>"}]}}]}}
+```
+
+`subtitlesNode` in `outputs` is the node every `bloom.subtitles.*` edit names, and each `cue`
+output is a cue's stable id. Read the cues back, then edit one by its id:
+
+```json
+{"name":"query","arguments":{"kind":"subtitles","composition":1,"node":5}}
+```
+
+```json
+{"name":"transact","arguments":{"expectedRevision":3,"operations":[
+  {"op":"bloom.subtitles.edit-cue","args":{"composition":1,"node":5,"cue":1,"text":"Hello there"}}]}}
+```
+
 ## 5. Save
 
 The in-app server edits the artist's open project; the artist saves it (File > Save), and the

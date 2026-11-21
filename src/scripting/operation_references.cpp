@@ -146,6 +146,16 @@ struct Resolver final {
 std::optional<OperationDiagnostic> resolveObjectReferences(const OperationSchema& schema,
                                                            Arguments& arguments,
                                                            const OperationContext& context) {
+    // #752: a cue style of bloom.subtitles.set-cues written {name} alone has a reference's shape;
+    // it is a style, a record of one member.
+    if (schema.typeId == "bloom.subtitles.set-cues")
+        if (const auto styles = arguments.find("styles"); styles != arguments.end())
+            if (auto* list = std::get_if<ValueArray>(&styles->second.storage))
+                for (auto& item : *list)
+                    if (const auto* reference = std::get_if<ObjectReference>(&item.storage);
+                        reference != nullptr && reference->name && !reference->layerName &&
+                        !reference->layerId && !reference->role && !reference->composition)
+                        item = Value(ValueMapping{.keys = {"name"}, .values = {Value(*reference->name)}});
     const auto holdsReference = [](const Value& value) {
         return std::holds_alternative<ObjectReference>(value.storage);
     };

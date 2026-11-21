@@ -349,6 +349,63 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
            .summary = "Refuse when the project moved on.",
            .range = ">= 0"}},
          R"({"name":"query","arguments":{"kind":"outputs","composition":1,"node":7,"time":24}})");
+    // #752.
+    constexpr ArgumentSpec atArgument{
+        .name = "at",
+        .type = "integer, [numerator, denominator] or \"HH:MM:SS.mmm\"",
+        .summary = "Only the cues showing at this time (start <= at < end): a whole frame, exact "
+                   "seconds, or a timestamp exact in milliseconds (\",mmm\" also reads).",
+        .unit = "composition time"};
+    constexpr ArgumentSpec fromArgument{
+        .name = "from",
+        .type = "integer, [numerator, denominator] or \"HH:MM:SS.mmm\"",
+        .summary = "Only the cues that end after this time.",
+        .unit = "composition time"};
+    constexpr ArgumentSpec toArgument{
+        .name = "to",
+        .type = "integer, [numerator, denominator] or \"HH:MM:SS.mmm\"",
+        .summary = "Only the cues that start before this time.",
+        .unit = "composition time"};
+    kind("subtitles",
+         "A Subtitles node's cues with times, text and warnings, paged; or the composition's "
+         "Subtitles nodes.",
+         "Without `node` the answer lists the composition's Subtitles nodes ({node, count, "
+         "language, provenance}; count null when another node supplies the cues). With `node` it "
+         "gives the list's summary (count, language, provenance, linkedFile: none, in-sync, "
+         "changed, missing or unreadable, and styles) and its cues in time order, each with its "
+         "stable `id` (what bloom.subtitles.edit-cue and remove-cues take) and `index`. `text` is "
+         "WebVTT cue-text markup and `plainText` what is drawn. A cue's `warnings` name a style "
+         "the list does not define, or more than 16 cues showing at once (subtitleActiveCues). "
+         "`format` srt or vtt answers the whole list as that file's `text` instead (paging does "
+         "not apply), with what the format cannot carry in `warnings`. A cursor is valid for the "
+         "revision it came from.",
+         "{revision, composition, node, count, language, provenance:{kind, ...}, linkedFile, "
+         "styles:[{name, color?, ...}], matching, cues:[{id, index, start:" +
+             std::string(time) + ", end, duration, timestamp, text, plainText, speaker, style, "
+             "placement:{anchor?, positionX?, positionY?, lineOffset?, width?, textAlign?}, "
+             "warnings:[text]}], nextCursor|null} (or {revision, composition, nodes:[...]} "
+             "without node; {..., format, text, warnings} with format srt or vtt)",
+         {{.name = "composition",
+           .type = "integer",
+           .summary = "The composition.",
+           .unit = "composition id (query:compositions)",
+           .range = ">= 1",
+           .defaultValue = "the context's composition"},
+          {.name = "node",
+           .type = "integer",
+           .summary = "The Subtitles node; omitted, the composition's Subtitles nodes are listed.",
+           .unit = "node id (query:nodes .id)",
+           .range = ">= 1"},
+          atArgument,
+          fromArgument,
+          toArgument,
+          page,
+          cursor,
+          {.name = "format",
+           .type = "string",
+           .summary = "json (cue records, the default), or srt or vtt (the whole list as text).",
+           .defaultValue = "json"}},
+         R"({"name":"query","arguments":{"kind":"subtitles","composition":1,"node":7,"from":"00:00:10.000","to":"00:00:20.000"}})");
     kind("history", "The undo history: every entry's label and where the project is in it.",
          "Entries are oldest first. The first `position` entries are applied; the ones after "
          "that are the redo branch. `undoLabel` is the step the history tool's undo would take "

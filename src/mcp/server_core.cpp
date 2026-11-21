@@ -2,6 +2,7 @@
 // handshake and tools/call dispatch for both hosts. Moved from apps/bloom-mcp/server.cpp.
 #include "core_internal.hpp"
 
+#include <bloom/document/cue_list.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/platform/owner_only_secret.hpp>
 
@@ -205,6 +206,12 @@ yyjson_mut_val* limitsValue(Json& out, const McpServerCore::State& state) {
     put(McpLimit::ProjectDocumentBytes, capacity.documentBytes);
     put(McpLimit::ProjectContainerEntries, capacity.containerEntries);
     put(McpLimit::ProjectStringBytes, capacity.stringBytes);
+    // #752: what one subtitle cue list holds.
+    put(McpLimit::SubtitleCues, document::kMaximumCues);
+    put(McpLimit::SubtitleCueTextBytes, document::kMaximumCueTextBytes);
+    put(McpLimit::SubtitleFileBytes, document::kMaximumSubtitleFileBytes);
+    put(McpLimit::SubtitleStyles, document::kMaximumCueStyles);
+    put(McpLimit::SubtitleActiveCues, document::kMaximumActiveCues);
     // #747 (D1): asynchronous transact and idempotency keys (the jobs need the live session).
     if (live) {
         put(McpLimit::AsyncJobs, kMcpAsyncJobs);

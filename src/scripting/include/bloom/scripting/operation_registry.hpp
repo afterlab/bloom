@@ -40,6 +40,9 @@ enum class ValueKind : std::uint8_t {
     // ADR 0028: a whole path value -- the closed flag and its anchors, each a point with optional
     // incoming and outgoing cubic handles.
     Path,
+    // #752: a record of named members (a cue's placement, a list's provenance), whose members the
+    // argument's summary names.
+    Mapping,
 };
 
 // Which live-session value fills an omitted argument. The flag travels with the schema so every
@@ -164,11 +167,20 @@ struct OperationContext final {
                                                             Arguments& arguments,
                                                             const OperationContext& context);
 
+// #752: a bound an argument met (a subtitle limit): the limit's advertised name, its value and the
+// actual amount. MCP publishes it as diagnostic.limit {name, value, actual, unit}.
+struct OperationLimit final {
+    std::string name;
+    std::uint64_t value = 0;
+    std::uint64_t actual = 0;
+};
+
 struct OperationDiagnostic final {
     std::string code;
     std::string operationId;
     std::string argument;
     std::string message;
+    std::optional<OperationLimit> limit{};
 };
 
 class [[nodiscard]] OperationCreateResult final {

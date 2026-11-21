@@ -67,6 +67,7 @@ void bindHost(nb::module_& module) {
              nb::arg("progress") = nb::none())
         .def("outputs", &NativeHost::outputs, nb::arg("composition"), nb::arg("node"),
              nb::arg("numerator"), nb::arg("denominator"))
+        .def("subtitles", &NativeHost::subtitles, nb::arg("request"))
         .def("events", &NativeHost::events)
         .def("tasks", &NativeHost::tasks)
         .def("track_task", &NativeHost::trackTask, nb::keep_alive<0, 1>())

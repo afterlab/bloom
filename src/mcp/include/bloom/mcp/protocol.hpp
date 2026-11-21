@@ -312,9 +312,17 @@ enum class McpLimit : std::uint8_t {
     ProjectDocumentBytes = 17,
     ProjectContainerEntries = 18,
     ProjectStringBytes = 19,
+    // #752: what one subtitle cue list holds (docs/architecture/subtitles.md, "Limits"). An
+    // operation past one is refused (bloom.mcp.limit.subtitle-*) and nothing is applied.
+    SubtitleCues = 20,
+    SubtitleCueTextBytes = 21,
+    SubtitleFileBytes = 22,
+    SubtitleStyles = 23,
+    // The most cues one frame draws at once; the render reports the rest (never refused here).
+    SubtitleActiveCues = 24,
 };
 
-inline constexpr std::size_t kMcpLimitCount = 20;
+inline constexpr std::size_t kMcpLimitCount = 25;
 
 struct McpLimitDescription final {
     // The member of capabilities.experimental.bloom.limits.
@@ -362,6 +370,11 @@ struct McpLimitDescription final {
         {"projectDocumentBytes", "bloom.mcp.project-too-large", "bytes", 0},
         {"projectContainerEntries", "bloom.mcp.project-too-large", "entries", 0},
         {"projectStringBytes", "bloom.mcp.project-too-large", "bytes", 0},
+        {"subtitleCues", "bloom.mcp.limit.subtitle-cues", "cues", 0},
+        {"subtitleCueTextBytes", "bloom.mcp.limit.subtitle-cue-text-bytes", "bytes", 0},
+        {"subtitleFileBytes", "bloom.mcp.limit.subtitle-file-bytes", "bytes", 0},
+        {"subtitleStyles", "bloom.mcp.limit.subtitle-styles", "styles", 0},
+        {"subtitleActiveCues", "bloom.mcp.limit.subtitle-active-cues", "cues", 0},
     }};
     // clang-format on
     return table[static_cast<std::size_t>(limit)];

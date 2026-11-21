@@ -110,6 +110,14 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp integration
         TIMEOUT 180)
+    # #752: the subtitle operations and the subtitles read through MCP, Python and bloom-cli run:
+    # the same lists, time forms, data files and limit refusals.
+    bloom_add_test(NAME bloom.scripting.subtitles-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/subtitles_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp
