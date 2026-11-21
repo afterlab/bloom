@@ -38,6 +38,7 @@ void GpuAffine::Impl::clearJob() {
     discardRequested.store(false);
     residentImage.reset();
     retainedSource.reset();
+    retainedUpper.reset();
     map.release();
     status.release();
     statusMapped = nullptr;
@@ -140,6 +141,7 @@ GpuAffine::Impl::~Impl() {
     // destruction orphans the slot instead.
     assert(residentSlot == kAffineNoResidentSlot);
     retainedSource.reset();
+    retainedUpper.reset();
     residentImage.reset();
 }
 
@@ -292,22 +294,23 @@ GpuAffineDiagnostic GpuAffine::beginAffineMatrix(const GpuAffineMatrixParameters
         parameters.outputDescriptor->dataWindow() != parameters.outputWindow)
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the affine output descriptor disagrees with its data window");
-    if (parameters.filter != GpuAffineFilter::Bilinear &&
-        parameters.filter != GpuAffineFilter::Nearest)
-        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
-                              "the affine filter is unknown");
+    std::optional<ImageWindow> upperWindow;
+    if (parameters.upperLevel != nullptr && parameters.upperLevel->isValid())
+        upperWindow = parameters.upperLevel->dataWindow();
+    if (const char* refusal = affineFilterRefusal(parameters.filter, parameters.matrix,
+                                                  parameters.plan, *sourceWindow, upperWindow))
+        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument, refusal);
     return impl_->beginPrepared(
         parameters.source, parameters.outputWindow, map, parameters.opacity, byteBudget,
-        parameters.outputDescriptor ? &*parameters.outputDescriptor : nullptr, parameters.filter);
+        parameters.outputDescriptor ? &*parameters.outputDescriptor : nullptr, parameters.filter,
+        parameters.upperLevel, parameters.plan);
 }
 
-GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const GpuImage>& source,
-                                                   const ImageWindow outputWindow,
-                                                   const GpuAffineMap& affineMap,
-                                                   const float opacity,
-                                                   const std::uint64_t byteBudget,
-                                                   const Rgba32fImageDescriptor* output,
-                                                   const GpuAffineFilter filter) {
+GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(
+    const std::shared_ptr<const GpuImage>& source, const ImageWindow outputWindow,
+    const GpuAffineMap& affineMap, const float opacity, const std::uint64_t byteBudget,
+    const Rgba32fImageDescriptor* output, const GpuAffineFilter filter,
+    const std::shared_ptr<const GpuImage>& upper, const GpuAffineFilterPlan& plan) {
     if (!onOwnerThread()) {
         return makeDiagnostic(GpuAffineDiagnosticCode::WrongThread,
                               "beginAffine must run on the device owner thread");
@@ -365,6 +368,14 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
         return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
                               "the affine source image does not belong to this device");
     }
+    const bool filtered =
+        filter == GpuAffineFilter::Trilinear || filter == GpuAffineFilter::Anisotropic;
+    if (filtered && (upper == nullptr || !upper->isValid() || !upper->dataWindow() ||
+                     !compositeImageBelongsTo(gpuImageImpl(*upper), control))) {
+        return makeDiagnostic(GpuAffineDiagnosticCode::InvalidArgument,
+                              "the affine upper level image is missing or foreign");
+    }
+    const std::shared_ptr<const GpuImage>& upperImage = filtered ? upper : source;
     const SolidImageSupport support = querySolidImageSupport(*control, outputWidth, outputHeight);
     if (!support.supported || imageBytes > support.maxImageBytes) {
         return makeDiagnostic(support.supported ? GpuAffineDiagnosticCode::OverBudget
@@ -437,6 +448,7 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
 
     residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
     retainedSource = source;
+    retainedUpper = upperImage;
 
     const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
     const auto* dispatcher = control->device.getDispatcher();
@@ -455,6 +467,9 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     vk::DescriptorImageInfo outputInfo{};
     outputInfo.imageView = outputRaw->view;
     outputInfo.imageLayout = vk::ImageLayout::eGeneral;
+    vk::DescriptorImageInfo upperInfo{};
+    upperInfo.imageView = gpuImageImpl(*retainedUpper)->view;
+    upperInfo.imageLayout = vk::ImageLayout::eGeneral;
     vk::DescriptorBufferInfo sampleInfo{};
     sampleInfo.buffer = this->map.buffer;
     sampleInfo.range = VK_WHOLE_SIZE;
@@ -480,6 +495,9 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     writes[3] = writes[2];
     writes[3].dstBinding = 3;
     writes[3].pBufferInfo = &statusInfoWrite;
+    writes[4] = writes[0];
+    writes[4].dstBinding = 4;
+    writes[4].pImageInfo = &upperInfo;
     dispatcher->vkUpdateDescriptorSets(rawDevice, static_cast<std::uint32_t>(writes.size()),
                                        reinterpret_cast<const VkWriteDescriptorSet*>(writes.data()),
                                        0, nullptr);
@@ -511,8 +529,10 @@ GpuAffineDiagnostic GpuAffine::Impl::beginPrepared(const std::shared_ptr<const G
     commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *affine.pipeline);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute, *affine.pipelineLayout, 0,
                                      {*affineSet}, {});
-    const AffinePush push{outputWidth,  outputHeight, sourceWidth,
-                          sourceHeight, opacity,      static_cast<std::uint32_t>(filter)};
+    const auto upperWindow = retainedUpper->dataWindow();
+    const AffinePush push =
+        makeAffinePush(outputWidth, outputHeight, sourceWidth, sourceHeight, opacity, filter, plan,
+                       upperWindow->extent().width(), upperWindow->extent().height());
     commandBuffer.pushConstants(*affine.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
                                 sizeof(AffinePush), &push);
     // One invocation per output pixel: X tiles the row in 256-wide groups, Y is the row.

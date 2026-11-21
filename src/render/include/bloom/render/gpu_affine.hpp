@@ -41,6 +41,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace bloom::render {
@@ -130,10 +131,85 @@ struct GpuAffineMap final {
 [[nodiscard]] GpuAffineMap prepareAffineMatrixMap(const GpuAffineMatrix& matrix,
                                                   ImageWindow outputWindow);
 
-// The resample filter of the composed-matrix form (#480). Bilinear interpolates the four taps
+// The resample filter of the composed-matrix form (#480, #742). Bilinear interpolates the four taps
 // around the sample point; Nearest copies the one tap whose centre is nearest (the upper tap on an
-// exact half-way factor), so data and ID images keep their stored values exactly.
-enum class GpuAffineFilter : std::uint32_t { Bilinear = 0, Nearest = 1 };
+// exact half-way factor), so data and ID images keep their stored values exactly. Trilinear reads
+// the two mip levels around the map's footprint and blends them; Anisotropic takes up to
+// kGpuAffineMaxAnisotropicTaps trilinear taps along the footprint's major axis. Both are Bloom's
+// own sampler on the CPU and in the kernel, never the hardware sampler, and both equal Bilinear
+// exactly when the map does not shrink the image (planAffineFilter() then resolves to Bilinear).
+enum class GpuAffineFilter : std::uint32_t {
+    Bilinear = 0,
+    Nearest = 1,
+    Trilinear = 2,
+    Anisotropic = 3
+};
+
+inline constexpr std::uint32_t kGpuAffineMaxAnisotropicTaps = 16;
+
+// #742 mip pyramid. Level 0 is the source data window; level n + 1 halves level n with ceiling
+// (an odd edge averages with transparent black outside the window, the bilinear edge rule) by a
+// premultiplied 2x2 box: the composed-matrix resample of level n through
+// affineMipReductionMatrix(), whose every sample lands exactly between four taps (factor 0.5), so
+// the CPU reference and the kernel produce the same level bit for bit. A level-n source-local
+// coordinate is (x0 + 0.5) / 2^n - 0.5 of the level-0 coordinate x0.
+[[nodiscard]] GpuAffineMatrix affineMipReductionMatrix() noexcept;
+// The extent of `level` of a width x height source (level 0 is the source itself).
+[[nodiscard]] std::pair<std::uint32_t, std::uint32_t>
+affineMipLevelExtent(std::uint32_t width, std::uint32_t height, std::uint32_t level) noexcept;
+// The index of the first 1x1 level, the deepest a footprint can select.
+[[nodiscard]] std::uint32_t affineMipDeepestLevel(std::uint32_t width,
+                                                  std::uint32_t height) noexcept;
+
+// The resolved sampling of one composed-matrix resample (#742). An affine map has one constant
+// Jacobian, so its footprint, level of detail, levels, blend and taps are the same for every output
+// pixel and are computed once on the host from the matrix alone, in binary64 with only correctly
+// rounded operations (no transcendental function), so every platform resolves the same plan:
+//  - the footprint is the inverse map's Jacobian: its singular values s1 >= s2 (source pixels per
+//    output pixel along the major and minor axes) and the major axis direction;
+//  - Trilinear's footprint length is s1; Anisotropic takes N = min(ceil(s1 / s2), 16) taps spaced
+//    s1 / N apart along the major axis, centred on the sample, each with footprint length s1 / N;
+//  - a footprint length rho > 1 selects lowerLevel = floor(log2 rho) (exact, from frexp) and blends
+//    towards the next level by upperWeight = rho / 2^lowerLevel - 1 (linear across the octave);
+//    both clamp at the deepest level, and a zero weight reads one level;
+//  - s1 <= 1 (no axis shrinks) resolves to Bilinear, so magnification is Bilinear bit for bit.
+// Bilinear and Nearest requests resolve to themselves.
+struct GpuAffineFilterPlan final {
+    GpuAffineFilter filter = GpuAffineFilter::Bilinear;
+    // The level-0 source extent the plan was resolved for.
+    std::uint32_t sourceWidth = 0;
+    std::uint32_t sourceHeight = 0;
+    std::uint32_t lowerLevel = 0;
+    std::uint32_t upperLevel = 0;
+    float upperWeight = 0.0F;
+    std::uint32_t taps = 1;
+    // Tap k samples the level-0 coordinate + tapStart + k * tapStep (level-0 source pixels).
+    double tapStartX = 0.0;
+    double tapStartY = 0.0;
+    double tapStepX = 0.0;
+    double tapStepY = 0.0;
+    // The Float32 weight of each tap, 1 / taps rounded once.
+    float tapWeight = 1.0F;
+
+    // Whether the resample reads a mip pyramid level (Trilinear or Anisotropic resolved filter).
+    [[nodiscard]] bool filtered() const noexcept {
+        return filter == GpuAffineFilter::Trilinear || filter == GpuAffineFilter::Anisotropic;
+    }
+    friend bool operator==(const GpuAffineFilterPlan&,
+                           const GpuAffineFilterPlan&) noexcept = default;
+};
+
+[[nodiscard]] GpuAffineFilterPlan planAffineFilter(const GpuAffineMatrix& matrix,
+                                                   GpuAffineFilter filter,
+                                                   std::uint32_t sourceWidth,
+                                                   std::uint32_t sourceHeight) noexcept;
+// The same plan from the inverse map's Jacobian directly: source pixels per output column (j00,
+// j10) and per output row (j01, j11). A sampler whose map is not one GpuAffineMatrix (the motion
+// kernel's per-shutter-sample maps, #742) plans each constant map's footprint through it.
+[[nodiscard]] GpuAffineFilterPlan planAffineFilterFromJacobian(double j00, double j01, double j10,
+                                                               double j11, GpuAffineFilter filter,
+                                                               std::uint32_t sourceWidth,
+                                                               std::uint32_t sourceHeight) noexcept;
 
 // The six map coefficients as the kernel receives them: each binary64 coefficient split into an
 // error-free Float32 (hi, lo) pair, hi = (float)value and lo = (float)(value - hi), in the order
@@ -169,6 +245,23 @@ enum class GpuAffineFilter : std::uint32_t { Bilinear = 0, Nearest = 1 };
                                                   ImageWindow outputWindow, std::int64_t outputY,
                                                   std::span<Rgba32f> output) noexcept;
 
+// #742: the CPU reference of the kernel's filtered (Trilinear/Anisotropic) sampling, one row of
+// `outputWindow` over `latticeWindow` exactly as the kernel writes it. `lower` and `upper` are the
+// plan's lowerLevel and upperLevel images of the source (level 0 is the source itself; the same
+// image twice when the levels are equal); `matrix` maps level-0 source-local coordinates. Each
+// pixel's level-0 coordinate is the kernel's double-float reconstruction; tap k adds
+// tapStart + k * tapStep in double-float, converts to each level's coordinate, bilinear-samples it
+// with transparent black outside the level, blends the two levels with the fma lerp by
+// upperWeight, sums the taps in order and scales the sum by tapWeight (one tap is not scaled), then
+// applies the opacity. Rejects a plan that is not filtered, levels whose extents are not the
+// plan's, and the affineMatrixResampleRow() errors.
+[[nodiscard]] ImageStatus affineFilteredResampleRow(Rgba32fImageView lower, Rgba32fImageView upper,
+                                                    const GpuAffineMatrix& matrix,
+                                                    const GpuAffineFilterPlan& plan, float opacity,
+                                                    ImageWindow latticeWindow,
+                                                    ImageWindow outputWindow, std::int64_t outputY,
+                                                    std::span<Rgba32f> output) noexcept;
+
 // Validated inputs for the LayerTransform form. `source` is shared immutable ownership retained for
 // the job's lifetime. `outputWindow` is the output DATA window only; the output DISPLAY window and
 // pixel aspect are preserved from the source. The opacity is LayerTransform::opacity(), already
@@ -189,6 +282,11 @@ struct GpuAffineMatrixParameters final {
     // Resize/Fit can author a new display extent/PAR; ordinary layer placements inherit.
     std::optional<Rgba32fImageDescriptor> outputDescriptor{};
     GpuAffineFilter filter = GpuAffineFilter::Bilinear;
+    // #742 Trilinear/Anisotropic: `source` is the plan's lowerLevel image and `upperLevel` its
+    // upperLevel image (the same image when the levels are equal); `matrix` maps level-0
+    // coordinates and `plan` is planAffineFilter() of it. Unused by Bilinear and Nearest.
+    std::shared_ptr<const GpuImage> upperLevel{};
+    GpuAffineFilterPlan plan{};
 };
 
 // Per-call ceilings. Defaults are effectively unbounded so the real bounds are the live device

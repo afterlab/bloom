@@ -33,6 +33,14 @@
 // Nearest (#480, push `sampling` 1) copies the single tap at base + (factor >= 0.5) on each axis,
 // times the opacity, mirroring the parented nearest row (src/runtime/layer_parent_transform.hpp).
 //
+// Trilinear and Anisotropic (#742, push `sampling` 2 and 3) read two mip levels of the source:
+// binding 0 is the plan's lower level and binding 4 its upper level (render::planAffineFilter, the
+// same image when the levels are equal), and the map still gives level-0 coordinates. Tap k adds
+// tapStart + k * tapStep in double-float, each level converts with (x + 0.5) * scale - 0.5 (skipped
+// at scale 1), samples bilinearly with transparent black outside the level, the two levels blend
+// by the fma lerp at upperWeight, the taps sum in order and the sum scales by tapWeight (one tap is
+// not scaled), mirroring render::affineFilteredResampleRow().
+//
 // Arithmetic policy: the CPU interpolates with std::fma(factor, end, (1 - factor) * start); the
 // shader evaluates the same expression with GLSL fma(). Tap selection, the sample point, floor,
 // factor, opacity multiply, and the transparent-border rule are exact.
@@ -49,6 +57,8 @@ layout(set = 0, binding = 2, std430) readonly buffer BloomAffineMap {
 } bloom_affine_map;
 // flags[0] bit0 non-finite input, bit1 non-finite result, bit2 any nonzero subnormal input lane.
 layout(set = 0, binding = 3) buffer BloomAffineError { uint flags[]; } bloom_error;
+// #742: the plan's upper mip level (binding 0 holds the lower one); binding 0 again otherwise.
+layout(set = 0, binding = 4, rgba32f) uniform readonly image2D bloom_affine_upper;
 
 layout(push_constant) uniform BloomAffinePushConstants {
     uint outputWidth;    // output data-window width/height
@@ -56,7 +66,23 @@ layout(push_constant) uniform BloomAffinePushConstants {
     uint sourceWidth;    // source data-window width/height
     uint sourceHeight;
     float opacity;       // float32 opacity, already rounded once on the host
-    uint sampling;       // 0 bilinear, 1 nearest (#480): the one tap nearest the sample point
+    uint sampling;       // 0 bilinear, 1 nearest (#480), 2 trilinear, 3 anisotropic (#742)
+    // #742 filtered sampling; sourceWidth/sourceHeight are then the lower level's extent.
+    uint upperWidth;
+    uint upperHeight;
+    float lowerScale;    // 2^-lowerLevel
+    float upperScale;    // 2^-upperLevel
+    float upperWeight;
+    uint taps;
+    float tapWeight;
+    float tapStartXHi;
+    float tapStartXLo;
+    float tapStartYHi;
+    float tapStartYLo;
+    float tapStepXHi;
+    float tapStepXLo;
+    float tapStepYHi;
+    float tapStepYLo;
 } bloom_affine_push;
 
 const int kSentinelBase = -2147483648;
@@ -165,6 +191,45 @@ vec4 bloom_bilerp(vec4 topLeft, vec4 topRight, vec4 bottomLeft, vec4 bottomRight
                 bloom_lerp(top.w, bottom.w, fy));
 }
 
+// #742: the bilinear sample of one level at the level-0 coordinate (x, y). `errors` collects the
+// lane errors of every fetched tap.
+vec4 bloom_level_sample(bool upper, uint width, uint height, float scale, BloomDf x, BloomDf y,
+                        inout uint errors)
+{
+    if (scale != 1.0) {
+        x = bloom_df_add(bloom_df_mul(bloom_df_add(x, bloom_df(0.5)), bloom_df(scale)),
+                         bloom_df(-0.5));
+        y = bloom_df_add(bloom_df_mul(bloom_df_add(y, bloom_df(0.5)), bloom_df(scale)),
+                         bloom_df(-0.5));
+    }
+    if (bloom_df_cmp(x, bloom_df(-1.0)) <= 0 || bloom_df_cmp(x, bloom_df(float(width))) >= 0 ||
+        bloom_df_cmp(y, bloom_df(-1.0)) <= 0 || bloom_df_cmp(y, bloom_df(float(height))) >= 0) {
+        return vec4(0.0);
+    }
+    precise float baseX = 0.0;
+    precise float baseY = 0.0;
+    precise float factorX = 0.0;
+    precise float factorY = 0.0;
+    bloom_df_floor(x, baseX, factorX);
+    bloom_df_floor(y, baseY, factorY);
+    int bx = int(baseX);
+    int by = int(baseY);
+    vec4 taps[4];
+    for (int tap = 0; tap < 4; ++tap) {
+        int tx = bx + (tap & 1);
+        int ty = by + (tap >> 1);
+        if (tx < 0 || ty < 0 || tx >= int(width) || ty >= int(height)) {
+            taps[tap] = vec4(0.0);
+        } else if (upper) {
+            taps[tap] = imageLoad(bloom_affine_upper, ivec2(tx, ty));
+        } else {
+            taps[tap] = imageLoad(bloom_affine_input, ivec2(tx, ty));
+        }
+        errors |= bloom_lane_errors(taps[tap]);
+    }
+    return bloom_bilerp(taps[0], taps[1], taps[2], taps[3], factorX, factorY);
+}
+
 BloomDf bloom_map_coefficient(int index)
 {
     return BloomDf(bloom_affine_map.map[index].x, bloom_affine_map.map[index].y);
@@ -194,6 +259,55 @@ void main()
     precise BloomDf localY = bloom_df_add(
         bloom_df_add(bloom_map_coefficient(1), bloom_df_mul(bloom_map_coefficient(4), column)),
         bloom_df_mul(bloom_map_coefficient(5), row));
+
+    if (bloom_affine_push.sampling >= 2u) {
+        // #742 Trilinear / Anisotropic.
+        BloomDf startX = BloomDf(bloom_affine_push.tapStartXHi, bloom_affine_push.tapStartXLo);
+        BloomDf startY = BloomDf(bloom_affine_push.tapStartYHi, bloom_affine_push.tapStartYLo);
+        BloomDf stepX = BloomDf(bloom_affine_push.tapStepXHi, bloom_affine_push.tapStepXLo);
+        BloomDf stepY = BloomDf(bloom_affine_push.tapStepYHi, bloom_affine_push.tapStepYLo);
+        uint filteredErrors = 0u;
+        precise vec4 sum = vec4(0.0);
+        for (uint tap = 0u; tap < bloom_affine_push.taps; ++tap) {
+            BloomDf tapIndex = bloom_df(float(tap));
+            BloomDf x = bloom_df_add(bloom_df_add(localX, startX), bloom_df_mul(stepX, tapIndex));
+            BloomDf y = bloom_df_add(bloom_df_add(localY, startY), bloom_df_mul(stepY, tapIndex));
+            vec4 sampled = bloom_level_sample(false, bloom_affine_push.sourceWidth,
+                                              bloom_affine_push.sourceHeight,
+                                              bloom_affine_push.lowerScale, x, y, filteredErrors);
+            if (bloom_affine_push.upperWeight != 0.0) {
+                vec4 next = bloom_level_sample(true, bloom_affine_push.upperWidth,
+                                               bloom_affine_push.upperHeight,
+                                               bloom_affine_push.upperScale, x, y, filteredErrors);
+                float w = bloom_affine_push.upperWeight;
+                sampled = vec4(bloom_lerp(sampled.x, next.x, w), bloom_lerp(sampled.y, next.y, w),
+                               bloom_lerp(sampled.z, next.z, w), bloom_lerp(sampled.w, next.w, w));
+            }
+            if (tap == 0u) {
+                sum = sampled;
+            } else {
+                sum = sum + sampled;
+            }
+        }
+        if (filteredErrors != 0u) {
+            atomicOr(bloom_error.flags[0], filteredErrors);
+            imageStore(bloom_affine_output, outputLocal, transparent);
+            return;
+        }
+        if (bloom_affine_push.taps > 1u) {
+            sum = sum * bloom_affine_push.tapWeight;
+        }
+        if (bloom_affine_push.opacity != 1.0) {
+            sum = sum * bloom_affine_push.opacity;
+        }
+        if (any(isnan(sum)) || any(isinf(sum))) {
+            atomicOr(bloom_error.flags[0], kErrorResultNonFinite);
+            imageStore(bloom_affine_output, outputLocal, transparent);
+            return;
+        }
+        imageStore(bloom_affine_output, outputLocal, sum);
+        return;
+    }
 
     // The CPU transparent branch: sample <= -1.0 or >= extent on either axis.
     if (bloom_df_cmp(localX, bloom_df(-1.0)) <= 0 ||

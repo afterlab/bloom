@@ -40,7 +40,7 @@ bool State::initialize() {
         constexpr bool solidBindings[] = {true};
         constexpr bool gradientBindings[] = {true, false};
         constexpr bool translationBindings[] = {true, true, false, false, false};
-        constexpr bool affineBindings[] = {true, true, false, false};
+
         constexpr bool overBindings[] = {true, true, true, false};
         constexpr bool blendBindings[kBlendBindingCount] = {true, true, true, false};
         constexpr bool combineBindings[kImageCombineBindingCount] = {true, true, true, false, true};
@@ -57,8 +57,9 @@ bool State::initialize() {
                                      vulkan_detail::kTranslationOpacitySpirvByteCount,
                                      translationBindings, 5, 20, reason, base[1]) ||
             !createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
-                                     vulkan_detail::kAffineBilinearSpirvByteCount, affineBindings,
-                                     4, kAffinePushBytes, reason, base[2]) ||
+                                     vulkan_detail::kAffineBilinearSpirvByteCount,
+                                     kAffineBindingIsImage, kAffineBindingCount, kAffinePushBytes,
+                                     reason, base[2]) ||
             !createCompositePipeline(*control, vulkan_detail::kSourceOverSpirvCode,
                                      vulkan_detail::kSourceOverSpirvByteCount, overBindings, 4, 24,
                                      reason, base[3]) ||
@@ -67,8 +68,7 @@ bool State::initialize() {
                                      80, reason, base[4]) ||
             !createCompositePipeline(*control, vulkan_detail::kBlendSpirvCode,
                                      vulkan_detail::kBlendSpirvByteCount, blendBindings,
-                                     kBlendBindingCount, kBlendPushBytes, reason,
-                                     created->blend) ||
+                                     kBlendBindingCount, kBlendPushBytes, reason, created->blend) ||
             !createCompositePipeline(*control, vulkan_detail::kBlendPortableSpirvCode,
                                      vulkan_detail::kBlendPortableSpirvByteCount, blendBindings,
                                      kBlendBindingCount, kBlendPushBytes, reason,
@@ -393,8 +393,10 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 window = affine->outputWindow;
                 opacity = affine->opacity;
                 sampling = static_cast<std::uint32_t>(affine->filter);
-                if (!finite(affine->matrix) || sampling > 1)
+                if (!finite(affine->matrix) || sampling > 3)
                     window.reset();
+                if (affine->upperLevel)
+                    job.destination = resolve(*affine->upperLevel, index, job.destinationPin);
             } else if (const auto* over = std::get_if<GpuBatchSourceOver>(&operations[index])) {
                 source = &over->source;
                 job.destination = resolve(over->destination, index, job.destinationPin);
@@ -456,8 +458,20 @@ bool State::prepare(const std::span<const GpuBatchOperation> operations,
                 pack(job, CompositeSourceOverPush{width, height, job.source->width,
                                                   job.source->height, offsetX, offsetY});
             } else if (job.kind == 2) {
-                pack(job, AffinePush{width, height, job.source->width, job.source->height, opacity,
-                                     sampling});
+                const auto& affine = std::get<GpuBatchAffine>(operations[index]);
+                std::optional<ImageWindow> upperWindow;
+                if (job.destination)
+                    upperWindow = job.destination->dataWindow;
+                if (const char* refusal =
+                        affineFilterRefusal(affine.filter, affine.matrix, affine.plan,
+                                            *job.source->dataWindow, upperWindow)) {
+                    fail(GpuOperationBatchCode::InvalidRequest, refusal);
+                    return false;
+                }
+                const auto* upper = job.destination ? job.destination : job.source;
+                pack(job,
+                     makeAffinePush(width, height, job.source->width, job.source->height, opacity,
+                                    affine.filter, affine.plan, upper->width, upper->height));
             } else {
                 pack(job, CompositeTranslationPush{width, height, job.source->width,
                                                    job.source->height, opacity});

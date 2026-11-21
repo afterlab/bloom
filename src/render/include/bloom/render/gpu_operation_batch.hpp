@@ -82,6 +82,10 @@ struct GpuBatchAffine final {
     float opacity;
     std::optional<Rgba32fImageDescriptor> outputDescriptor{};
     GpuAffineFilter filter = GpuAffineFilter::Bilinear;
+    // #742 Trilinear/Anisotropic, as GpuAffineMatrixParameters: `source` is the plan's lower mip
+    // level, `upperLevel` its upper level, `plan` planAffineFilter() of `matrix`.
+    std::optional<GpuBatchImageRef> upperLevel{};
+    GpuAffineFilterPlan plan{};
 };
 struct GpuBatchSourceOver final {
     GpuBatchImageRef source;

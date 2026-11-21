@@ -46,16 +46,16 @@ bool GpuAffine::Impl::ensureResidentReady() {
 }
 
 bool GpuAffine::Impl::createPipelines() {
-    constexpr bool kAffineBindings[kAffineBindingCount] = {true, true, false, false};
     std::string reason;
     if (!createCompositePipeline(*control, vulkan_detail::kAffineBilinearSpirvCode,
-                                 vulkan_detail::kAffineBilinearSpirvByteCount, kAffineBindings,
-                                 kAffineBindingCount, kAffinePushBytes, reason, affine)) {
+                                 vulkan_detail::kAffineBilinearSpirvByteCount,
+                                 kAffineBindingIsImage, kAffineBindingCount, kAffinePushBytes,
+                                 reason, affine)) {
         createDiagnostic = affineDiagnostic(GpuAffineDiagnosticCode::ShaderRejected, reason);
         return false;
     }
 
-    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 2},
+    const std::array poolSizes{vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 3},
                                vk::DescriptorPoolSize{vk::DescriptorType::eStorageBuffer, 2}};
     vk::DescriptorPoolCreateInfo poolInfo{};
     poolInfo.flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet;

@@ -19,6 +19,7 @@
 #endif
 
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -29,11 +30,14 @@
 
 namespace bloom::render {
 
-// 4 bindings: source image, output image, per-pixel sample buffer, error-flag buffer.
-inline constexpr std::uint32_t kAffineBindingCount = 4;
-// The translation push-constant layout (output width/height, source width/height, opacity) plus
-// the #480 sampling word (0 bilinear, 1 nearest): 24 bytes of tightly packed uint32/float32.
-inline constexpr std::uint32_t kAffinePushBytes = 24;
+// 5 bindings: source image (the lower mip level when filtered), output image, map buffer,
+// error-flag buffer and (#742) the upper mip level image.
+inline constexpr std::uint32_t kAffineBindingCount = 5;
+inline constexpr bool kAffineBindingIsImage[kAffineBindingCount] = {true, true, false, false, true};
+// The translation push-constant layout (output width/height, source width/height, opacity), the
+// #480 sampling word (0 bilinear, 1 nearest, #742 2 trilinear, 3 anisotropic) and the #742
+// filtered-sampling plan: 84 bytes of tightly packed uint32/float32.
+inline constexpr std::uint32_t kAffinePushBytes = 84;
 
 struct AffinePush final {
     std::uint32_t outputWidth;
@@ -42,8 +46,71 @@ struct AffinePush final {
     std::uint32_t sourceHeight;
     float opacity;
     std::uint32_t sampling;
+    std::uint32_t upperWidth = 0;
+    std::uint32_t upperHeight = 0;
+    float lowerScale = 1.0F;
+    float upperScale = 1.0F;
+    float upperWeight = 0.0F;
+    std::uint32_t taps = 1;
+    float tapWeight = 1.0F;
+    float tapStart[4] = {};
+    float tapStep[4] = {};
 };
 static_assert(sizeof(AffinePush) == kAffinePushBytes);
+
+// The push words of one resample: the plan's levels and taps for a filtered (#742) sample, the
+// plain fields otherwise. `sourceWidth`/`sourceHeight` are the bound lower image's extent.
+[[nodiscard]] inline AffinePush
+makeAffinePush(const std::uint32_t outputWidth, const std::uint32_t outputHeight,
+               const std::uint32_t sourceWidth, const std::uint32_t sourceHeight,
+               const float opacity, const GpuAffineFilter filter, const GpuAffineFilterPlan& plan,
+               const std::uint32_t upperWidth, const std::uint32_t upperHeight) noexcept {
+    AffinePush push{outputWidth,  outputHeight, sourceWidth,
+                    sourceHeight, opacity,      static_cast<std::uint32_t>(filter)};
+    push.upperWidth = upperWidth;
+    push.upperHeight = upperHeight;
+    if (filter == GpuAffineFilter::Trilinear || filter == GpuAffineFilter::Anisotropic) {
+        push.lowerScale = std::ldexp(1.0F, -static_cast<int>(plan.lowerLevel));
+        push.upperScale = std::ldexp(1.0F, -static_cast<int>(plan.upperLevel));
+        push.upperWeight = plan.upperWeight;
+        push.taps = plan.taps;
+        push.tapWeight = plan.tapWeight;
+        const auto split = [](const double value, float* pair) noexcept {
+            const auto high = static_cast<float>(value);
+            pair[0] = high;
+            pair[1] = static_cast<float>(value - static_cast<double>(high));
+        };
+        split(plan.tapStartX, &push.tapStart[0]);
+        split(plan.tapStartY, &push.tapStart[2]);
+        split(plan.tapStepX, &push.tapStep[0]);
+        split(plan.tapStepY, &push.tapStep[2]);
+    }
+    return push;
+}
+
+// Whether `parameters` names a filter and, for a filtered one, a plan that is the
+// planAffineFilter() of its matrix with level images of the plan's extents; the reason otherwise.
+[[nodiscard]] inline const char* affineFilterRefusal(const GpuAffineFilter filter,
+                                                     const GpuAffineMatrix& matrix,
+                                                     const GpuAffineFilterPlan& plan,
+                                                     const ImageWindow lowerWindow,
+                                                     const std::optional<ImageWindow> upperWindow) {
+    if (filter == GpuAffineFilter::Bilinear || filter == GpuAffineFilter::Nearest)
+        return nullptr;
+    if (filter != GpuAffineFilter::Trilinear && filter != GpuAffineFilter::Anisotropic)
+        return "the affine filter is unknown";
+    if (plan.filter != filter ||
+        planAffineFilter(matrix, filter, plan.sourceWidth, plan.sourceHeight) != plan)
+        return "the filtered affine plan is not the plan of its matrix";
+    if (!upperWindow)
+        return "the filtered affine upper level image is missing";
+    const auto lower = affineMipLevelExtent(plan.sourceWidth, plan.sourceHeight, plan.lowerLevel);
+    const auto upper = affineMipLevelExtent(plan.sourceWidth, plan.sourceHeight, plan.upperLevel);
+    if (lower != std::pair{lowerWindow.extent().width(), lowerWindow.extent().height()} ||
+        upper != std::pair{upperWindow->extent().width(), upperWindow->extent().height()})
+        return "the filtered affine level images do not have the plan's extents";
+    return nullptr;
+}
 
 static_assert(sizeof(GpuAffineSample) == 16);
 
@@ -98,13 +165,13 @@ struct GpuAffine::Impl final {
     // thread or a stale generation is rejected without O(width*height) work.
     [[nodiscard]] GpuAffineDiagnostic preflightCheap();
     // Shared validation/upload/submit half used by both beginAffine() and beginAffineMatrix().
-    [[nodiscard]] GpuAffineDiagnostic beginPrepared(const std::shared_ptr<const GpuImage>& source,
-                                                    ImageWindow outputWindow,
-                                                    const GpuAffineMap& affineMap, float opacity,
-                                                    std::uint64_t byteBudget,
-                                                    const Rgba32fImageDescriptor* output = nullptr,
-                                                    GpuAffineFilter filter =
-                                                        GpuAffineFilter::Bilinear);
+    [[nodiscard]] GpuAffineDiagnostic
+    beginPrepared(const std::shared_ptr<const GpuImage>& source, ImageWindow outputWindow,
+                  const GpuAffineMap& affineMap, float opacity, std::uint64_t byteBudget,
+                  const Rgba32fImageDescriptor* output = nullptr,
+                  GpuAffineFilter filter = GpuAffineFilter::Bilinear,
+                  const std::shared_ptr<const GpuImage>& upper = nullptr,
+                  const GpuAffineFilterPlan& plan = {});
     // Bounded resident-slot management, defined in gpu_affine_retirement.cpp. Acquire is called
     // before the first native allocation; release is owner-thread retirement; orphan is the
     // foreign-thread or unproven owner path that preserves the already-owned slot for the owner
@@ -141,6 +208,8 @@ struct GpuAffine::Impl final {
 
     std::unique_ptr<GpuImage> residentImage;
     std::shared_ptr<const GpuImage> retainedSource;
+    // #742: the upper mip level a filtered resample reads (binding 4), retained like the source.
+    std::shared_ptr<const GpuImage> retainedUpper;
     CompositeBuffer map;
     CompositeBuffer status;
     void* statusMapped = nullptr;

@@ -597,7 +597,7 @@ target_include_directories(bloom_render_gpu_affine_kernel_test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan")
 target_compile_definitions(bloom_render_gpu_affine_kernel_test
     PRIVATE
-        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"195fef8930f596eb7b56c21390f74efb1acad430f12e6a6c200b7c26a449a8b2\"")
+        "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"aea41e5cf4b93abeca3a7d79a5179f3d890f5d6bb31d36b86d4ea624320868a7\"")
 bloom_enable_warnings(bloom_render_gpu_affine_kernel_test)
 bloom_enable_strict_floating_point(bloom_render_gpu_affine_kernel_test)
 bloom_add_test(
@@ -605,6 +605,16 @@ bloom_add_test(
     COMMAND bloom_render_gpu_affine_kernel_test
     LABELS unit gpu render
 )
+
+# #742 filtered sampling: the CPU reference's mip levels, footprint plans and Trilinear/Anisotropic
+# rows against an independent binary64 model, and a moving shrunk checker whose aliased energy the
+# filters remove. Pure host arithmetic, so it registers on every platform and in a CPU-stub build.
+add_executable(bloom_render_affine_filter_test affine_filter_tests.cpp)
+target_link_libraries(bloom_render_affine_filter_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_affine_filter_test)
+bloom_enable_strict_floating_point(bloom_render_affine_filter_test)
+bloom_add_test(NAME bloom.render.affine_filter COMMAND bloom_render_affine_filter_test
+               LABELS unit render)
 
 # Real-device native chain test (upload -> AffineBilinearV1) with the CPU primitives as oracle. It
 # compiles the private Vulkan header via the affine private header, so the target exists only where
@@ -620,7 +630,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
     endif()
     target_compile_definitions(bloom_render_gpu_affine_test
         PRIVATE
-            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"195fef8930f596eb7b56c21390f74efb1acad430f12e6a6c200b7c26a449a8b2\""
+            "BLOOM_AFFINE_BILINEAR_SPV_SHA256=\"aea41e5cf4b93abeca3a7d79a5179f3d890f5d6bb31d36b86d4ea624320868a7\""
             BLOOM_AFFINE_NATIVE_TEST=1
             BLOOM_RENDER_TEST_VULKAN_BACKEND=1)
     bloom_enable_warnings(bloom_render_gpu_affine_test)

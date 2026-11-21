@@ -142,6 +142,11 @@ bool State::record() {
                 buffer(2, 0);
                 buffer(3, 2);
                 bindingCount = 4;
+                if (job.kind == 2) {
+                    // #742: the upper mip level of a filtered resample, else the source again.
+                    image(4, job.destination ? job.destination : job.source);
+                    bindingCount = 5;
+                }
             }
         }
         api->vkUpdateDescriptorSets(device, bindingCount, writes.data(), 0, nullptr);
