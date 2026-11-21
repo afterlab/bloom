@@ -5255,18 +5255,18 @@ class LayerOps:
           wrapParameter parameter
           anchorModeParameter parameter
           overflowParameter parameter
+          markupParameter parameter
           accent1Parameter parameter
           accent2Parameter parameter
           accent3Parameter parameter
           accent4Parameter parameter
           outlineColorParameter parameter
           outlineWidthParameter parameter
+          outlineJoinParameter parameter
+          backgroundParameter parameter
           backgroundColorParameter parameter
           backgroundPaddingParameter parameter
           backgroundRadiusParameter parameter
-          markupParameter parameter
-          outlineJoinParameter parameter
-          backgroundParameter parameter
           positionParameter parameter
           anchorParameter parameter
           scaleParameter parameter
@@ -5280,12 +5280,12 @@ class LayerOps:
         Result:
           The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
           textNode, layerOutputNode, textParameter, sizeParameter, colorParameter, fontParameter,
-          boxParameter, wrapParameter, anchorModeParameter, overflowParameter, accent1Parameter,
-          accent2Parameter, accent3Parameter, accent4Parameter, outlineColorParameter,
-          outlineWidthParameter, backgroundColorParameter, backgroundPaddingParameter,
-          backgroundRadiusParameter, markupParameter, outlineJoinParameter, backgroundParameter,
-          positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter,
-          blendModeParameter (each {operationIndex, name, id}).
+          boxParameter, wrapParameter, anchorModeParameter, overflowParameter, markupParameter,
+          accent1Parameter, accent2Parameter, accent3Parameter, accent4Parameter, outlineColorParameter,
+          outlineWidthParameter, outlineJoinParameter, backgroundParameter, backgroundColorParameter,
+          backgroundPaddingParameter, backgroundRadiusParameter, positionParameter, anchorParameter,
+          scaleParameter, rotationParameter, opacityParameter, blendModeParameter (each {operationIndex,
+          name, id}).
 
         Errors:
           bloom.scripting.invalid-argument

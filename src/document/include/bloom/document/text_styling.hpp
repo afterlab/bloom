@@ -7,8 +7,11 @@
 // "bloom.text.<role>". The table is the one description the definition, validation, presentation
 // and automation read. docs/architecture/evaluation-primitives.md, "Styled Text Source".
 //
-// The socketed parameters come first (they are animatable and drivable); Markup, Outline join and
-// Background are constants with no socket, so they close the list.
+// The table's order is the order Properties, the node card and the timeline show the rows in,
+// grouped by function: Markup, the accents, the outline, the background. The animatable parameters
+// carry an operand socket (they are drivable); Markup, Outline join and Background are constants
+// with none, so the definition check matches each socket to its parameter by role and kind rather
+// than reading the socketed parameters as a prefix.
 
 #include <bloom/core/color.hpp>
 
@@ -61,6 +64,8 @@ inline constexpr std::array<std::string_view, 3> kJoins{"Round", "Miter", "Bevel
 inline constexpr std::array<std::string_view, 3> kBackgrounds{"Off", "Per line", "Block"};
 
 inline constexpr std::array kParameters{
+    TextStylingParameterSpec{
+        .role = "markup", .kind = Kind::Boolean, .value = 0.0, .maximum = 1.0, .label = "Markup"},
     TextStylingParameterSpec{.role = "accent1",
                              .kind = Kind::Color,
                              .animatable = true,
@@ -98,6 +103,18 @@ inline constexpr std::array kParameters{
                              .softMaximum = 16.0,
                              .step = 0.25,
                              .decimals = 2},
+    TextStylingParameterSpec{.role = "outlineJoin",
+                             .kind = Kind::Choice,
+                             .value = 0.0,
+                             .maximum = 2.0,
+                             .choices = kJoins,
+                             .label = "Outline join"},
+    TextStylingParameterSpec{.role = "background",
+                             .kind = Kind::Choice,
+                             .value = 0.0,
+                             .maximum = 2.0,
+                             .choices = kBackgrounds,
+                             .label = "Background"},
     TextStylingParameterSpec{.role = "backgroundColor",
                              .kind = Kind::Color,
                              .animatable = true,
@@ -127,23 +144,9 @@ inline constexpr std::array kParameters{
                              .softMaximum = 64.0,
                              .step = 0.5,
                              .decimals = 1},
-    TextStylingParameterSpec{
-        .role = "markup", .kind = Kind::Boolean, .value = 0.0, .maximum = 1.0, .label = "Markup"},
-    TextStylingParameterSpec{.role = "outlineJoin",
-                             .kind = Kind::Choice,
-                             .value = 0.0,
-                             .maximum = 2.0,
-                             .choices = kJoins,
-                             .label = "Outline join"},
-    TextStylingParameterSpec{.role = "background",
-                             .kind = Kind::Choice,
-                             .value = 0.0,
-                             .maximum = 2.0,
-                             .choices = kBackgrounds,
-                             .label = "Background"},
 };
 
-// The socketed (animatable) parameters lead the table.
+// The number of socketed (animatable) parameters.
 inline constexpr std::size_t kSocketedCount = 9;
 
 } // namespace text_styling_parameters

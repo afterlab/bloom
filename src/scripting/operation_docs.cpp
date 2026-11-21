@@ -400,10 +400,10 @@ constexpr std::array kNotes{
         "Width/2).",
         "layer, slot, textNode, layerOutputNode, textParameter, sizeParameter, colorParameter, "
         "fontParameter, boxParameter, wrapParameter, anchorModeParameter, overflowParameter, "
-        "accent1Parameter, accent2Parameter, accent3Parameter, accent4Parameter, "
-        "outlineColorParameter, outlineWidthParameter, "
-        "backgroundColorParameter, backgroundPaddingParameter, backgroundRadiusParameter, "
-        "markupParameter, outlineJoinParameter, backgroundParameter, "
+        "markupParameter, accent1Parameter, accent2Parameter, accent3Parameter, "
+        "accent4Parameter, outlineColorParameter, outlineWidthParameter, outlineJoinParameter, "
+        "backgroundParameter, backgroundColorParameter, backgroundPaddingParameter, "
+        "backgroundRadiusParameter, "
         "positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter, "
         "blendModeParameter",
         "query:layers bloom.parameter.set-source bloom.layer.stroke-outline", ""},

@@ -1002,11 +1002,61 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
         text != nullptr && text->parameters.size() == 24 &&
             std::ranges::none_of(std::span(text->parameters).subspan(12),
                                  [](const auto& parameter) { return parameter.required; }) &&
-            text->parameters[12].role == "accent1" && text->parameters[21].role == "markup" &&
-            text->parameters[21].defaultValue == document::ParameterValue{false} &&
-            text->parameters[17].role == "outlineWidth" &&
-            text->parameters[17].defaultValue == document::ParameterValue{0.0},
+            text->parameters[12].role == "markup" &&
+            text->parameters[12].defaultValue == document::ParameterValue{false} &&
+            text->parameters[18].role == "outlineWidth" &&
+            text->parameters[18].defaultValue == document::ParameterValue{0.0},
         "the text styling parameters are optional and default to plain text");
+    // #757 (TX1b): the rows are grouped by function, in the order every surface shows them, and
+    // only the animatable ones carry a socket, in parameter order.
+    if (text != nullptr) {
+        std::vector<std::string> roles;
+        for (const auto& parameter : std::span(text->parameters).subspan(12))
+            roles.push_back(parameter.role);
+        expectations.expect(
+            roles == std::vector<std::string>{"markup", "accent1", "accent2", "accent3", "accent4",
+                                              "outlineColor", "outlineWidth", "outlineJoin",
+                                              "background", "backgroundColor",
+                                              "backgroundPadding", "backgroundRadius"},
+            "the styling rows run Markup, the accents, the outline, then the background");
+        std::vector<std::string> sockets;
+        for (const auto& input : std::span(text->inputs).subspan(12))
+            sockets.push_back(input.name);
+        expectations.expect(
+            text->inputs.size() == 21 &&
+                sockets == std::vector<std::string>{"accent1", "accent2", "accent3", "accent4",
+                                                    "outlineColor", "outlineWidth",
+                                                    "backgroundColor", "backgroundPadding",
+                                                    "backgroundRadius"},
+            "every animatable styling parameter has its socket, the constants none");
+        const auto refused = [&](auto change) {
+            auto changed = *text;
+            change(changed);
+            runtime::NodeDefinitionRegistry scratch;
+            return scratch.registerDefinition(std::move(changed)) ==
+                   runtime::NodeRegistrationStatus::InvalidDefinition;
+        };
+        {
+            runtime::NodeDefinitionRegistry scratch;
+            expectations.expect(scratch.registerDefinition(*text) ==
+                                    runtime::NodeRegistrationStatus::Registered,
+                                "the Text Source definition registers as built");
+        }
+        expectations.expect(
+            refused([](auto& d) { std::swap(d.inputs[13], d.inputs[14]); }) &&
+                refused([](auto& d) { d.inputs[16].valueKind = runtime::SocketValueKind::Scalar; }) &&
+                refused([](auto& d) { d.inputs[17].required = true; }) &&
+                refused([](auto& d) {
+                    d.inputs.insert(d.inputs.begin() + 12,
+                                    {"markup", runtime::SocketValueKind::Boolean, false});
+                }) &&
+                refused([](auto& d) { d.inputs.pop_back(); }) &&
+                refused([](auto& d) { std::swap(d.parameters[12], d.parameters[13]); }) &&
+                refused([](auto& d) {
+                    d.parameters[19].valueKind = document::ParameterValueKind::Float64;
+                }),
+            "a Text Source whose sockets or styling rows do not match is refused");
+    }
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this

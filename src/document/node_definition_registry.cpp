@@ -136,6 +136,33 @@ template <typename Definition>
     return true;
 }
 
+// #757: a Text Source's sockets. Every layout parameter and every animatable styling parameter has
+// an operand socket, matched in parameter order by role and kind as hasParameterSockets matches
+// them; the styling constants (Markup, Outline join, Background) have none. The constants sit among
+// the styling rows by function (text_styling.hpp), so the socketed parameters are not a prefix.
+[[nodiscard]] bool hasTextSourceSockets(const NodeDefinition& definition) noexcept {
+    std::size_t next = 0;
+    for (std::size_t index = 0; index < definition.parameters.size(); ++index) {
+        const auto& declared = definition.parameters[index];
+        if (index >= 12) {
+            const auto* spec = bloom::document::textStylingParameterSpecForRole(declared.role);
+            if (spec == nullptr)
+                return false;
+            if (!spec->animatable)
+                continue;
+        }
+        if (next >= definition.inputs.size())
+            return false;
+        const auto& socket = definition.inputs[next++];
+        if (socket.name != declared.role || socket.required ||
+            socket.valueKind != socketKindForParameterValueKind(declared.valueKind)) {
+            return false;
+        }
+    }
+    return next == definition.inputs.size() &&
+           next == 12 + bloom::document::text_styling_parameters::kSocketedCount;
+}
+
 [[nodiscard]] bool hasImageOutput(const NodeDefinition& definition,
                                   const std::string_view name) noexcept {
     return std::ranges::count_if(definition.outputs, [&](const auto& output) {
@@ -164,13 +191,18 @@ template <typename Definition>
 
 // #757: the Text Source styling parameters, in the table's order after the twelve layout ones.
 [[nodiscard]] bool hasTextStylingParameters(const NodeDefinition& definition) noexcept {
+    using Kind = bloom::document::TextStylingParameterKind;
     const auto specs = bloom::document::textStylingParameters();
     if (definition.parameters.size() != 12 + specs.size())
         return false;
     for (std::size_t index = 0; index < specs.size(); ++index) {
         const auto& declared = definition.parameters[12 + index];
         const auto& spec = specs[index];
-        if (declared.role != spec.role || declared.required ||
+        const auto valueKind = spec.kind == Kind::Color    ? ParameterValueKind::Color4d
+                               : spec.kind == Kind::Scalar ? ParameterValueKind::Float64
+                               : spec.kind == Kind::Choice ? ParameterValueKind::Integer
+                                                           : ParameterValueKind::Boolean;
+        if (declared.role != spec.role || declared.valueKind != valueKind || declared.required ||
             declared.supportsAnimation != spec.animatable ||
             declared.schemaKey.size() != 11 + spec.role.size() ||
             !std::string_view(declared.schemaKey).starts_with("bloom.text.") ||
@@ -1016,7 +1048,7 @@ template <typename Definition>
                             ParameterValueKind::Color4d,
                             isAnimatableSchemaKey(kTextColorParameterSchemaKey)) &&
                hasTextStylingParameters(definition) &&
-               hasParameterSockets(definition, 0, 12 + text_styling_parameters::kSocketedCount) &&
+               hasTextSourceSockets(definition) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerOutput:
         // Parameter ORDER is the authoring order the properties grid, the node card, and the
@@ -1786,8 +1818,8 @@ template <typename Definition>
                                      std::string(kTextOverflowParameterSchemaKey),
                                      ParameterValueKind::Integer, false, false, std::int64_t{0}});
     // #757: the styling parameters (text_styling.hpp), optional so a node saved before them draws
-    // as it did. The animatable ones carry a socket; Markup, Outline join and Background close the
-    // list as constants.
+    // as it did, in the table's order (grouped by function). The animatable ones carry a socket;
+    // Markup, Outline join and Background are constants without one.
     for (const auto& spec : textStylingParameters()) {
         using Kind = TextStylingParameterKind;
         const auto valueKind = spec.kind == Kind::Color    ? ParameterValueKind::Color4d
