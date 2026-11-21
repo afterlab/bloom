@@ -5,6 +5,7 @@
 #include <bloom/ui/kit/controls.hpp>
 #include <bloom/ui/properties_editor.hpp>
 
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <memory>
 
@@ -359,6 +360,7 @@ void PropertiesEditor::rebuild() {
     configureRotation();
     configureOpacity();
     configureBlendMode();
+    configureLayerSelectors();
     configureSolidColor();
     configureTextSource();
     configureDocumentProperties();
@@ -379,6 +381,8 @@ void PropertiesEditor::rebuild() {
               solidColorRed_, solidColorGreen_, solidColorBlue_, solidColorAlpha_, textSize_})
             field->setEnabled(false);
         blendMode_->setEnabled(false);
+        layerFilter_->setEnabled(false);
+        layerSnap_->setEnabled(false);
         textContent_->setEnabled(false);
         textColor_->setEnabled(false);
         solidColorChip_->setEnabled(false);
@@ -626,6 +630,23 @@ void PropertiesEditor::configureBlendMode() {
     blendMode_->setToolTip(mode.has_value()
                                ? tr("How this layer combines with the layers beneath it")
                                : tr("Blending is not exposed by this selection"));
+}
+
+void PropertiesEditor::configureLayerSelectors() {
+    const auto layerId = contextualLayerId(session_);
+    const bool exposed = layerId.has_value() && session_.blendModeForLayer(*layerId).has_value();
+    const auto show = [&](kit::KDropdown& dropdown, const std::int64_t stored,
+                          const QString& tip) {
+        dropdown.setEnabled(exposed);
+        const QSignalBlocker blocker(&dropdown);
+        const int row = dropdown.findData(QVariant::fromValue<qlonglong>(stored));
+        dropdown.setCurrentIndex(row >= 0 ? row : 0);
+        dropdown.setToolTip(exposed ? tip : tr("Not exposed by this selection"));
+    };
+    show(*layerFilter_, exposed ? session_.layerFilterValue(*layerId) : 0,
+         tr("How this layer's image is sampled when it is moved, turned or scaled"));
+    show(*layerSnap_, exposed ? session_.layerSnapValue(*layerId) : document::kLayerSnapOff,
+         tr("Round this layer's final position to whole pixels"));
 }
 
 void PropertiesEditor::configureDocumentProperties() {

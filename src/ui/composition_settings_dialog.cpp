@@ -697,6 +697,18 @@ void CompositionSettingsDialog::buildAdvanced(kit::KForm& form) {
     workingSpace_->setAccessibleName(tr("Working color space"));
     form.addRow(tr("Working Color Space"), workingSpace_);
 
+    // #743: pixel-art mode resolves every Automatic filter to Nearest and snaps the layers whose
+    // Snap is Automatic; an explicit filter or snap is left as it is.
+    pixelArt_ = new kit::KCheckBox(body);
+    pixelArt_->setObjectName(QStringLiteral("compositionSettingsPixelArt"));
+    pixelArt_->setToolTip(tr("Automatic filters read Nearest, and layers whose Snap is Automatic "
+                             "move in whole pixels"));
+    (void)form.addCheckRow(tr("Pixel Art"), *pixelArt_, tr("Crisp pixels: Nearest and Snap"));
+    connect(pixelArt_, &QAbstractButton::toggled, this, [this](bool) {
+        if (!updating_)
+            refresh();
+    });
+
     anchorGrid_ = new ResizeAnchorGrid(body);
     anchorGrid_->setAccessibleName(tr("Resize Anchor"));
     anchorGrid_->setToolTip(ResizeAnchorGrid::anchorName(4));
@@ -859,6 +871,7 @@ std::optional<commands::CompositionSettings> CompositionSettingsDialog::settings
     result.workingColorSpaceId =
         space.isEmpty() ? std::nullopt : std::optional(space.toStdString());
     result.safeAreas = safe_.settings();
+    result.pixelArt = pixelArt_->isChecked();
     // Keep the exact stored fractions when the fields still show them.
     if (std::abs(result.safeAreas.action - initial_.safeAreas.action) < 0.0005)
         result.safeAreas.action = initial_.safeAreas.action;
@@ -1056,6 +1069,7 @@ void CompositionSettingsDialog::applySettings(const commands::CompositionSetting
     backgroundHex_->setText(background.toHex(false).toUpper());
     safe_.setSettings(settings.safeAreas);
     initial_.safeAreas = settings.safeAreas;
+    pixelArt_->setChecked(settings.pixelArt);
     updating_ = false;
     displayDuration();
     displayStart();

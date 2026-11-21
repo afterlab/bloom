@@ -115,6 +115,8 @@ class CompositionSettingsDialog final : public kit::KDialog {
     QLineEdit* frameRate_ = nullptr;
     kit::KDropdown* ratePresets_ = nullptr;
     kit::KCheckBox* dropFrame_ = nullptr;
+    // #743: the composition's pixel-art mode.
+    kit::KCheckBox* pixelArt_ = nullptr;
     QLineEdit* startField_ = nullptr;
     QLineEdit* durationField_ = nullptr;
     kit::KDropdown* unit_ = nullptr;

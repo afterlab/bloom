@@ -645,6 +645,10 @@ class CompositionSession final : public QObject {
     // without a binding reads as Bilinear (layerFilterValue).
     [[nodiscard]] bool setLayerFilter(document::LayerId layerId, std::int64_t filter);
     [[nodiscard]] std::int64_t layerFilterValue(document::LayerId layerId) const;
+    // #743: the layer's pixel snap (0 Off, 1 On, 2 Automatic), creating its binding on a layer
+    // saved without one. A layer without a binding reads as Off (layerSnapValue).
+    [[nodiscard]] bool setLayerSnap(document::LayerId layerId, std::int64_t snap);
+    [[nodiscard]] std::int64_t layerSnapValue(document::LayerId layerId) const;
     // The selection-driven form, for the Properties row and the Layer node card, which author
     // whatever the contextual layer is. Resolves the selection's layer and delegates to
     // setLayerBlendMode(), so there is exactly one write path.

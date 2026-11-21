@@ -29,6 +29,7 @@
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/platform/source_identity.hpp>
 #include <bloom/ui/asset_controller.hpp>
 #include <bloom/ui/assets_editor.hpp>
@@ -173,6 +174,68 @@ void inputColorCatalogFollowsWorkingSpace() {
             "unrelated authoring edit succeeds");
     require(controller.inputColorSpaces() == stable,
             "unrelated snapshot keeps the ready catalogue without resubmission");
+}
+// #742, #743: a layer saved before Filter and Snap existed has neither binding. Properties still
+// shows its Bilinear filter and Off snap, and choosing a value creates the binding through
+// SetLayerFilter / SetLayerSnap in one undo step.
+void unboundLayerSelectors() {
+    auto initial =
+        document::makeNewProject("Unbound layer", "Main", core::RationalTime::fromInteger(10));
+    const auto main = initial.initialCompositionId;
+    document::LayerId layer;
+    document::Project stripped = [&] {
+        document::Document document(std::move(initial.project));
+        commands::CommandStack stack(document);
+        ui::CompositionSession session(document, stack, main);
+        require(session.addSolidLayer("Old", {0.2, 0.4, 0.6, 1.0}), "add a solid layer");
+        auto project = session.snapshot().project();
+        auto* composition = project.findComposition(main);
+        layer = composition->graph().layerOutputs().front().layerId;
+        auto* node = composition->graph().findNode(composition->graph().layerOutputs().front().nodeId);
+        for (const auto role : {document::kLayerFilterParameterRole, document::kLayerSnapParameterRole}) {
+            const auto binding = std::ranges::find(node->parameters, role,
+                                                   &document::ParameterBinding::role);
+            require(binding != node->parameters.end(), "a new layer binds filter and snap");
+            require(composition->parameters().erase(binding->parameterId), "drop the parameter");
+            node->parameters.erase(binding);
+        }
+        require(project.validate().ok(), "a layer without filter and snap is valid");
+        return project;
+    }();
+    document::Document document(std::move(stripped));
+    commands::CommandStack stack(document);
+    ui::CompositionSession session(document, stack, main);
+    ui::PropertiesEditor properties(session);
+    properties.show();
+    session.selectLayer(layer);
+    QApplication::processEvents();
+    const auto bound = [&](const std::string_view role) {
+        const auto* node = session.composition()->graph().findNode(
+            session.composition()->graph().layerOutputs().front().nodeId);
+        return std::ranges::find(node->parameters, role, &document::ParameterBinding::role) !=
+               node->parameters.end();
+    };
+    auto* filter = properties.findChild<ui::kit::KDropdown*>("layerFilterEditor");
+    auto* snap = properties.findChild<ui::kit::KDropdown*>("layerSnapEditor");
+    require(filter && snap && filter->isEnabled() && snap->isEnabled() &&
+                filter->currentText() == "Bilinear" && snap->currentText() == "Off",
+            "an unbound layer's Properties rows read Bilinear and Off");
+    filter->chooseIndex(filter->findData(QVariant::fromValue<qlonglong>(1)));
+    QApplication::processEvents();
+    require(bound(document::kLayerFilterParameterRole) && session.layerFilterValue(layer) == 1 &&
+                filter->currentText() == "Nearest",
+            "choosing Nearest creates the filter binding");
+    snap->chooseIndex(snap->findData(QVariant::fromValue<qlonglong>(document::kLayerSnapOn)));
+    QApplication::processEvents();
+    require(bound(document::kLayerSnapParameterRole) &&
+                session.layerSnapValue(layer) == document::kLayerSnapOn,
+            "choosing On creates the snap binding");
+    require(session.undo() && !bound(document::kLayerSnapParameterRole) && session.undo() &&
+                !bound(document::kLayerFilterParameterRole),
+            "each edit undoes to the unbound layer");
+    QApplication::processEvents();
+    require(filter->currentText() == "Bilinear" && snap->currentText() == "Off",
+            "the rows read Bilinear and Off again");
 }
 void compositionDrops() {
     auto initial =
@@ -620,6 +683,59 @@ void run() {
                 "the filter edit undoes to Automatic");
     }
     require(filterRows == 1, "timeline exposes the layer's Filter row");
+    // #743: the layer's Snap row beside it: Automatic (a new layer's default) leads Off and On,
+    // committed through SetLayerSnap and undoable.
+    int snapRows = 0;
+    for (const auto& item : rows) {
+        if (item.role != "snap")
+            continue;
+        ++snapRows;
+        ui::TimelinePropertyRow row(session, nullptr);
+        row.bind(item);
+        auto* control = row.findChild<ui::kit::KDropdown*>("timelinePropertyAlignment");
+        const QStringList names{"Automatic", "Off", "On"};
+        const std::array<long long, 3> stored{2, 0, 1};
+        require(control && control->count() == names.size(), "the snap row is a closed dropdown");
+        for (int index = 0; index < names.size(); ++index)
+            require(control->itemText(index) == names[index] &&
+                        control->itemData(index).toLongLong() ==
+                            stored[static_cast<std::size_t>(index)],
+                    "snap display and stored value agree");
+        require(control->currentText() == "Automatic", "a new layer's snap reads Automatic");
+        control->chooseIndex(2);
+        require(session.layerSnapValue(layer) == document::kLayerSnapOn,
+                "the timeline snap row commits On");
+        require(session.undo() && session.layerSnapValue(layer) == document::kLayerSnapAutomatic,
+                "the snap edit undoes to Automatic");
+    }
+    require(snapRows == 1, "timeline exposes the layer's Snap row");
+    // #742, #743: Properties shows the selected layer's Filter and Snap in the Object group and
+    // authors them through the same commands; each edit is one undo step.
+    session.selectLayer(layer);
+    QApplication::processEvents();
+    {
+        auto* filter = properties.findChild<ui::kit::KDropdown*>("layerFilterEditor");
+        auto* snap = properties.findChild<ui::kit::KDropdown*>("layerSnapEditor");
+        require(filter && snap && filter->isEnabled() && snap->isEnabled(),
+                "Properties shows the layer's Filter and Snap rows");
+        require(filter->count() == 5 && filter->currentText() == "Automatic" &&
+                    snap->count() == 3 && snap->currentText() == "Automatic",
+                "the Properties rows read the layer's Automatic filter and snap");
+        filter->chooseIndex(filter->findData(QVariant::fromValue<qlonglong>(3)));
+        QApplication::processEvents();
+        require(session.layerFilterValue(layer) == 3 && filter->currentText() == "Anisotropic",
+                "the Properties filter row commits Anisotropic");
+        snap->chooseIndex(snap->findData(QVariant::fromValue<qlonglong>(document::kLayerSnapOn)));
+        QApplication::processEvents();
+        require(session.layerSnapValue(layer) == document::kLayerSnapOn && snap->currentText() == "On",
+                "the Properties snap row commits On");
+        require(session.undo() && session.undo() && session.layerFilterValue(layer) == 4 &&
+                    session.layerSnapValue(layer) == document::kLayerSnapAutomatic,
+                "both Properties edits undo");
+        QApplication::processEvents();
+        require(filter->currentText() == "Automatic" && snap->currentText() == "Automatic",
+                "the Properties rows follow the undo");
+    }
     controller.remove(asset);
     require(!session.snapshot().project().findAsset(asset), "Remove publishes asset removal");
     require(cardAsset->currentText() == "Missing asset" && cardAsset->mutedValue() &&
@@ -816,6 +932,7 @@ int main(int argc, char** argv) {
     try {
         inputColorCatalogFollowsWorkingSpace();
         compositionDrops();
+        unboundLayerSelectors();
         run();
         partialBatchImport();
         playbackStartsNoMediaJobs();

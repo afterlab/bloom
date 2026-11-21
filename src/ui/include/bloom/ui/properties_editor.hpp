@@ -163,6 +163,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     void configureRotation();
     void configureOpacity();
     void configureBlendMode();
+    // #742, #743: the layer Filter and Snap rows.
+    void configureLayerSelectors();
     // Task PROPS-1, deliverable 1: the Object section's Visible/Solo/Locked switches, which author
     // the layer boundary's own flags through the same SetLayerEnabled/Solo/Locked commands the
     // timeline's toggle strip already uses -- one write path, two surfaces.
@@ -221,6 +223,8 @@ class PropertiesEditor final : public QWidget, public EditorChromeProvider {
     // declares the blend mode non-animatable -- an indicator column that can never light up would
     // promise a capability that does not exist.
     kit::KDropdown* blendMode_ = nullptr;
+    kit::KDropdown* layerFilter_ = nullptr;
+    kit::KDropdown* layerSnap_ = nullptr;
     kit::KColorChip* solidColorChip_ = nullptr;
     QWidget* solidColorPanel_ = nullptr;
     KeyframeDiamond* solidColorKeyframe_ = nullptr;

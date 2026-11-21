@@ -75,9 +75,10 @@ void testHostedFieldsAreFullWidthAndUnscaled() {
         hosted.push_back(entry);
     }
     // ADAPTED (task S4, then blend modes, then #541): the Layer Output card hosts position X/Y,
-    // anchor X/Y, scale X/Y, opacity, the blending dropdown and (#742) the filter dropdown as
-    // rows -- nine value controls -- and Rotation in its controls widget beside a dial.
-    expect(hosted.size() == 9 && rotationDial,
+    // anchor X/Y, scale X/Y, opacity, the blending dropdown, (#742) the filter dropdown and
+    // (#743) the snap dropdown as rows -- ten value controls -- and Rotation in its controls
+    // widget beside a dial.
+    expect(hosted.size() == 10 && rotationDial,
            "the layer output card hosts its transform, opacity and blending controls");
     // Five parameter indicators plus the six independently keyable vector components.
     expect(diamondCount == 5, "one parameter diamond per animatable parameter");

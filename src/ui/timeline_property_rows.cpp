@@ -304,9 +304,10 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
             if (boundaryLayer != nullptr) {
                 const auto bindings =
                     document::layerParameterBindings(composition->graph(), *boundaryLayer);
-                // #742: a layer saved without a filter binding still shows its (Bilinear) filter;
-                // choosing one creates the binding.
-                if (role == document::kLayerFilterParameterRole &&
+                // #742, #743: a layer saved without a filter or snap binding still shows its
+                // (Bilinear, Off) value; choosing one creates the binding.
+                if ((role == document::kLayerFilterParameterRole ||
+                     role == document::kLayerSnapParameterRole) &&
                     std::ranges::find(bindings, role, &document::ParameterBinding::role) ==
                         bindings.end())
                     addDefault(role, name);
@@ -326,6 +327,7 @@ std::vector<TimelineLayerEntry> timelinePropertyEntries(
             add(document::kScaleParameterRole, QObject::tr("Scale"));
             add(document::kRotationParameterRole, QObject::tr("Rotation"));
             add(document::kLayerFilterParameterRole, QObject::tr("Filter"));
+            add(document::kLayerSnapParameterRole, QObject::tr("Snap"));
         }
         // ADR 0028: the layer's masks, between its own rows and its source's.
         appendMaskEntries(session, layer, collapsedGroups, rows, reveal);
@@ -532,6 +534,16 @@ TimelinePropertyRow::TimelinePropertyRow(CompositionSession& session, QWidget* p
                     document::ParameterValue{stored}, tr("Set Filter"));
             return;
         }
+        if (entry_.role == document::kLayerSnapParameterRole) {
+            // #743: the layer's snap likewise.
+            if (entry_.layerId.isValid())
+                (void)session_.setLayerSnap(entry_.layerId, stored);
+            else if (entry_.mergeNodeId.isValid())
+                (void)session_.setEntryParameterValue(
+                    entry_.entry(), document::kLayerSnapParameterRole,
+                    document::ParameterValue{stored}, tr("Set Snap"));
+            return;
+        }
         (void)session_.setParameterValue(entry_.parameterId, stored, tr("Set Parameter"));
     });
     color_->setObjectName("timelinePropertyColor");
@@ -717,10 +729,12 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
         const auto role = std::string_view(entry.role);
         const auto* record = session_.composition()->parameters().find(entry.parameterId);
         const bool filterRow = role == document::kLayerFilterParameterRole;
+        const bool snapRow = role == document::kLayerSnapParameterRole;
         const auto items = record ? propertiesSelectorItems(record->schemaKey)
                            : filterRow
                                ? propertiesSelectorItems(document::kLayerFilterParameterSchemaKey)
-                               : QList<std::pair<QString, std::int64_t>>{};
+                           : snapRow ? propertiesSelectorItems(document::kLayerSnapParameterSchemaKey)
+                                     : QList<std::pair<QString, std::int64_t>>{};
         const bool selector = !items.empty() && role != document::kBlendModeParameterRole;
         alignment_->setVisible(selector);
         if (selector) {
@@ -733,12 +747,17 @@ void TimelinePropertyRow::bind(const TimelineLayerEntry& entry) {
             const auto* constant =
                 record ? std::get_if<document::ConstantValueSource>(&record->source) : nullptr;
             const auto* value = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
-            // #742: an unbound layer filter reads as its layer's (Bilinear) value.
+            // #742, #743: an unbound layer filter or snap reads as its layer's (Bilinear, Off)
+            // value.
             const auto unboundFilter =
                 filterRow && value == nullptr
                     ? std::optional(entry.layerId.isValid()
                                         ? session_.layerFilterValue(entry.layerId)
                                         : std::int64_t{0})
+                : snapRow && value == nullptr
+                    ? std::optional(entry.layerId.isValid()
+                                        ? session_.layerSnapValue(entry.layerId)
+                                        : std::int64_t{document::kLayerSnapOff})
                     : std::nullopt;
             if (value)
                 alignment_->setCurrentIndex(alignment_->findData(QVariant::fromValue(*value)));

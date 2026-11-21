@@ -18,6 +18,7 @@
 
 #include "composition_editor_support.hpp"
 #include "properties_anchor_grid.hpp"
+#include "properties_registry_row.hpp"
 #include "properties_sections.hpp"
 #include "properties_text_edit.hpp"
 #include "properties_value_edits.hpp"
@@ -45,6 +46,7 @@
 #include <bloom/commands/transaction.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/composition_settings.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
@@ -162,6 +164,24 @@ void PropertiesEditor::buildObjectSection(QVBoxLayout* layout) {
     blendMode_->setAccessibleName(tr("Blending"));
     addBlendModeItems(*blendMode_);
     addRow(rows, body, makeRowLabel(tr("Blending Mode"), body), nullptr, blendMode_);
+
+    // #742, #743: the layer's resample filter and pixel snap, shown for every layer whether or
+    // not the layer has saved a binding (an unbound layer reads Bilinear and Off); choosing a
+    // value authors it through SetLayerFilter / SetLayerSnap, which creates the binding.
+    const auto selector = [body](const char* name, const QString& accessible,
+                                 const std::string_view schemaKey) {
+        auto* dropdown = new kit::KDropdown(body);
+        dropdown->setObjectName(QString::fromLatin1(name));
+        dropdown->setAccessibleName(accessible);
+        for (const auto& [label, stored] : propertiesSelectorItems(schemaKey))
+            dropdown->addItem(label, QVariant::fromValue<qlonglong>(stored));
+        return dropdown;
+    };
+    layerFilter_ = selector("layerFilterEditor", tr("Filter"),
+                            document::kLayerFilterParameterSchemaKey);
+    addRow(rows, body, makeRowLabel(tr("Filter"), body), nullptr, layerFilter_);
+    layerSnap_ = selector("layerSnapEditor", tr("Snap"), document::kLayerSnapParameterSchemaKey);
+    addRow(rows, body, makeRowLabel(tr("Snap"), body), nullptr, layerSnap_);
 
     opacity_ = properties::makeParameterCell(QStringLiteral("opacityEditor"), tr("Opacity"), {},
                                              document::kOpacityParameterSchemaKey,
@@ -660,6 +680,19 @@ void PropertiesEditor::bindCommits() {
                document::kOpacityParameterRole);
     bindSlider(rotationDial_, rotation_, [this] { commitRotationFromControls(); },
                document::kRotationParameterRole);
+
+    const auto bindLayerSelector = [this](kit::KDropdown* dropdown, const bool snap) {
+        connect(dropdown, &kit::KDropdown::activated, this, [this, dropdown, snap](const int index) {
+            const auto layerId = contextualLayerId(session_);
+            if (rebuilding_ || index < 0 || !layerId.has_value())
+                return;
+            const auto stored = dropdown->itemData(index).toLongLong();
+            (void)(snap ? session_.setLayerSnap(*layerId, stored)
+                        : session_.setLayerFilter(*layerId, stored));
+        });
+    };
+    bindLayerSelector(layerFilter_, false);
+    bindLayerSelector(layerSnap_, true);
 
     connect(blendMode_, &kit::KDropdown::activated, this, [this](const int index) {
         if (rebuilding_ || index < 0) {

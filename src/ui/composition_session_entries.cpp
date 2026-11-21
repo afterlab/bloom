@@ -229,6 +229,9 @@ CompositionSession::entryLayerDefault(const std::string_view role) const {
     // #742: an entry layer is created without a filter binding, which is Bilinear.
     if (role == document::kLayerFilterParameterRole)
         return document::ParameterValue{std::int64_t{0}};
+    // #743: nor with a snap binding, which does not snap.
+    if (role == document::kLayerSnapParameterRole)
+        return document::ParameterValue{std::int64_t{document::kLayerSnapOff}};
     return std::nullopt;
 }
 
@@ -238,6 +241,8 @@ CompositionSession::entryParameterValue(const document::MergeEntryRef& entry,
     if (const auto layer = entryLayer(entry)) {
         if (role == document::kLayerFilterParameterRole)
             return ParameterSample(layerFilterValue(*layer));
+        if (role == document::kLayerSnapParameterRole)
+            return ParameterSample(layerSnapValue(*layer));
         return effectiveParameterValue(layerParameter(*layer, role));
     }
     const auto value = entryLayerDefault(role);
@@ -273,6 +278,23 @@ bool CompositionSession::setEntryParameterValue(const document::MergeEntryRef& e
                          [compositionId, stored = *filter](const document::LayerId layer) {
                              return std::make_unique<commands::SetLayerFilter>(compositionId, layer,
                                                                                stored);
+                         })
+            .succeeded();
+    }
+    if (role == document::kLayerSnapParameterRole) {
+        // #743: the snap binding is optional too, so its edit goes through SetLayerSnap.
+        const auto* snap = std::get_if<std::int64_t>(&value);
+        if (snap == nullptr)
+            return false;
+        if (const auto layer = entryLayer(entry))
+            return setLayerSnap(*layer, *snap);
+        if (*snap == document::kLayerSnapOff)
+            return true;
+        const auto compositionId = compositionId_;
+        return editEntry(entry, label,
+                         [compositionId, stored = *snap](const document::LayerId layer) {
+                             return std::make_unique<commands::SetLayerSnap>(compositionId, layer,
+                                                                             stored);
                          })
             .succeeded();
     }
@@ -404,6 +426,24 @@ bool CompositionSession::setLayerFilter(const document::LayerId layerId,
     commands::Transaction transaction("Set Filter", snapshot_.revision());
     transaction.emplace<commands::SetLayerFilter>(compositionId_, layerId, filter);
     return execute(std::move(transaction));
+}
+
+bool CompositionSession::setLayerSnap(const document::LayerId layerId, const std::int64_t snap) {
+    Q_ASSERT(QThread::currentThread() == thread());
+    // An unbound layer does not snap, so asking for Off there changes nothing.
+    if (layerSnapValue(layerId) == snap)
+        return true;
+    commands::Transaction transaction("Set Snap", snapshot_.revision());
+    transaction.emplace<commands::SetLayerSnap>(compositionId_, layerId, snap);
+    return execute(std::move(transaction));
+}
+
+std::int64_t CompositionSession::layerSnapValue(const document::LayerId layerId) const {
+    const auto* parameter = layerParameter(layerId, document::kLayerSnapParameterRole);
+    const auto* constant =
+        parameter ? std::get_if<document::ConstantValueSource>(&parameter->source) : nullptr;
+    const auto* stored = constant ? std::get_if<std::int64_t>(&constant->value) : nullptr;
+    return stored ? *stored : document::kLayerSnapOff;
 }
 
 std::int64_t CompositionSession::layerFilterValue(const document::LayerId layerId) const {

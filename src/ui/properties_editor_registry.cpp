@@ -13,6 +13,7 @@
 #include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/commands/video_source_operations.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/color_grade_nodes.hpp>
@@ -421,7 +422,9 @@ void PropertiesEditor::configureRegistryRows() {
                       declared.role == document::kScaleParameterRole ||
                       declared.role == document::kRotationParameterRole ||
                       declared.role == document::kOpacityParameterRole ||
-                      declared.role == document::kBlendModeParameterRole)) ||
+                      declared.role == document::kBlendModeParameterRole ||
+                      declared.role == document::kLayerFilterParameterRole ||
+                      declared.role == document::kLayerSnapParameterRole)) ||
                     (definition->lowering == document::NodeLoweringKind::Solid &&
                      declared.role == document::kSolidColorParameterRole) ||
                     (definition->lowering == document::NodeLoweringKind::Text &&

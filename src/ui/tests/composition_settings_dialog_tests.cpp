@@ -261,6 +261,14 @@ void testDialogPresetsAndValidation() {
     expect(!drop->isVisibleTo(advancedPage) && dialog.settings() &&
                !dialog.settings()->timecode.dropFrame,
            "at 25 fps the drop-frame row is not offered and nothing drop-frame is authored");
+    // #743: pixel-art mode is one switch on Advanced, off for a new composition.
+    auto* pixelArt = child<QAbstractButton>(dialog, "compositionSettingsPixelArt");
+    expect(pixelArt && pixelArt->isVisibleTo(advancedPage) && !pixelArt->isChecked() &&
+               dialog.settings() && !dialog.settings()->pixelArt,
+           "Pixel Art is offered on Advanced and off by default");
+    pixelArt->setChecked(true);
+    expect(dialog.settings() && dialog.settings()->pixelArt, "checking Pixel Art authors it");
+    pixelArt->setChecked(false);
     auto* titleSafe = child<ui::kit::KValueField>(dialog, "compositionSettingsTitleSafe");
     titleSafe->setValue(95);
     auto* tabs = child<ui::kit::KTabs>(dialog, "compositionSettingsTabs");
