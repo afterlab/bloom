@@ -993,10 +993,15 @@ struct Encoder::State {
             require(av_write_trailer(format) >= 0, "Mux close failed", Error::Io);
         avio_flush(io.context);
         require(io.context->error >= 0, "Spool write failed", Error::Io);
-        // #752: FFmpeg's MOV muxer enables the first text track, which readers take as the default.
-        if (!subtitleTracks.empty() && settings.container != "webm")
-            require(ffmpeg::clearSubtitleTracksEnabled(file.file, file.size),
-                    "The subtitle tracks could not be marked as not default", Error::Io);
+        // #752: FFmpeg's MOV muxer enables the first text track, which readers take as the default,
+        // and writes a track language only where an old Macintosh code exists.
+        if (!subtitleTracks.empty() && settings.container != "webm") {
+            std::vector<std::string> languages;
+            for (const auto& track : settings.subtitles)
+                languages.push_back(track.language);
+            require(ffmpeg::finishSubtitleTrackHeaders(file.file, file.size, languages),
+                    "The subtitle track headers could not be finished", Error::Io);
+        }
         EncodeQcV1 qc;
         qc.bytes = file.size;
         qc.artifact = file.hash();

@@ -230,12 +230,14 @@ std::vector<provider::SubtitleTrackV1> readSubtitleTracks(const std::string& pat
     return readSubtitleTracks(*input, rate);
 }
 
-bool clearSubtitleTracksEnabled(std::FILE* file, const std::uint64_t size) {
+bool finishSubtitleTrackHeaders(std::FILE* file, const std::uint64_t size,
+                                const std::vector<std::string>& languages) {
     if (std::fflush(file) != 0)
         return false;
     const auto moov = findChild(file, 0, size, "moov");
     if (!moov)
         return false;
+    std::size_t textTrack = 0;
     std::uint64_t at = moov->contentStart();
     while (at < moov->end()) {
         const auto trak = readBox(file, at, moov->end());
@@ -249,7 +251,8 @@ bool clearSubtitleTracksEnabled(std::FILE* file, const std::uint64_t size) {
         if (!tkhd || !mdia)
             return false;
         const auto hdlr = findChild(file, mdia->contentStart(), mdia->end(), "hdlr");
-        if (!hdlr || hdlr->size < hdlr->header + 12)
+        const auto mdhd = findChild(file, mdia->contentStart(), mdia->end(), "mdhd");
+        if (!hdlr || !mdhd || hdlr->size < hdlr->header + 12)
             return false;
         // hdlr: version and flags (4), pre_defined (4), handler_type (4).
         std::array<char, 4> handler{};
@@ -261,6 +264,9 @@ bool clearSubtitleTracksEnabled(std::FILE* file, const std::uint64_t size) {
                           std::memcmp(handler.data(), "subt", 4) == 0;
         if (!text)
             continue;
+        if (textTrack >= languages.size() || languages[textTrack].size() != 3)
+            return false;
+        const auto& language = languages[textTrack++];
         // tkhd: version (1) and 24-bit flags; bit 0 of the last flag byte is track_enabled.
         if (tkhd->size < tkhd->header + 4)
             return false;
@@ -271,8 +277,31 @@ bool clearSubtitleTracksEnabled(std::FILE* file, const std::uint64_t size) {
         flags = static_cast<unsigned char>(flags & ~1U);
         if (!seekTo(file, flagAt) || std::fwrite(&flags, 1, 1, file) != 1)
             return false;
+        // mdhd: version (1), flags (3), creation and modification times, timescale and duration
+        // (4 bytes each in version 0, 8, 8, 4 and 8 in version 1), then the 16-bit language.
+        // FFmpeg's MOV muxer writes only the old Macintosh language codes there (an unlisted
+        // language becomes "unspecified"); the ISO 639-2/T code packed in three 5-bit letters is
+        // what QuickTime and ISO BMFF readers take for any language.
+        unsigned char version = 0;
+        if (!seekTo(file, mdhd->contentStart()) || std::fread(&version, 1, 1, file) != 1 ||
+            version > 1)
+            return false;
+        const std::uint64_t languageAt = mdhd->contentStart() + (version == 1 ? 32U : 20U);
+        if (languageAt + 2 > mdhd->end())
+            return false;
+        unsigned code = 0;
+        for (const char letter : language) {
+            if (letter < 'a' || letter > 'z')
+                return false;
+            code = (code << 5U) | static_cast<unsigned>(letter - 0x60);
+        }
+        const std::array<unsigned char, 2> packed{static_cast<unsigned char>((code >> 8U) & 0x7fU),
+                                                  static_cast<unsigned char>(code & 0xffU)};
+        if (!seekTo(file, languageAt) ||
+            std::fwrite(packed.data(), 1, packed.size(), file) != packed.size())
+            return false;
     }
-    return std::fflush(file) == 0;
+    return textTrack == languages.size() && std::fflush(file) == 0;
 }
 
 } // namespace bloom::media::ffmpeg

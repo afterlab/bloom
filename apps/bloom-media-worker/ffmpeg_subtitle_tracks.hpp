@@ -39,10 +39,13 @@ namespace bloom::media::ffmpeg {
 [[nodiscard]] std::vector<provider::SubtitleTrackV1> readSubtitleTracks(const std::string& path,
                                                                         provider::Rational rate);
 
-// FFmpeg's MOV muxer marks the first text track enabled, which readers take as the default
-// track. Clears the enabled flag in the track header of every text track of the ISO BMFF file
-// `file` (`size` bytes), so the tracks stay selectable but none is shown unasked. False when the
-// file's boxes cannot be walked.
-[[nodiscard]] bool clearSubtitleTracksEnabled(std::FILE* file, std::uint64_t size);
+// Finishes the text tracks of the ISO BMFF file `file` (`size` bytes), in track order. FFmpeg's MOV
+// muxer marks the first text track enabled, which readers take as the default track: the enabled
+// flag of every text track's header is cleared, so the tracks stay selectable but none is shown
+// unasked. Each track's media header then gets `languages[i]` (ISO 639-2/T, three lower-case
+// letters) as the packed ISO code, which FFmpeg's MOV muxer writes only for the few languages with
+// an old Macintosh code. False when the boxes cannot be walked or the track count differs.
+[[nodiscard]] bool finishSubtitleTrackHeaders(std::FILE* file, std::uint64_t size,
+                                              const std::vector<std::string>& languages);
 
 } // namespace bloom::media::ffmpeg

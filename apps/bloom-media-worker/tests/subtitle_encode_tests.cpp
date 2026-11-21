@@ -154,11 +154,13 @@ EncodeSettingsV1 base() {
                     {41, 60, "Ünïcödé — 字幕"},
                     {60, 61, "One frame"},
                     {65, 72, "To the end"}};
-    SubtitleTrackV1 indonesian;
-    indonesian.language = "ind";
-    indonesian.title = "Bahasa Indonesia";
-    indonesian.cues = {{5, 20, "Baris pertama"}, {33, 50, "Baris kedua"}};
-    settings.subtitles = {english, indonesian};
+    // German's ISO 639-2/T code has no old Macintosh language code, which FFmpeg's MOV muxer
+    // alone would write as "unspecified".
+    SubtitleTrackV1 german;
+    german.language = "deu";
+    german.title = "Deutsch";
+    german.cues = {{5, 20, "Erste Zeile"}, {33, 50, "Zweite Zeile"}};
+    settings.subtitles = {english, german};
     return settings;
 }
 
@@ -240,10 +242,10 @@ int main(int argc, char** argv) {
             changed.pop_back();
             test::check(!subtitleTrackDifference(sent, changed).empty(), "a missing track");
             changed = sent;
-            changed[1].language = "msa";
+            changed[1].language = "ger";
             test::check(!subtitleTrackDifference(sent, changed).empty(), "another language");
             changed = sent;
-            changed[1].title = "Indonesian";
+            changed[1].title = "German";
             test::check(!subtitleTrackDifference(sent, changed).empty(), "another title");
             test::check(subtitleTrackDifference(sent, sent).empty(), "equal tracks");
             std::cout << "injected: " << subtitleTrackDifference(sent, [&] {
