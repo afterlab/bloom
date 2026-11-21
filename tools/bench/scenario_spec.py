@@ -29,7 +29,10 @@ area, and its layers from the bottom up. A layer is one of:
   ...], "steps": [{"type": node type, "values": {...}, "keys": {...}}, ...]} drives it from a keyed
   Path node read by each path processing step in turn, #344, #530; "textOutline": {"text",
   "size", "steps": [...]} adds a text layer and drives it from a Text Outline of that text read by
-  each step in turn, #509).
+  each step in turn, #509);
+- a subtitles layer (#752): {"name", "subtitles": {"cues": [[start frame, end frame, markup], ...],
+  "values": {role: value}}, "keys": {role: [[frame, value], ...]}}, a Subtitles node over the layers
+  below.
 
 Every "keys" entry names a role of its node. A role whose schema can be animated is keyed; a
 value-graph operand whose schema cannot be (a path step's amount, a plot's range) is driven through its
@@ -263,6 +266,8 @@ def _layer_keys(layer, found):
     name = layer.get("name", "?")
     if "generator" in layer:
         found.extend((name, layer["generator"][0], role) for role in layer.get("keys") or {})
+    if "subtitles" in layer:
+        found.extend((name, "bloom.subtitles", role) for role in layer.get("keys") or {})
     _effect_keys(name, layer.get("effects"), found)
     _effect_keys(name, layer.get("adjustment"), found)
     for entry in layer.get("merge") or ():
@@ -946,6 +951,28 @@ SCENARIOS["text-outline-2k"] = {
              "size": 72.0,
              "steps": [{"type": "bloom.path-stroke", "values": {"width": 3.0},
                         "keys": {"end": [[0, 5.0], [23, 100.0]]}}]}},
+    ],
+}
+
+# #752: Subtitles over a plate: two-line cues with italic and colored runs, a block box and an
+# outline, half a second each, two of them stacked for a while. Every frame inside one cue reuses one
+# subtitles result, so the cost is one layout and one set of coverage passes per cue, then only the
+# layer's composite. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["subtitles-2k"] = {
+    "description": "A PNG16 plate under Subtitles: two-line cues with italic and colored runs in a "
+                   "block box with an outline, a new cue every half second and two stacked for a "
+                   "second.",
+    "tier": "1080p",
+    "frames": 48,
+    "layers": [
+        {"name": "Plate", "media": "png16"},
+        {"name": "Subtitles",
+         "subtitles": {
+             "cues": [[frame, frame + 12,
+                       f"Line {frame // 12 + 1} of the <i>dialogue</i>, spoken quickly\n"
+                       "and <c.yellow>carried</c> onto a second line"]
+                      for frame in range(0, 48, 12)] + [[12, 36, "<b>Sign</b>: Exit"]],
+             "values": {"box": "Block", "outlineWidth": 3.0}}},
     ],
 }
 

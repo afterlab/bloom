@@ -655,6 +655,17 @@ class Builder:
         self.transact("bloom.node.connect", composition=self.composition, sourceNode=spaces[name],
                       sourcePort="space", targetNode=node, port="space")
 
+    def subtitles(self, layer):
+        """#752: a Subtitles layer over the layers below: its cues ([start frame, end frame,
+        markup]) through bloom.layer.add-subtitles, then its values and keys."""
+        spec = layer["subtitles"]
+        cues = [{"start": start, "end": end, "text": text} for start, end, text in spec["cues"]]
+        added = self.transact("bloom.layer.add-subtitles", composition=self.composition,
+                              name=layer.get("name", "Subtitles"), cues=cues)
+        node = added["subtitlesNode"]
+        self.set_values(node, "bloom.subtitles", spec.get("values") or {})
+        self.set_keys(node, layer.get("keys") or {})
+
     def generator(self, layer, output_merge):
         """A procedural source node (a Fields generator) whose `port` raster, through the
         layer's effects, is one layer of the output Merge."""
@@ -844,6 +855,8 @@ class Builder:
                 self.generator(layer, merge or self.output_merge())
             elif "audio" in layer:
                 self.audio(layer)
+            elif "subtitles" in layer:
+                self.subtitles(layer)
             elif "adjustment" in layer:
                 merge = merge or self.output_merge()
                 added = self.transact("bloom.merge.add-adjustment-layer",
