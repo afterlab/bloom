@@ -935,7 +935,7 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
     // #591: a space socket is a square -- the frame it carries -- since it shares Path's ink.
     if (kind == document::SocketValueKind::Space) {
         const qreal r = radius * 0.9;
-        painter->drawRect(QRectF(-r, -r, 2.0 * r, 2.0 * r));
+        painter->drawRect(QRectF(QPointF(-r, -r), QPointF(r, r)));
         return;
     }
     if (!multiInput()) {
