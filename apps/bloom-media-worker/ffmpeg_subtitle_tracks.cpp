@@ -304,4 +304,130 @@ bool finishSubtitleTrackHeaders(std::FILE* file, const std::uint64_t size,
     return textTrack == languages.size() && std::fflush(file) == 0;
 }
 
+namespace {
+
+// An ISO BMFF box inside a buffer: 32-bit sizes only (the boxes edited here are small).
+struct Span final {
+    std::size_t offset = 0, size = 0;
+    std::array<char, 4> type{};
+    [[nodiscard]] bool is(const char* name) const { return std::memcmp(type.data(), name, 4) == 0; }
+    [[nodiscard]] std::size_t end() const { return offset + size; }
+};
+
+std::uint32_t be32(const std::vector<unsigned char>& bytes, const std::size_t at) {
+    return (static_cast<std::uint32_t>(bytes[at]) << 24U) |
+           (static_cast<std::uint32_t>(bytes[at + 1]) << 16U) |
+           (static_cast<std::uint32_t>(bytes[at + 2]) << 8U) | bytes[at + 3];
+}
+void putBe32(std::vector<unsigned char>& bytes, const std::size_t at, const std::uint64_t value) {
+    for (std::size_t index = 0; index < 4; ++index)
+        bytes[at + index] = static_cast<unsigned char>((value >> (24U - 8U * index)) & 0xffU);
+}
+
+// The child boxes of [begin, end), or nothing when one is malformed or 64-bit.
+std::optional<std::vector<Span>> children(const std::vector<unsigned char>& bytes,
+                                          std::size_t begin, const std::size_t end) {
+    std::vector<Span> out;
+    while (begin < end) {
+        if (end - begin < 8)
+            return std::nullopt;
+        Span span;
+        span.offset = begin;
+        span.size = be32(bytes, begin);
+        std::memcpy(span.type.data(), bytes.data() + begin + 4, 4);
+        if (span.size < 8 || span.size > end - begin)
+            return std::nullopt;
+        out.push_back(span);
+        begin = span.end();
+    }
+    return out;
+}
+
+const Span* child(const std::vector<Span>& spans, const char* type) {
+    const auto found = std::ranges::find_if(spans, [&](const Span& span) { return span.is(type); });
+    return found == spans.end() ? nullptr : &*found;
+}
+
+} // namespace
+
+std::optional<std::uint64_t> nameSubtitleTracks(std::FILE* file, const std::uint64_t size,
+                                                const std::vector<std::string>& titles) {
+    if (std::fflush(file) != 0)
+        return std::nullopt;
+    const auto moov = findChild(file, 0, size, "moov");
+    if (!moov || moov->end() != size || moov->header != 8 || moov->size > (1U << 30U))
+        return std::nullopt;
+    std::vector<unsigned char> bytes(static_cast<std::size_t>(moov->size));
+    if (!seekTo(file, moov->offset) ||
+        std::fread(bytes.data(), 1, bytes.size(), file) != bytes.size())
+        return std::nullopt;
+    const auto tracks = children(bytes, 8, bytes.size());
+    if (!tracks)
+        return std::nullopt;
+    std::vector<unsigned char> out(bytes.begin(), bytes.begin() + 8);
+    std::size_t textTrack = 0;
+    for (const auto& trak : *tracks) {
+        const auto copy = [&](const std::size_t from, const std::size_t to) {
+            out.insert(out.end(), bytes.begin() + static_cast<std::ptrdiff_t>(from),
+                       bytes.begin() + static_cast<std::ptrdiff_t>(to));
+        };
+        if (!trak.is("trak")) {
+            copy(trak.offset, trak.end());
+            continue;
+        }
+        const auto inside = children(bytes, trak.offset + 8, trak.end());
+        const auto* mdia = inside ? child(*inside, "mdia") : nullptr;
+        const auto media = mdia ? children(bytes, mdia->offset + 8, mdia->end()) : std::nullopt;
+        const auto* hdlr = media ? child(*media, "hdlr") : nullptr;
+        if (hdlr == nullptr || hdlr->size < 8 + 12)
+            return std::nullopt;
+        const auto* handler = bytes.data() + hdlr->offset + 8 + 8;
+        const bool text = std::memcmp(handler, "sbtl", 4) == 0 ||
+                          std::memcmp(handler, "text", 4) == 0 ||
+                          std::memcmp(handler, "subt", 4) == 0;
+        if (!text) {
+            copy(trak.offset, trak.end());
+            continue;
+        }
+        if (textTrack >= titles.size())
+            return std::nullopt;
+        const auto& title = titles[textTrack++];
+        const auto* udta = child(*inside, "udta");
+        const auto data = udta ? children(bytes, udta->offset + 8, udta->end()) : std::nullopt;
+        if (udta != nullptr && !data)
+            return std::nullopt;
+        if (title.empty() || (data && child(*data, "name") != nullptr)) {
+            copy(trak.offset, trak.end());
+            continue;
+        }
+        // name: size, type and the UTF-8 title, as FFmpeg writes a track's title.
+        std::vector<unsigned char> name(8);
+        putBe32(name, 0, 8 + title.size());
+        std::memcpy(name.data() + 4, "name", 4);
+        name.insert(name.end(), title.begin(), title.end());
+        const auto start = out.size();
+        if (udta != nullptr) {
+            copy(trak.offset, udta->end());
+            putBe32(out, start + (udta->offset - trak.offset), udta->size + name.size());
+            out.insert(out.end(), name.begin(), name.end());
+            copy(udta->end(), trak.end());
+        } else {
+            copy(trak.offset, trak.end());
+            std::vector<unsigned char> box(8);
+            putBe32(box, 0, 8 + name.size());
+            std::memcpy(box.data() + 4, "udta", 4);
+            out.insert(out.end(), box.begin(), box.end());
+            out.insert(out.end(), name.begin(), name.end());
+        }
+        putBe32(out, start, out.size() - start);
+    }
+    if (textTrack != titles.size() || out.size() > 0xffffffffU)
+        return std::nullopt;
+    putBe32(out, 0, out.size());
+    if (!seekTo(file, moov->offset) || std::fwrite(out.data(), 1, out.size(), file) != out.size() ||
+        std::fflush(file) != 0)
+        return std::nullopt;
+    return moov->offset + out.size();
+}
+
 } // namespace bloom::media::ffmpeg

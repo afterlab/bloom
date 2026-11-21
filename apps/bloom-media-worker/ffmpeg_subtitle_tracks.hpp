@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstdio>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -47,5 +48,14 @@ namespace bloom::media::ffmpeg {
 // an old Macintosh code. False when the boxes cannot be walked or the track count differs.
 [[nodiscard]] bool finishSubtitleTrackHeaders(std::FILE* file, std::uint64_t size,
                                               const std::vector<std::string>& languages);
+
+// Names the text tracks of the ISO BMFF file `file` (`size` bytes), in track order: a track
+// without a user-data `name` box and with a non-empty `titles[i]` gets one (in its `udta`, made
+// when it has none), as FFmpeg's muxer writes a track title and its demuxer reads it. AVAssetWriter
+// writes no track user data into an MP4. The movie box has to be the file's last box, so the file
+// only grows and no sample offset moves. The file's new size, or nothing when the boxes cannot be
+// walked, the movie box is not last or the track count differs.
+[[nodiscard]] std::optional<std::uint64_t>
+nameSubtitleTracks(std::FILE* file, std::uint64_t size, const std::vector<std::string>& titles);
 
 } // namespace bloom::media::ffmpeg

@@ -21,12 +21,15 @@
 #include <cstdio>
 #include <cstring>
 #include <deque>
+#include <filesystem>
 #include <limits>
+#include <memory>
 #include <numeric>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -558,6 +561,8 @@ struct Encoder::State final {
             subtitles.input.mediaTimeScale = static_cast<CMTimeScale>(settings.rate.numerator);
             subtitles.input.languageCode = [NSString stringWithUTF8String:track.language.c_str()];
             if (!track.title.empty()) {
+                // QuickTime user data, which an MOV carries; an MP4 gets the title after the
+                // writer finished (Encoder::State::finish).
                 AVMutableMetadataItem* title = [AVMutableMetadataItem metadataItem];
                 title.keySpace = AVMetadataKeySpaceQuickTimeUserData;
                 title.key = AVMetadataQuickTimeUserDataKeyFullName;
@@ -1019,6 +1024,20 @@ provider::EncodeQcV1 Encoder::State::finish() {
         }
         if (writer.status != AVAssetWriterStatusCompleted)
             throw Unavailable{Error::Io, writerFailure(writer)};
+    }
+    // #752: AVAssetWriter writes no track user data into an MP4, so each subtitle track's title
+    // is added as the user-data name FFmpeg writes; the reopen check below reads it back.
+    if (settings.container == "mp4" && !settings.subtitles.empty()) {
+        std::vector<std::string> titles;
+        for (const auto& track : settings.subtitles)
+            titles.push_back(track.title);
+        std::unique_ptr<std::FILE, int (*)(std::FILE*)> file(std::fopen(path.c_str(), "r+b"),
+                                                             &std::fclose);
+        std::error_code sized;
+        const auto size = std::filesystem::file_size(path, sized);
+        if (file == nullptr || sized ||
+            !ffmpeg::nameSubtitleTracks(file.get(), static_cast<std::uint64_t>(size), titles))
+            throw Unavailable{Error::Io, "The subtitle track titles could not be written"};
     }
 
     // Reopen the artifact with the macOS reader and check what it actually holds. Tolerance

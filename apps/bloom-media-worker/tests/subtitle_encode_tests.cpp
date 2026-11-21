@@ -205,6 +205,41 @@ int main(int argc, char** argv) {
             inspect(directory / c.name, settings);
             ++exercised;
         }
+        // Naming the tracks of an MP4 written without track titles, as the macOS AVAssetWriter
+        // route does: the titles read back, the cues are untouched, and a named track is kept.
+        if (exercised > 0) {
+            auto settings = base();
+            settings.videoCodec = "h264";
+            settings.profile = "high";
+            settings.container = "mp4";
+            const auto titled = settings.subtitles;
+            for (auto& track : settings.subtitles)
+                track.title.clear();
+            const auto path = directory / "subtitles-untitled.mp4";
+            test::check(encode(settings, path).has_value(), "the untitled MP4 encodes");
+            const auto rename = [&](const std::vector<std::string>& titles) {
+                std::unique_ptr<std::FILE, int (*)(std::FILE*)> file(
+                    std::fopen(path.string().c_str(), "r+b"), &std::fclose);
+                test::check(file != nullptr, "the untitled MP4 opens");
+                return bloom::media::ffmpeg::nameSubtitleTracks(
+                    file.get(), std::filesystem::file_size(path), titles);
+            };
+            const auto before = std::filesystem::file_size(path);
+            const auto named = rename({"English", "Deutsch"});
+            test::check(named.has_value() && *named > before &&
+                            *named == std::filesystem::file_size(path),
+                        "the tracks are named and the file grows");
+            const auto reopened =
+                bloom::media::ffmpeg::readSubtitleTracks(path.string(), settings.rate);
+            const auto difference = subtitleTrackDifference(titled, reopened);
+            if (!difference.empty())
+                std::cerr << difference << '\n';
+            test::check(difference.empty(),
+                        "the named tracks read back with their titles and cues");
+            const auto again = rename({"Other", "Andere"});
+            test::check(again.has_value() && *again == *named, "a track that has a name keeps it");
+            test::check(!rename({"One"}).has_value(), "a title count that differs is refused");
+        }
         // Embedding is for MOV, MP4 and WebM only.
         {
             auto mxf = base();
