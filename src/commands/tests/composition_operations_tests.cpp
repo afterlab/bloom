@@ -554,6 +554,43 @@ void testAddAndUpdateCompositionSettings(TestContext& test) {
         copyId ? fixture.document.snapshot().project().findComposition(*copyId) : nullptr;
     test.expect(copy != nullptr && copy->timecode() == composition->timecode(),
                 "DuplicateComposition carries the timecode labelling");
+    // #743: pixel-art mode is a setting like the others: set, carried by a duplicate, undone.
+    const auto beforePixelArt = fixture.document.snapshot();
+    CompositionSettingsChange pixelArt;
+    pixelArt.pixelArt = true;
+    const auto turnedOn = fixture.run(std::make_unique<UpdateCompositionSettings>(*id, pixelArt));
+    composition = fixture.document.snapshot().project().findComposition(*id);
+    test.expect(turnedOn.changed() && composition->pixelArt() &&
+                    compositionSettingsOf(*composition).pixelArt &&
+                    composition->format().height() == 1350,
+                "UpdateCompositionSettings turns pixel-art mode on and changes nothing else");
+    Transaction duplicatePixelArt("Duplicate Composition", fixture.document.snapshot().revision());
+    duplicatePixelArt.emplace<DuplicateComposition>(*id);
+    const auto pixelCopy = fixture.stack.execute(std::move(duplicatePixelArt));
+    const auto pixelCopyId =
+        pixelCopy.outputId<document::CompositionId>(kDuplicateCompositionOutput);
+    const auto* pixelCopyComposition =
+        pixelCopyId ? fixture.document.snapshot().project().findComposition(*pixelCopyId)
+                    : nullptr;
+    test.expect(pixelCopyComposition != nullptr && pixelCopyComposition->pixelArt(),
+                "DuplicateComposition carries pixel-art mode");
+    test.expect(fixture.stack.undo().changed() && fixture.stack.undo().changed(),
+                "the duplicate and the pixel-art edit undo");
+    const auto* restored = fixture.document.snapshot().project().findComposition(*id);
+    test.expect(restored != nullptr && !restored->pixelArt() &&
+                    fixture.document.snapshot().project().compositions().size() ==
+                        beforePixelArt.project().compositions().size(),
+                "undo turns pixel-art mode off again");
+    auto withPixelArt = fixture.settings();
+    withPixelArt.name = "Sprites";
+    withPixelArt.pixelArt = true;
+    const auto addedPixelArt = fixture.run(
+        std::make_unique<AddCompositionWithSettings>(withPixelArt), "Add Composition");
+    const auto pixelId = addedPixelArt.outputId<document::CompositionId>(kAddCompositionOutput);
+    const auto* pixelComposition =
+        pixelId ? fixture.document.snapshot().project().findComposition(*pixelId) : nullptr;
+    test.expect(pixelComposition != nullptr && pixelComposition->pixelArt(),
+                "AddCompositionWithSettings creates a pixel-art composition");
 }
 
 // #557: a composition whose animation spans several curves (several properties on several layers)

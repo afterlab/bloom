@@ -325,6 +325,45 @@ void filterBindsOnTheEntryLayer() {
            "an entry layer created by another edit has no filter binding: Bilinear");
 }
 
+// #743: the snap binds on the entry layer like the filter: the first edit creates it in one undo
+// step, a second edit changes it, values outside 0..2 are refused, and a layer created by another
+// edit has none (it does not snap).
+void snapBindsOnTheEntryLayer() {
+    Fixture fixture;
+    const auto merge = fixture.mainMerge();
+    const auto slot = fixture.connect(fixture.addSolid(), merge);
+    const auto before = fixture.document.snapshot();
+    const auto set = fixture.edit(merge, slot, [&](const LayerId id) {
+        return std::make_unique<SetLayerSnap>(fixture.composition, id, kLayerSnapOn);
+    });
+    const auto* layer = entryLayer(fixture.comp(), merge, slot);
+    const auto* value = layer ? constant(fixture.comp(), *layer, kLayerSnapParameterRole) : nullptr;
+    expect(set.changed() && value != nullptr && *value == ParameterValue{std::int64_t{kLayerSnapOn}},
+           "the first snap edit creates the entry layer with an On snap binding");
+    expect(fixture.document.snapshot().project().validate().ok() &&
+               noOrphanParameters(fixture.comp()),
+           "an entry layer with a snap validates and owns its parameter");
+    expectExactUndoRedo(fixture, before, "entry snap");
+    const auto count = parameterCount(fixture.comp());
+    fixture.must<SetLayerSnap>(fixture.composition, layer->layerId, kLayerSnapAutomatic);
+    layer = entryLayer(fixture.comp(), merge, slot);
+    value = constant(fixture.comp(), *layer, kLayerSnapParameterRole);
+    expect(value != nullptr && *value == ParameterValue{std::int64_t{kLayerSnapAutomatic}} &&
+               parameterCount(fixture.comp()) == count,
+           "a second snap edit changes the same binding");
+    for (const std::int64_t invalid : {-1, 3})
+        expect(!fixture.run<SetLayerSnap>(fixture.composition, layer->layerId, invalid).succeeded(),
+               "a snap outside 0..2 is refused");
+    const auto other = fixture.connect(fixture.addSolid(), merge);
+    fixture.edit(merge, other, [&](const LayerId id) {
+        return std::make_unique<SetLayerSolo>(fixture.composition, id, true);
+    });
+    const auto* plain = entryLayer(fixture.comp(), merge, other);
+    expect(plain != nullptr &&
+               !layerParameterBinding(fixture.comp().graph(), *plain, kLayerSnapParameterRole),
+           "an entry layer created by another edit has no snap binding: it does not snap");
+}
+
 void insertingALayerNodeAdoptsTheEntrysValues() {
     Fixture fixture;
     const auto merge = fixture.mainMerge();
@@ -909,6 +948,7 @@ int main() try {
     ensureReportsALayerNodeEntry();
     timeRemapBindsOnTheEntryLayer();
     filterBindsOnTheEntryLayer();
+    snapBindsOnTheEntryLayer();
     insertingALayerNodeAdoptsTheEntrysValues();
     anExistingLayerNodeWinsUnlessDefault();
     aSharedLayerNodeReturnsToEveryEntry();

@@ -338,6 +338,8 @@ cloneComposition(document::Draft& draft, const document::Composition& source,
     composition.setBackgroundColor(source.backgroundColor());
     composition.setTimecode(source.timecode());
     composition.setWorkingColorSpaceId(source.workingColorSpaceId());
+    // #743: a copy of a pixel-art composition is one too.
+    composition.setPixelArt(source.pixelArt());
     for (const auto& sourceParameter : source.parameters().records()) {
         auto parameter = sourceParameter;
         parameter.id = remap(ids->parameters, sourceParameter.id);
