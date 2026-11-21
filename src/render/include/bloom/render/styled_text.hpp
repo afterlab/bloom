@@ -6,7 +6,7 @@
 //
 // A block is a sequence of runs. Each run names a face from the caller's face table, whether that
 // face is drawn as a synthesized oblique (a 12 degree shear of its outlines, for a font with no
-// italic), a paint index the caller resolves to a colour, and whether it is underlined. Lines break
+// italic), a paint index the caller resolves to a color, and whether it is underlined. Lines break
 // at mandatory breaks ('\n') and, when a width is given, at the Unicode line break opportunities of
 // UAX #14 (lineBreakOpportunities()). Layout is in author pixels: advances, kerning and letter
 // spacing as the Text node measures them, with no shaping and no bidi.
@@ -34,7 +34,7 @@ namespace bloom::render {
 // otherwise; CJ is NS).
 enum class LineBreakClass : std::uint8_t {
     AL, BA, BB, BK, B2, CB, CL, CM, CP, CR, EB, EM, EX, GL, H2, H3, HL, HY, ID, IN, IS, JL, JT, JV,
-    LF, NL, NS, NU, OP, PO, PR, QU, RI, SP, SY, WJ, ZW, ZWJ, AK, AP, AS, VF, VI,
+    LF, NL, NS, NU, OP, PO, PR, Quotation, RI, SP, SY, WJ, ZW, ZWJ, AK, AP, AS, VF, VI,
 };
 
 // The Unicode Character Database version the tables were generated from.

@@ -31,6 +31,10 @@ CLASSES = [
     "PR", "QU", "RI", "SP", "SY", "WJ", "ZW", "ZWJ", "AK", "AP", "AS", "VF", "VI",
 ]
 
+# The enumerator a class is spelled as in C++ where its two-letter name would read as a Qt type
+# to the repository's architecture check.
+ENUMERATORS = {"QU": "Quotation"}
+
 # Scripts whose text needs shaping or bidi to read correctly (#345 is not built yet).
 SHAPED_SCRIPTS = [
     "Arabic", "Hebrew", "Syriac", "Thaana", "Nko", "Samaritan", "Mandaic", "Adlam", "Hanifi_Rohingya",
@@ -129,7 +133,8 @@ def generate():
     lines.append("// Every code point not covered below is AL.")
     lines.append("inline constexpr LineBreakRange kLineBreakRanges[] = {")
     for first, last, value in breaks:
-        lines.append("    {0x%X, 0x%X, LineBreakClass::%s}," % (first, last, value))
+        lines.append("    {0x%X, 0x%X, LineBreakClass::%s}," %
+                     (first, last, ENUMERATORS.get(value, value)))
     lines.append("};")
     lines.append("inline constexpr std::string_view kShapedScriptNames[] = {")
     for name in SHAPED_SCRIPTS:

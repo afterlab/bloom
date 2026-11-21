@@ -51,8 +51,8 @@ using Class = LineBreakClass;
     // LB14: OP SP* x
     if (before == Class::OP)
         return true;
-    // LB15a/b (simplified to the common QU rule): QU SP* x OP
-    if (before == Class::QU && after == Class::OP)
+    // LB15a/b (simplified to the common rule): Quotation SP* x OP
+    if (before == Class::Quotation && after == Class::OP)
         return true;
     // LB16: (CL | CP) SP* x NS
     if ((before == Class::CL || before == Class::CP) && after == Class::NS)
@@ -68,8 +68,8 @@ using Class = LineBreakClass;
     // LB12a: [^SP BA HY] x GL
     if (after == Class::GL && before != Class::BA && before != Class::HY)
         return true;
-    // LB19: x QU, QU x
-    if (after == Class::QU || before == Class::QU)
+    // LB19: x Quotation, Quotation x
+    if (after == Class::Quotation || before == Class::Quotation)
         return true;
     // LB20: break CB, CB break
     if (after == Class::CB || before == Class::CB)
