@@ -3655,3 +3655,28 @@ add_executable(bloom_crash_notice_test crash_notice_tests.cpp)
 target_link_libraries(bloom_crash_notice_test PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_crash_notice_test)
 bloom_add_test(NAME bloom.ui.crash-notice COMMAND bloom_crash_notice_test LABELS ui unit crash TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+
+# #752 SB3: the Subtitles artist interface (Properties cue list, Edit as Text, Source row,
+# Timeline cue blocks, Viewer outlines and gestures, node card, import); each edit one undo step.
+add_executable(bloom_subtitles_ui_test subtitles_ui_tests.cpp)
+target_include_directories(bloom_subtitles_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_subtitles_ui_test PRIVATE bloom_ui bloom_commands bloom_subtitles Qt6::Test)
+bloom_enable_warnings(bloom_subtitles_ui_test)
+bloom_add_test(
+    NAME bloom.ui.subtitles
+    COMMAND bloom_subtitles_ui_test
+    LABELS ui integration
+    TIMEOUT 120
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
+)
+# The same surfaces captured at each scale, with no text cut short (#752 SB3 evidence).
+foreach(scale 1 1.5 2)
+    string(REPLACE "." "" scale_name "${scale}")
+    bloom_add_test(
+        NAME bloom.ui.subtitles-capture-dpr${scale_name}
+        COMMAND bloom_subtitles_ui_test --capture "${CMAKE_CURRENT_BINARY_DIR}/subtitles-captures"
+        LABELS ui integration
+        TIMEOUT 120
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1" "QT_SCALE_FACTOR=${scale}"
+    )
+endforeach()
