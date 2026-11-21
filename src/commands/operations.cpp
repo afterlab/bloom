@@ -775,10 +775,17 @@ OperationResult AddSubtitlesLayer::apply(document::Draft& draft) const {
                                          document::kSubtitlesNodeSchemaVersion,
                                          document::kSubtitlesImagePort,
                                          {}};
+    // The size and outline follow the composition's height when the layer is made (59 px and
+    // 3 px at 1080), rounded to whole pixels (docs/architecture/subtitles.md, "The Node").
+    const auto height = static_cast<double>(composition->format().height());
     for (const auto& parameter : definition.parameters) {
         auto value = parameter.defaultValue;
         if (parameter.role == document::kSubtitlesCuesRole)
             value = cues_;
+        else if (parameter.role == "size")
+            value = std::max(1.0, std::round(height * document::kSubtitlesSizeOfHeight));
+        else if (parameter.role == "outlineWidth")
+            value = std::max(1.0, std::round(height * document::kSubtitlesOutlineOfHeight));
         descriptor.sourceParameters.push_back(
             {parameter.role, parameter.schemaKey, std::move(value), parameter.role});
     }

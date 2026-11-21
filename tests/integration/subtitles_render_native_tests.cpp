@@ -104,6 +104,14 @@ struct Fixture final {
           main(initial.initialCompositionId) {}
 
     void set(const std::string_view role, document::ParameterValue value) {
+        // A layer's Size and Outline width follow the composition's height when it is made, so a
+        // value a case pins may already be the one it holds (Size 16 at this height).
+        const auto id = parameter(document, main, node, role);
+        if (const auto* composition = document.snapshot().project().findComposition(main))
+            if (const auto* held = composition->parameters().find(id))
+                if (const auto* constant = std::get_if<document::ConstantValueSource>(&held->source);
+                    constant != nullptr && constant->value == value)
+                    return;
         try {
             execute<commands::SetParameterSource>(document, commands, main,
                                                   parameter(document, main, node, role),
