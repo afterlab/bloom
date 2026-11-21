@@ -74,6 +74,8 @@ namespace {
         return tr("The file couldn't be put in place");
     case host::ExportCheck::DeviceProvenance:
         return tr("Not every frame was rendered the usual way");
+    case host::ExportCheck::Subtitles:
+        return tr("The subtitle files or tracks don't match the picture");
     }
     return {};
 }

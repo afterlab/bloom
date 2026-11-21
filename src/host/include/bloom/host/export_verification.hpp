@@ -9,6 +9,7 @@
 #include <filesystem>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <variant>
 #include <vector>
 
@@ -50,6 +51,9 @@ enum class ExportCheck : std::uint8_t {
     // Which device evaluated the frames. Never Failed; Warning when any frame used the CPU
     // reference fallback, so a CPU frame is never presented as a GPU frame.
     DeviceProvenance = 11,
+    // #752: every subtitle sidecar parsed back as its track after publication, and every embedded
+    // track reopened as it was sent (the worker's reopen check).
+    Subtitles = 12,
 };
 
 enum class ExportCheckOutcome : std::uint8_t {
@@ -230,6 +234,26 @@ struct ExportLoudnessReport final {
     double limiterReductionDb = 0.0;
 };
 
+// #752: one subtitle track an output delivered: a sidecar file beside the export, or a track
+// embedded in the movie. Every one listed was verified (parsed back or reopened).
+struct ExportSubtitleFile final {
+    document::NodeId node;
+    // The node's language: the BCP 47 tag for a sidecar, the ISO 639-2 code the container carries
+    // for an embedded track.
+    std::string language;
+    std::string title;
+    // Absent: a track embedded in the movie.
+    std::optional<document::ExportSubtitleFormat> sidecar;
+    // The sidecar file, or the movie that carries the track.
+    std::filesystem::path path;
+    std::uint64_t cues = 0;
+    // A sidecar's size and SHA-256; zero and absent for an embedded track (the movie's digest is
+    // the artifact digest).
+    std::uint64_t bytes = 0;
+    std::optional<core::Sha256Digest> digest;
+    friend bool operator==(const ExportSubtitleFile&, const ExportSubtitleFile&) = default;
+};
+
 // One output's verification. Present in the snapshot from the moment the output reaches a
 // terminal output state, and carried by the job's terminal event.
 struct ExportOutputVerification final {
@@ -250,6 +274,8 @@ struct ExportOutputVerification final {
     std::optional<ExportWorkerMemory> workerMemory;
     // Present for an output that normalized its audio loudness (#570).
     std::optional<ExportLoudnessReport> loudness;
+    // #752: the subtitle sidecars and embedded tracks the output delivered, verified.
+    std::vector<ExportSubtitleFile> subtitles;
 };
 
 // Problems known before Start. Destination facts (exists, writable, free space, the existing
@@ -277,7 +303,16 @@ enum class ExportPreflightCode : std::uint8_t {
     // cues saved in the project; it never reloads. Sampled on a worker, never on the caller's
     // thread. The reason is the bloom.subtitles.linked-file-changed warning's message.
     LinkedSubtitleFileChanged = 13,
+    // #752: the output asks to embed subtitle tracks in a format whose container carries none
+    // (MXF, an image sequence or still, WAV). Blocking, target Container; the reason names the
+    // sidecar formats.
+    SubtitleEmbedUnsupported = 14,
 };
+
+// #752: why an output that asks to embed subtitle tracks cannot (SubtitleEmbedUnsupported).
+inline constexpr std::string_view kSubtitleEmbedUnsupportedReason =
+    "MXF, image sequences and WAV carry no subtitle track; export the subtitles as SRT, WebVTT or "
+    "TTML sidecar files instead";
 
 // Which part of the job or output an issue is about, so the panel can mark the right field.
 enum class ExportPreflightTarget : std::uint8_t {

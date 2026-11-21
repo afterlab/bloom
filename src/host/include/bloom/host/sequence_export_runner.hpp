@@ -133,6 +133,10 @@ struct SequenceExportRequestV1 {
     // untouched.
     std::function<std::optional<std::string>(const SequenceExportResultV1&)>
         verifyBeforePublication = {};
+    // #752: cue tracks to embed (MOV and MP4 3GPP Timed Text, WebM WebVTT), in output frames. The
+    // worker's reopen check compares each reopened track with what was sent and this runner checks
+    // its result again; a difference fails the output at the Verification stage.
+    std::vector<media::provider::SubtitleTrackV1> subtitles = {};
 };
 enum class SequenceExportStageV1 : std::uint8_t {
     Compiling,
@@ -239,6 +243,9 @@ struct SequenceExportResultV1 {
     // ADR 0035: the media provider that encoded the artifact and every provider skipped or failed
     // before it. Diagnostics and provenance only; never artist-facing text.
     media::provider::MediaProviderProvenanceV1 mediaProvider;
+    // #752: the embedded tracks the reopened artifact holds (equal to the request's, or the output
+    // failed verification).
+    std::vector<media::provider::SubtitleTrackV1> subtitles;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

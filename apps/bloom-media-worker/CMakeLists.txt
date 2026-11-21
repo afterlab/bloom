@@ -373,6 +373,24 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     bloom_add_test(NAME bloom.media.subtitle-encode COMMAND bloom_media_subtitle_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/subtitle-encode" LABELS unit media TIMEOUT 120)
     set_tests_properties(bloom.media.subtitle-encode PROPERTIES SKIP_RETURN_CODE 77)
+    # #752: subtitle sidecars and embedded tracks end to end through the export queue, each
+    # reopened (sidecars parsed back, embedded tracks read by FFmpeg) and compared frame by frame.
+    add_executable(bloom_host_subtitle_export_test
+                   "${PROJECT_SOURCE_DIR}/tests/integration/subtitle_export_tests.cpp")
+    target_include_directories(bloom_host_subtitle_export_test PRIVATE
+                               "${PROJECT_SOURCE_DIR}/tests/support"
+                               "${PROJECT_SOURCE_DIR}/tests/integration"
+                               "${PROJECT_SOURCE_DIR}/src/host"
+                               "${CMAKE_CURRENT_SOURCE_DIR}")
+    target_link_libraries(bloom_host_subtitle_export_test PRIVATE bloom_host bloom_commands
+                          bloom_media_ffmpeg_subtitle_tracks)
+    set_target_properties(bloom_host_subtitle_export_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_host_subtitle_export_test)
+    add_dependencies(bloom_host_subtitle_export_test bloom-media-worker)
+    bloom_add_test(NAME bloom.host.subtitle-export COMMAND bloom_host_subtitle_export_test
+                   LABELS unit host media output TIMEOUT 600)
+    set_tests_properties(bloom.host.subtitle-export PROPERTIES SKIP_RETURN_CODE 77)
     # Issue #408: reads the software HEVC grey ramps bloom.media.encode writes, through FFmpeg
     # directly: Main 10 profile, 10-bit samples, tags, and more luma codes than 8 bits hold.
     add_executable(bloom_media_hevc_depth_test tests/hevc_depth_tests.cpp)

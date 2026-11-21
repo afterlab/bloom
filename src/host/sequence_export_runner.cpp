@@ -330,6 +330,7 @@ struct detail::SequenceExportWorkV1 {
             s.container = "wav";
             s.frames = 0;
         }
+        s.subtitles = request.subtitles;
         if (request.audio || request.preset == output::OutputPresetV1::PcmWavV1) {
             // #428: every audio source must reach the export audio path before anything renders
             // or an encoder opens; a refusal names the source and its codec.
@@ -505,6 +506,14 @@ struct detail::SequenceExportWorkV1 {
                     qc.bytes <= settings().byteLimit,
                 "Worker verification does not match approved stream layout",
                 Error::IdentityMismatch);
+        // #752: the embedded tracks, as reopened, against what was sent (the worker compared them
+        // too; a provider that leaves a track out is refused here as well).
+        if (const auto difference =
+                media::provider::subtitleTrackDifference(settings().subtitles, qc.subtitles);
+            !difference.empty()) {
+            failureStage = SequenceExportFailureStageV1::Verification;
+            require(false, difference.c_str(), Error::IdentityMismatch);
+        }
         require(target != nullptr, "Missing publication target");
         platform::StagedArtifactLease lease = [&] {
             if (streamedLease) {
@@ -580,6 +589,7 @@ struct detail::SequenceExportWorkV1 {
         SequenceExportResultV1 outcome;
         outcome.evidence = std::move(evidence);
         outcome.loudness = loudnessReport;
+        outcome.subtitles = qc.subtitles;
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
         outcome.encoder = encoderToken(served);
         outcome.sourceRouting = std::move(sourceRouting);

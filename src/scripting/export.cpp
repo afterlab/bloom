@@ -109,10 +109,10 @@ std::string_view outcome(const host::ExportCheckOutcome value) {
 }
 
 std::string_view checkName(const host::ExportCheck value) {
-    constexpr std::array<std::string_view, 11> names{
-        "analysis-policy",  "reopen", "frame-count", "timing",          "colour-tags",
-        "container",        "audio",  "naming",      "artifact-digest", "publication",
-        "device-provenance"};
+    constexpr std::array<std::string_view, 12> names{
+        "analysis-policy",   "reopen",   "frame-count", "timing",          "colour-tags",
+        "container",         "audio",    "naming",      "artifact-digest", "publication",
+        "device-provenance", "subtitles"};
     return names[static_cast<std::size_t>(value) - 1];
 }
 

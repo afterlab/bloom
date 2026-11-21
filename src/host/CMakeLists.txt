@@ -9,6 +9,7 @@ target_sources(
         export_job_runner.cpp
         export_output_drivers.cpp
         export_preset_store.cpp
+        export_subtitles.cpp
         export_presets.cpp
         export_queue_service.cpp
         export_run_backend.cpp

@@ -262,6 +262,11 @@ preflightFor(const ExportQueueService::State& state, const document::ExportJob& 
                      ? ExportPreflightTarget::Colour
                      : ExportPreflightTarget::Encoder,
                  availability.reason);
+    // #752: an embedded subtitle track needs a container that carries one.
+    if (output.settings.subtitles && output.settings.subtitles->embed &&
+        !document::exportFormatEmbedsSubtitles(output.settings.format))
+        blocking(ExportPreflightCode::SubtitleEmbedUnsupported, ExportPreflightTarget::Container,
+                 std::string(kSubtitleEmbedUnsupportedReason));
     if (output.enabled)
         for (const auto& other : job.outputs)
             if (other.id != output.id && other.enabled && other.destination == output.destination &&

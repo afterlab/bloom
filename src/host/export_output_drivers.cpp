@@ -3,6 +3,7 @@
 // SequenceExportRunnerV1 as that controller's composition export did. The approval prompt is
 // replaced by the AnalysisPolicy check against the preset's declared preservation (section 10).
 #include "export_output_drivers.hpp"
+#include "export_subtitles.hpp"
 
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/export_media_failure.hpp>
@@ -297,7 +298,23 @@ class DriverBase : public ExportOutputDriver {
         done_ = true;
     }
 
+    // #752: an output with subtitle sidecars publishes them (a task) once its own files are
+    // published, and finishes after that; anything else finishes now.
     void finishPublished(std::vector<ExportCheckResult> checks) {
+        if (subtitlePlan_ && !subtitlePlan_->sidecars.empty() && !sidecarTask_) {
+            deferredChecks_ = std::move(checks);
+            submitSidecars();
+            return;
+        }
+        if (subtitlePlan_)
+            checks.push_back(check(ExportCheck::Subtitles, ExportCheckOutcome::Passed,
+                                   "export.check.subtitles.verified",
+                                   static_cast<std::uint64_t>(subtitlePlan_->embedded.size()),
+                                   static_cast<std::uint64_t>(subtitlePlan_->embedded.size())));
+        completePublished(std::move(checks));
+    }
+
+    void completePublished(std::vector<ExportCheckResult> checks) {
         noteCapacityAssumption();
         if (!analysed_)
             checks_.push_back(check(ExportCheck::AnalysisPolicy, ExportCheckOutcome::NotRun,
@@ -322,6 +339,131 @@ class DriverBase : public ExportOutputDriver {
         done_ = true;
     }
 
+    // #752: the subtitle stage. `then` starts the output's own work once its tracks are prepared
+    // (at once when it exports none).
+    void beginAfterSubtitles(std::function<void()> then) {
+        const auto& settings = input_.output.record.settings;
+        if (!settings.subtitles)
+            return then();
+        if (settings.subtitles->embed && !document::exportFormatEmbedsSubtitles(settings.format))
+            return fail(failure(ExportFailureCode::PreflightRefused,
+                                "export.subtitles.embed-unsupported",
+                                std::string(kSubtitleEmbedUnsupportedReason) + "."));
+        afterSubtitles_ = std::move(then);
+        ExportSubtitleRequest request{.snapshot = input_.snapshot,
+                                      .composition = input_.composition,
+                                      .firstFrame = input_.range.first,
+                                      .lastFrame = input_.range.last,
+                                      .settings = *settings.subtitles,
+                                      .format = settings.format,
+                                      .basePath = input_.output.destination.basePath,
+                                      .sidecarPolicy = sidecarPolicy()};
+        report_.state = ExportOutputState::Preparing;
+        auto submission =
+            dependencies_.scheduler.submit<std::shared_ptr<const ExportSubtitlePlanOutcome>>(
+                runtime::TaskRequest("Prepare subtitle tracks for export", input_.owner,
+                                     runtime::TaskPriority::Foreground, runtime::TaskExecutor::Cpu),
+                [request = std::move(request),
+                 &compiler = dependencies_.compiler](runtime::TaskContext& context) {
+                    using Result =
+                        runtime::TaskResult<std::shared_ptr<const ExportSubtitlePlanOutcome>>;
+                    if (context.isCancellationRequested())
+                        return Result::cancelled();
+                    context.reportProgress({"Preparing subtitle tracks", "", 0, std::nullopt});
+                    auto outcome =
+                        std::make_shared<const ExportSubtitlePlanOutcome>(prepareExportSubtitles(
+                            request, compiler, context.cancellation(),
+                            [&context](const std::uint64_t completed, const std::uint64_t total) {
+                                context.reportProgress(
+                                    {"Preparing subtitle tracks", "", completed, total});
+                            }));
+                    if (const auto* refused = std::get_if<ExportSubtitleFailure>(outcome.get());
+                        refused != nullptr && refused->cancelled)
+                        return Result::cancelled();
+                    return Result::succeeded(std::move(outcome));
+                });
+        if (!submission.accepted())
+            return fail(failure(ExportFailureCode::ResourceRefused, "export.task.refused",
+                                "The export could not be scheduled"));
+        subtitlePlanTask_.emplace(std::move(submission.handle));
+    }
+
+    // False while the subtitle stage holds the output (its tracks are being prepared or its
+    // sidecars published); the caller's poll returns then.
+    [[nodiscard]] bool pollSubtitles() {
+        if (subtitlePlanTask_) {
+            auto result = subtitlePlanTask_->tryTakeResult();
+            if (!result)
+                return false;
+            subtitlePlanTask_.reset();
+            if (result->state() == runtime::TaskState::Cancelled || subtitlesStopped_) {
+                finishStopped();
+                return false;
+            }
+            if (result->state() != runtime::TaskState::Succeeded || !result->value() ||
+                !*result->value()) {
+                fail(failure(ExportFailureCode::Internal, "export.subtitles.task",
+                             "The subtitle tracks could not be prepared"));
+                return false;
+            }
+            const auto& outcome = **result->value();
+            if (const auto* refused = std::get_if<ExportSubtitleFailure>(&outcome)) {
+                log(runtime::DiagnosticSeverity::Error, refused->diagnostic, refused->reason);
+                fail(failure(refused->code, refused->diagnostic, refused->reason));
+                return false;
+            }
+            subtitlePlan_ = std::get<ExportSubtitlePlan>(outcome);
+            for (const auto& note : subtitlePlan_->notes)
+                log(runtime::DiagnosticSeverity::Information, "export.subtitles.note", note);
+            auto then = std::move(afterSubtitles_);
+            afterSubtitles_ = {};
+            then();
+            return !done_;
+        }
+        if (sidecarTask_) {
+            auto result = sidecarTask_->tryTakeResult();
+            if (!result)
+                return false;
+            sidecarTask_.reset();
+            finishSidecars(*result);
+            return false;
+        }
+        return true;
+    }
+
+    // Stops a subtitle preparation in progress. A sidecar publication runs to its end: the
+    // output's own files are already published.
+    void stopSubtitles() {
+        subtitlesStopped_ = true;
+        if (subtitlePlanTask_)
+            subtitlePlanTask_->cancel();
+    }
+    [[nodiscard]] bool publishingSidecars() const { return sidecarTask_.has_value(); }
+    [[nodiscard]] bool preparingSubtitles() const { return subtitlePlanTask_.has_value(); }
+
+    // The tracks to embed (empty unless the output embeds).
+    [[nodiscard]] std::vector<media::provider::SubtitleTrackV1> embeddedSubtitles() const {
+        return subtitlePlan_ ? subtitlePlan_->embedded
+                             : std::vector<media::provider::SubtitleTrackV1>{};
+    }
+
+    // The embedded tracks a published movie at `path` carries, reopened and verified.
+    void reportEmbeddedSubtitles(const std::filesystem::path& path,
+                                 const std::vector<media::provider::SubtitleTrackV1>& reopened) {
+        if (!subtitlePlan_)
+            return;
+        for (std::size_t index = 0; index < subtitlePlan_->embeddedFiles.size(); ++index) {
+            auto file = subtitlePlan_->embeddedFiles[index];
+            file.path = path;
+            const auto cues = index < reopened.size() ? reopened[index].cues.size() : 0;
+            log(runtime::DiagnosticSeverity::Information, "export.subtitles.embedded",
+                "Embedded subtitle track " + std::to_string(index + 1) + " (" + file.language +
+                    (file.title.empty() ? "" : ", \"" + file.title + "\"") + ", " +
+                    std::to_string(cues) + " cues) reopened as it was sent");
+            report_.verification.subtitles.push_back(std::move(file));
+        }
+    }
+
     ExportCheckResult provenanceCheck() const {
         const auto& provenance = report_.verification.provenance;
         // A video frame is a GPU frame only when its display transform ran on the GPU as well.
@@ -334,6 +476,86 @@ class DriverBase : public ExportOutputDriver {
                          provenance.gpuFrames + provenance.cpuReferenceFrames, gpuFrames);
         return check(ExportCheck::DeviceProvenance, ExportCheckOutcome::Passed,
                      "export.check.device.gpu", provenance.gpuFrames, provenance.gpuFrames);
+    }
+
+  private:
+    // #752: a sidecar follows the output's overwrite policy. Under Ask first it replaces a file
+    // only when the output's own files were confirmed for replacing (or are this session's own).
+    [[nodiscard]] platform::ArtifactOverwritePolicy sidecarPolicy() const {
+        switch (input_.output.record.destination.overwrite) {
+        case document::ExportOverwritePolicy::Replace:
+            return platform::ArtifactOverwritePolicy::CreateOrReplace;
+        case document::ExportOverwritePolicy::Refuse:
+            return platform::ArtifactOverwritePolicy::CreateOnly;
+        case document::ExportOverwritePolicy::AskBeforeReplacing:
+            return input_.output.confirmedFiles.empty()
+                       ? platform::ArtifactOverwritePolicy::CreateOnly
+                       : platform::ArtifactOverwritePolicy::CreateOrReplace;
+        }
+        return platform::ArtifactOverwritePolicy::CreateOnly;
+    }
+
+    void submitSidecars() {
+        auto submission =
+            dependencies_.scheduler.submit<std::shared_ptr<const ExportSidecarPublication>>(
+                runtime::TaskRequest("Publish subtitle sidecars", input_.owner,
+                                     runtime::TaskPriority::Foreground,
+                                     runtime::TaskExecutor::BlockingIo),
+                [sidecars = subtitlePlan_->sidecars, policy = sidecarPolicy(),
+                 &coordinator = dependencies_.publications,
+                 &artifacts = dependencies_.artifacts](runtime::TaskContext& context) {
+                    using Result =
+                        runtime::TaskResult<std::shared_ptr<const ExportSidecarPublication>>;
+                    context.reportProgress({"Publishing subtitle files", "", 0, sidecars.size()});
+                    return Result::succeeded(std::make_shared<const ExportSidecarPublication>(
+                        publishExportSubtitleSidecars(coordinator, artifacts, sidecars, policy,
+                                                      context.cancellation())));
+                });
+        if (!submission.accepted()) {
+            deferredChecks_.push_back(check(ExportCheck::Subtitles, ExportCheckOutcome::Failed,
+                                            "export.check.subtitles.not-published"));
+            auto checks = std::move(deferredChecks_);
+            completePublished(std::move(checks));
+            return;
+        }
+        sidecarTask_.emplace(std::move(submission.handle));
+    }
+
+    void finishSidecars(
+        const runtime::TaskResult<std::shared_ptr<const ExportSidecarPublication>>& result) {
+        auto checks = std::move(deferredChecks_);
+        deferredChecks_.clear();
+        std::optional<ExportSubtitleFailure> refused;
+        if (result.state() != runtime::TaskState::Succeeded || !result.value() || !*result.value())
+            refused = ExportSubtitleFailure{ExportFailureCode::WriteFailed, "export.subtitles.task",
+                                            "The subtitle files could not be published", false};
+        else
+            refused = (*result.value())->failure;
+        const auto expected = subtitlePlan_->sidecars.size() + subtitlePlan_->embedded.size();
+        std::uint64_t verified = subtitlePlan_->embedded.size();
+        if (result.value() && *result.value())
+            for (const auto& file : (*result.value())->files) {
+                ++verified;
+                report_.published.push_back(file.path);
+                const auto hex = file.digest ? file.digest->toLowercaseHex()
+                                             : core::Sha256Digest::LowercaseHex{};
+                log(runtime::DiagnosticSeverity::Information, "export.subtitles.sidecar",
+                    "Published " + file.path.filename().string() + " (" +
+                        std::to_string(file.cues) + " cues, " + std::to_string(file.bytes) +
+                        " bytes, sha256 " + std::string(hex.data(), hex.size()) +
+                        "), parsed back as its track");
+                report_.verification.subtitles.push_back(file);
+            }
+        if (refused)
+            log(runtime::DiagnosticSeverity::Error, refused->diagnostic, refused->reason);
+        checks.push_back(
+            check(ExportCheck::Subtitles,
+                  refused ? ExportCheckOutcome::Failed : ExportCheckOutcome::Passed,
+                  refused ? "export.check.subtitles.failed" : "export.check.subtitles.verified",
+                  static_cast<std::uint64_t>(expected), verified));
+        completePublished(std::move(checks));
+        if (refused && report_.state == ExportOutputState::Failed)
+            report_.failure = failure(refused->code, refused->diagnostic, refused->reason);
     }
 
   public:
@@ -365,6 +587,15 @@ class DriverBase : public ExportOutputDriver {
     bool done_ = false;
     bool hostAssumptionNoted_ = false;
     bool deviceAssumptionNoted_ = false;
+    // #752: the subtitle stage (beginAfterSubtitles, pollSubtitles).
+    std::optional<runtime::TaskHandle<std::shared_ptr<const ExportSubtitlePlanOutcome>>>
+        subtitlePlanTask_;
+    std::optional<runtime::TaskHandle<std::shared_ptr<const ExportSidecarPublication>>>
+        sidecarTask_;
+    std::function<void()> afterSubtitles_;
+    std::optional<ExportSubtitlePlan> subtitlePlan_;
+    std::vector<ExportCheckResult> deferredChecks_;
+    bool subtitlesStopped_ = false;
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -448,14 +679,14 @@ class ImageDriver final : public DriverBase {
                          std::string(availability.reason)));
             return;
         }
-        submitCompile();
+        beginAfterSubtitles([this] { submitCompile(); });
     }
 
     // A publication still waiting for its turn never outlives the driver's interest in it.
     ~ImageDriver() override { cancelPublications(); }
 
     void poll() override {
-        if (done_)
+        if (done_ || !pollSubtitles())
             return;
         noteCapacityAssumption();
         if (auto* compiling = std::get_if<CompileHandle>(&inFlight_)) {
@@ -619,6 +850,9 @@ class ImageDriver final : public DriverBase {
     }
 
     void stop() override {
+        if (publishingSidecars())
+            return;
+        stopSubtitles();
         stopRequested_ = true;
         for (auto& frame : window_)
             if (frame.runner)
@@ -1707,7 +1941,10 @@ class MediaDriver final : public DriverBase {
                          "Requiring a GPU device is available for image outputs only"));
             return;
         }
-        launch(exportHardwareRoute(settings, input_.encoders).platformEncoder);
+        beginAfterSubtitles([this] {
+            launch(exportHardwareRoute(input_.output.record.settings, input_.encoders)
+                       .platformEncoder);
+        });
     }
 
     // Starts the export with the platform encoder taking part as `platformEncoder` says. The
@@ -1772,6 +2009,7 @@ class MediaDriver final : public DriverBase {
         request.gpuProvider = dependencies_.gpu;
         request.owner = input_.owner;
         request.useCachedFrames = settings.useCachedFrames;
+        request.subtitles = embeddedSubtitles();
         if (settings.loudness)
             request.loudness = output::AudioLoudnessTargetV1{settings.loudness->targetLufs,
                                                              settings.loudness->truePeakDbtp};
@@ -1801,7 +2039,7 @@ class MediaDriver final : public DriverBase {
     }
 
     void poll() override {
-        if (done_ || !runner_)
+        if (done_ || !pollSubtitles() || !runner_)
             return;
         runner_->poll();
         noteCapacityAssumption();
@@ -1832,10 +2070,13 @@ class MediaDriver final : public DriverBase {
     }
 
     void stop() override {
+        if (publishingSidecars())
+            return;
+        stopSubtitles();
         stopRequested_ = true;
         if (runner_)
             runner_->cancel();
-        else if (!done_)
+        else if (!done_ && !preparingSubtitles())
             finishStopped();
     }
     void setPaused(const bool paused) override {
@@ -2018,6 +2259,7 @@ class MediaDriver final : public DriverBase {
         artifacts.lastPath = artifacts.firstPath;
         artifacts.publication = publicationOutcome(result.publication.outcome);
         report_.published.push_back(artifacts.firstPath);
+        reportEmbeddedSubtitles(artifacts.firstPath, result.subtitles);
         const auto expectedFrames = input_.range.last - input_.range.first + 1;
         if (result.evidence) {
             const auto& evidence = *result.evidence;
