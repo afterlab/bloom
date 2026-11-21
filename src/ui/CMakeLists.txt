@@ -760,6 +760,7 @@ target_sources(
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp
         viewer_editor_text.cpp
+        viewer_editor_subtitles.cpp
         viewer_editor_drill.cpp
         viewer_editor_text_input.cpp
         viewer_editor_text_layout.cpp

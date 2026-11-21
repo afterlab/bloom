@@ -124,6 +124,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
         paintAnchorEditing(painter);
         paintTextEditing(painter);
         paintFocusPoint(painter, overlayMapping);
+        paintSubtitles(painter, overlayMapping);
         painter.end();
         if (!picture.isNull()) {
             request.overlay.picture = picture;
@@ -161,6 +162,7 @@ ResidentPresentRequest ViewerEditor::buildResidentPresentRequest() {
     mix(static_cast<std::uint64_t>(overlayOptions_.thirds));
     mix(static_cast<std::uint64_t>(overlayOptions_.rulers));
     mix(static_cast<std::uint64_t>(overlayOptions_.pixelGrid));
+    mix(static_cast<std::uint64_t>(overlayOptions_.trackOnlySubtitles));
     mix(static_cast<std::uint64_t>(request.containerRect.width() * 1000.0));
     mix(static_cast<std::uint64_t>(request.containerRect.height() * 1000.0));
     request.overlaySignature = signature;

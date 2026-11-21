@@ -26,6 +26,7 @@
 #include <QMetaObject>
 #include <QPointF>
 #include <QPointer>
+#include <QPolygonF>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -350,6 +351,10 @@ class ViewerEditor final : public QWidget,
     }
     [[nodiscard]] bool textEditing() const noexcept;
     [[nodiscard]] QLineF textCaretForTest() const;
+    // #752: the shown Subtitles cue blocks on screen (every Subtitles layer), and the open in-place
+    // cue editor.
+    [[nodiscard]] std::vector<std::pair<std::uint64_t, QPolygonF>> subtitlesBlocksForTest() const;
+    [[nodiscard]] QWidget* cueEditorForTest() const noexcept { return cueEditor_; }
     [[nodiscard]] QVariant inputMethodQuery(Qt::InputMethodQuery query) const override;
     [[nodiscard]] ViewTransform viewTransformForTest() const noexcept;
     [[nodiscard]] QRectF canvasRectForTest() const { return canvasRect(); }
@@ -888,6 +893,38 @@ class ViewerEditor final : public QWidget,
     bool spaceHandleRelease(QMouseEvent* event);
     void finishSpaceHandle();
     void paintSpaceHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // #752 Subtitles (viewer_editor_subtitles.cpp): with a Subtitles layer or node selected, its
+    // safe area and each shown cue's block with its number; a click on a block selects the cue,
+    // dragging it moves the node's Offset (one edit on release), a double-click edits the cue's
+    // text in place over its block. Cues that are not burned in show as a guide while "Show
+    // Track-Only Subtitles" is on. Everything here is display-only: never in a rendered frame.
+    struct SubtitlesDrag final {
+        document::NodeId node;
+        document::ParameterId offset;
+        document::Vec2d base;
+        QPointF pressLocal;
+        QTransform toComposition;
+        bool moved = false;
+    };
+    std::optional<SubtitlesDrag> subtitlesDrag_;
+    QPointer<QWidget> cueEditor_;
+    bool subtitlesPress(QMouseEvent* event);
+    bool subtitlesMove(QMouseEvent* event);
+    bool subtitlesRelease(QMouseEvent* event);
+    bool subtitlesDoubleClick(QMouseEvent* event);
+    void cancelSubtitlesDrag();
+    void paintSubtitles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // A Subtitles node's shown cue blocks on screen, and the layer that shows them.
+    struct SubtitlesScreenBlock final {
+        document::NodeId node;
+        document::LayerId layer;
+        std::uint64_t cue = 0;
+        std::size_t number = 0;
+        QPolygonF polygon;
+        QString text;
+    };
+    [[nodiscard]] std::vector<SubtitlesScreenBlock>
+    subtitlesScreenBlocks(const ViewerMapping& mapping, bool selectedOnly) const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);
@@ -1283,6 +1320,7 @@ class ViewerEditor final : public QWidget,
     QAction* rulersAction_ = nullptr;
     QAction* pixelGridAction_ = nullptr;
     QAction* missingFontsAction_ = nullptr;
+    QAction* trackOnlySubtitlesAction_ = nullptr;
     QMenu* safeAreaPresetMenu_ = nullptr;
     std::array<QAction*, 5> safeAreaPresetActions_{};
     // Each mirrors its footer dropdown item for item (viewer_editor_menus.cpp).

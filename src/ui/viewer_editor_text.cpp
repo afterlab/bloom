@@ -271,6 +271,9 @@ void ViewerEditor::mouseDoubleClickEvent(QMouseEvent* event) {
         QWidget::mouseDoubleClickEvent(event);
         return;
     }
+    // #752: a double-click on a cue block edits that cue's text in place.
+    if (subtitlesDoubleClick(event))
+        return;
     // #645: double-click enters groups and shapes, and on empty space backs out one level.
     if (drillDoubleClick(event))
         return;

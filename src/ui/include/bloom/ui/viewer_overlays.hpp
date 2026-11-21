@@ -89,6 +89,10 @@ struct ViewerOverlayOptions final {
     // #489: text whose font is missing is washed in red. A display overlay only: it is never drawn
     // into a rendered frame or an export.
     bool missingFonts = true;
+    // #752: cues of a Subtitles node with Burn in off show as a guide over the frame. A display
+    // overlay only, like the missing-font wash: never in RAM Preview, an export or a headless
+    // render.
+    bool trackOnlySubtitles = true;
     ViewerSafeAreaPreset safeAreaPreset = ViewerSafeAreaPreset::Broadcast;
     document::SafeAreaSettings safeAreaSettings{};
 };

@@ -1,3 +1,5 @@
+#include "subtitles_editing.hpp"
+#include "subtitles_inspector.hpp"
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/cryptomatte_controller.hpp>
@@ -415,6 +417,14 @@ ViewerEditor::ViewerEditor(CompositionSession& session,
         rebuildBreadcrumb();
         update();
     });
+    // #752: the Subtitles outlines follow the inspected blocks and the picked cue.
+    const auto subtitlesChanged = [this] {
+        ++gpuOverlayRevision_;
+        updateGpuResidentPresentation();
+        update();
+    };
+    connect(&session_.subtitlesInspector(), &SubtitlesInspector::inspected, this, subtitlesChanged);
+    connect(&session_, &CompositionSession::cueSelectionChanged, this, subtitlesChanged);
     connect(&session_, &CompositionSession::selectionChanged, this, [this] {
         rebuildObjectSelector();
         ++gpuOverlayRevision_;
@@ -1111,6 +1121,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintLineHandles(painter, painted.mapping);
     paintWarpHandles(painter, painted.mapping);
     paintSpaceHandles(painter, painted.mapping);
+    paintSubtitles(painter, painted.mapping);
 
     if (coverSnapshotInProgress_)
         coverCaptureDisplay_ = std::move(painted);
@@ -1233,6 +1244,10 @@ ViewerHit ViewerEditor::hitAt(const ViewerMapping& mapping, const QPointF point)
     const auto bounds = previewController_->currentLayerBounds(frame);
     if (const auto* stack = session_.timelineMerge()) {
         for (const auto& entry : stack->entries()) {
+            // #752: a Subtitles layer's bounds are the whole frame; it is picked on its cue
+            // blocks (subtitlesPress), so a click elsewhere reaches the layers under it.
+            if (subtitles_editing::subtitlesNodeOfLayer(session_, entry.layerId))
+                continue;
             const auto found = std::ranges::find(bounds, entry.layerId,
                                                  &runtime::EvaluatedOperationBounds::layerId);
             if (found != bounds.end())
@@ -1351,6 +1366,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
     if (!reference && warpHandlePress(event))
         return;
     if (!reference && spaceHandlePress(event))
+        return;
+    if (!reference && subtitlesPress(event))
         return;
     if (!reference && cryptomattePress(event))
         return;
@@ -1498,6 +1515,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         return;
     if (spaceHandleMove(event))
         return;
+    if (subtitlesMove(event))
+        return;
     if (textEdit_) {
         if (textEdit_->dragging)
             moveTextCaret(event->position(), true);
@@ -1619,6 +1638,8 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         return;
     if (spaceHandleRelease(event))
         return;
+    if (subtitlesRelease(event))
+        return;
     if (textEdit_ && event->button() == Qt::LeftButton) {
         textEdit_->dragging = false;
         event->accept();
@@ -1720,6 +1741,11 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     }
     if (warpDrag_ && event->key() == Qt::Key_Escape) {
         finishWarpHandle();
+        event->accept();
+        return;
+    }
+    if (subtitlesDrag_ && event->key() == Qt::Key_Escape) {
+        cancelSubtitlesDrag();
         event->accept();
         return;
     }

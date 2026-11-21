@@ -246,6 +246,10 @@ void ViewerEditor::buildMenus() {
     missingFontsAction_ = addOverlayToggle(
         tr("Highlight Missing Fonts"), QStringLiteral("viewerMissingFontsAction"),
         kMissingFontsSetting, QKeySequence(), &overlayOptions_.missingFonts, true);
+    // #752: cues that are only a track (Burn in off) as a guide; on until the artist turns it off.
+    trackOnlySubtitlesAction_ = addOverlayToggle(
+        tr("Show Track-Only Subtitles"), QStringLiteral("viewerTrackOnlySubtitlesAction"),
+        kTrackOnlySubtitlesSetting, QKeySequence(), &overlayOptions_.trackOnlySubtitles, true);
     viewerViewMenu_->addMenu(guidesMenu_);
     backgroundMenu_ = mirrorMenu(
         tr("Background"), QStringLiteral("viewerBackgroundMenu"), backgroundDropdown_,
@@ -285,6 +289,10 @@ void ViewerEditor::buildMenus() {
     auto* text = viewerAddMenu_->addAction(tr("Text"));
     text->setObjectName(QStringLiteral("viewerAddTextAction"));
     connect(text, &QAction::triggered, this, [this] { (void)addDefaultTextLayer(session_); });
+    auto* subtitles = viewerAddMenu_->addAction(tr("Subtitles"));
+    subtitles->setObjectName(QStringLiteral("viewerAddSubtitlesAction"));
+    connect(subtitles, &QAction::triggered, this,
+            [this] { (void)addDefaultSubtitlesLayer(session_); });
     viewerAddMenu_->addSeparator();
     for (std::int64_t index = 0; index <= 6; ++index) {
         const auto kind = static_cast<document::ShapeKind>(index);
