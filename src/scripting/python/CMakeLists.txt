@@ -133,6 +133,10 @@ if(BUILD_TESTING)
     bloom_add_test(NAME bloom.scripting.python-lut-render
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_lut_render.py"
         LABELS scripting python integration device TIMEOUT 300)
+    # #591: a graph scene in one animated coordinate space, built and rendered from Python.
+    bloom_add_test(NAME bloom.scripting.python-coordinate-space-render
+        COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_coordinate_space_render.py"
+        LABELS scripting python integration device TIMEOUT 300)
     bloom_add_test(NAME bloom.scripting.python-embedding
         COMMAND bloom-cli run "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/embedding.py"
         LABELS scripting python integration device)
