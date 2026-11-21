@@ -3158,3 +3158,23 @@ target_link_libraries(bloom_runtime_compiled_cue_list_test PRIVATE bloom_runtime
 bloom_enable_warnings(bloom_runtime_compiled_cue_list_test)
 bloom_add_test(NAME bloom.runtime.compiled-cue-list COMMAND bloom_runtime_compiled_cue_list_test
     LABELS runtime unit TIMEOUT 60)
+
+# #752: the Subtitles node through real documents: layout, pixels, value outputs, cache identity,
+# budgets, cancellation and checks on the CPU, then GPU parity full frame, ROI and proxy with warm
+# zero dispatch. The CPU half always runs; skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_subtitles_render_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/subtitles_render_native_tests.cpp)
+target_include_directories(bloom_runtime_subtitles_render_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_subtitles_render_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands
+            bloom_subtitles)
+bloom_enable_warnings(bloom_runtime_subtitles_render_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_subtitles_render_native_test)
+bloom_add_test(
+    NAME bloom.runtime.subtitles_render_native
+    COMMAND bloom_runtime_subtitles_render_native_test
+    LABELS runtime native gpu render text
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.subtitles_render_native PROPERTIES SKIP_RETURN_CODE 77)
