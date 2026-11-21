@@ -4,6 +4,7 @@
 #include <bloom/core/pixel_aspect_ratio.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/resample_filter.hpp>
+#include <bloom/document/text_styling.hpp>
 
 #include <algorithm>
 #include <array>
@@ -350,10 +351,13 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
                 binding.role == "letter-spacing" || binding.role == "font" ||
                 binding.role == "box" || binding.role == "wrap" ||
                 binding.role == "verticalAlignment" || binding.role == "anchorMode" ||
-                binding.role == "overflow")
+                binding.role == "overflow" ||
+                // #757: the styling parameters, bound at their defaults.
+                document::textStylingParameterSpecForRole(binding.role) != nullptr)
                 expectedTextNode.parameters.push_back(binding);
         }
-    test.expect(expectedTextNode.parameters.size() == 12, "text declares typography parameters");
+    test.expect(expectedTextNode.parameters.size() == 24,
+                "text declares typography and styling parameters");
     test.expect(textNode != nullptr && *textNode == expectedTextNode,
                 "text source should bind content, size, and color in the registered order");
 

@@ -19,6 +19,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace bloom::commands {
 
@@ -136,6 +137,9 @@ class AddSolidLayer final : public Operation {
 struct TextLayerStyle {
     std::optional<document::FontId> font;
     std::optional<std::int64_t> alignment;
+    // #757: styling parameters set at creation, by role (markup, accent1..4, outlineColor, ...);
+    // a role left out keeps its default. Each value must be the role's value kind.
+    std::vector<std::pair<std::string, document::ParameterValue>> styling{};
 };
 
 class AddTextLayer final : public Operation {

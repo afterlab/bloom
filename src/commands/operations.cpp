@@ -1,6 +1,8 @@
 #include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/subtitles_nodes.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/resample_filter.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
@@ -965,6 +967,25 @@ OperationResult AddImageLayer::apply(document::Draft& draft) const {
 
 std::string_view AddTextLayer::typeId() const noexcept { return "bloom.layer.add-text"; }
 
+namespace {
+
+// "<role>Parameter" for a Text Source styling role (#757), with the static lifetime an output name
+// needs.
+[[nodiscard]] std::string_view textStylingOutputName(const std::string_view role) {
+    static const auto names = [] {
+        std::vector<std::pair<std::string, std::string>> out;
+        for (const auto& spec : document::textStylingParameters())
+            out.emplace_back(std::string(spec.role), std::string(spec.role) + "Parameter");
+        return out;
+    }();
+    for (const auto& [name, output] : names)
+        if (name == role)
+            return output;
+    return role;
+}
+
+} // namespace
+
 OperationResult AddTextLayer::apply(document::Draft& draft) const {
     auto* composition = draft.project().findComposition(compositionId_);
     if (composition == nullptr) {
@@ -1011,37 +1032,63 @@ OperationResult AddTextLayer::apply(document::Draft& draft) const {
                                          "The text font must be a valid font ID");
     const auto fontText = document::encodeFontId(style_.font.value_or(document::defaultFontId()));
 
+    StructuredLayerDescriptor descriptor{
+        document::kTextSourceNodeType,
+        document::kTextSourceNodeSchemaVersion,
+        document::kTextSourceOutputPort,
+        // Order matches the registered text definition's parameter order exactly.
+        {{document::kTextParameterRole, document::kTextParameterSchemaKey, text_,
+          kAddTextLayerTextParameterOutput},
+         {document::kTextSizeParameterRole, document::kTextSizeParameterSchemaKey, size_,
+          kAddTextLayerSizeParameterOutput},
+         {document::kTextColorParameterRole, document::kTextColorParameterSchemaKey, color_,
+          kAddTextLayerColorParameterOutput},
+         {document::kTextAlignmentParameterRole, document::kTextAlignmentParameterSchemaKey,
+          style_.alignment.value_or(std::int64_t{0}), "alignmentParameter"},
+         {document::kTextLineHeightParameterRole, document::kTextLineHeightParameterSchemaKey, 1.0,
+          "lineHeightParameter"},
+         {document::kTextLetterSpacingParameterRole, document::kTextLetterSpacingParameterSchemaKey,
+          0.0, "letterSpacingParameter"},
+         {document::kTextFontParameterRole, document::kTextFontParameterSchemaKey, fontText,
+          kAddTextLayerFontParameterOutput},
+         {document::kTextBoxParameterRole, document::kTextBoxParameterSchemaKey, document::Vec2d{},
+          kAddTextLayerBoxParameterOutput},
+         {document::kTextWrapParameterRole, document::kTextWrapParameterSchemaKey, false,
+          kAddTextLayerWrapParameterOutput},
+         {document::kTextVerticalAlignmentParameterRole,
+          document::kTextVerticalAlignmentParameterSchemaKey, std::int64_t{0},
+          kAddTextLayerVerticalAlignmentParameterOutput},
+         {document::kTextAnchorModeParameterRole, document::kTextAnchorModeParameterSchemaKey,
+          document::kTextAnchorModeFollowsAlignment, kAddTextLayerAnchorModeParameterOutput},
+         {document::kTextOverflowParameterRole, document::kTextOverflowParameterSchemaKey,
+          std::int64_t{0}, kAddTextLayerOverflowParameterOutput}}};
+    // #757: the styling parameters at their defaults (markup off, no outline, no background) unless
+    // the style sets them, so the new layer draws as plain text until one is set. Each output is
+    // named "<role>Parameter", as the layout parameters' are.
+    if (const auto* definition = document::builtInNodeDefinitions().find(
+            document::kTextSourceNodeType, document::kTextSourceNodeSchemaVersion))
+        for (std::size_t index = descriptor.sourceParameters.size();
+             index < definition->parameters.size(); ++index) {
+            const auto& parameter = definition->parameters[index];
+            auto value = parameter.defaultValue;
+            for (const auto& [role, set] : style_.styling)
+                if (role == parameter.role)
+                    value = set;
+            descriptor.sourceParameters.push_back({parameter.role, parameter.schemaKey,
+                                                   std::move(value),
+                                                   textStylingOutputName(parameter.role)});
+        }
+    for (const auto& [role, value] : style_.styling) {
+        (void)value;
+        if (std::ranges::none_of(descriptor.sourceParameters,
+                                 [&role](const auto& entry) { return entry.role == role; }))
+            return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                             "A text layer has no styling parameter \"" + role +
+                                                 "\"");
+    }
+
     return addStructuredLayer(
-        draft, *composition, name_,
-        {document::kTextSourceNodeType,
-         document::kTextSourceNodeSchemaVersion,
-         document::kTextSourceOutputPort,
-         // Order matches the registered text definition's parameter order exactly.
-         {{document::kTextParameterRole, document::kTextParameterSchemaKey, text_,
-           kAddTextLayerTextParameterOutput},
-          {document::kTextSizeParameterRole, document::kTextSizeParameterSchemaKey, size_,
-           kAddTextLayerSizeParameterOutput},
-          {document::kTextColorParameterRole, document::kTextColorParameterSchemaKey, color_,
-           kAddTextLayerColorParameterOutput},
-          {document::kTextAlignmentParameterRole, document::kTextAlignmentParameterSchemaKey,
-           style_.alignment.value_or(std::int64_t{0}), "alignmentParameter"},
-          {document::kTextLineHeightParameterRole, document::kTextLineHeightParameterSchemaKey, 1.0,
-           "lineHeightParameter"},
-          {document::kTextLetterSpacingParameterRole,
-           document::kTextLetterSpacingParameterSchemaKey, 0.0, "letterSpacingParameter"},
-          {document::kTextFontParameterRole, document::kTextFontParameterSchemaKey,
-           fontText, kAddTextLayerFontParameterOutput},
-          {document::kTextBoxParameterRole, document::kTextBoxParameterSchemaKey, document::Vec2d{},
-           kAddTextLayerBoxParameterOutput},
-          {document::kTextWrapParameterRole, document::kTextWrapParameterSchemaKey, false,
-           kAddTextLayerWrapParameterOutput},
-          {document::kTextVerticalAlignmentParameterRole,
-           document::kTextVerticalAlignmentParameterSchemaKey, std::int64_t{0},
-           kAddTextLayerVerticalAlignmentParameterOutput},
-          {document::kTextAnchorModeParameterRole, document::kTextAnchorModeParameterSchemaKey,
-           document::kTextAnchorModeFollowsAlignment, kAddTextLayerAnchorModeParameterOutput},
-          {document::kTextOverflowParameterRole, document::kTextOverflowParameterSchemaKey,
-           std::int64_t{0}, kAddTextLayerOverflowParameterOutput}}},
+        draft, *composition, name_, std::move(descriptor),
         useCompositionCentre_
             ? document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
                               static_cast<double>(composition->format().height()) / 2.0}
