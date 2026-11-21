@@ -304,10 +304,11 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp", "encoder"},
+             "truePeakDbtp", "encoder", "subtitles"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
+    const auto subtitles = subtitlesArguments(arguments);
     const auto encoder = encoderArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
@@ -326,7 +327,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     const auto mapping = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
     // #650: every other preset the catalogue lists runs as a transient export queue job, the same
     // way the in-app server runs every export.
-    if (mapping == kPresetMappings.end() && compositionExport)
+    // #752: subtitle tracks are an export queue feature, so a request for them takes that route
+    // for the presets this function would otherwise run directly, and for `render` too.
+    if (subtitles || (mapping == kPresetMappings.end() && compositionExport))
         return renderLive(core, out, call, arguments, compositionExport);
     if (mapping == kPresetMappings.end())
         throw InvalidInput(unknownPresetMessage(presetName));
@@ -582,10 +585,11 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp", "encoder"},
+             "truePeakDbtp", "encoder", "subtitles"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
+    const auto subtitles = subtitlesArguments(arguments);
     const auto encoder = encoderArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
@@ -609,6 +613,10 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
                         member(arguments, "truePeakDbtp") || encoder || workerLimits.any()))
         throw InvalidInput("Still presets do not accept media encoding or worker settings");
     const auto* preset = &found.preset;
+    if (subtitles && subtitles->embed &&
+        !document::exportFormatEmbedsSubtitles(preset->settings.format))
+        throw InvalidInput("This preset cannot embed subtitle tracks: " +
+                           std::string(host::kSubtitleEmbedUnsupportedReason));
     host::ExportTransientJobRequest request;
     request.composition = document::CompositionId::fromRaw(id);
     request.range = range || !found.still
@@ -632,6 +640,7 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Loudness normalization needs audio");
         request.settings.loudness = loudness;
     }
+    request.settings.subtitles = subtitles;
     if (auto* rate = member(arguments, "sampleRate")) {
         const auto value = integer(rate);
         if (value < 8000 || value > 192000)
@@ -652,6 +661,8 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         out.set(value, "workerMemory", workerMemoryValue(out, *result.workerMemory));
     if (result.loudness)
         out.set(value, "loudness", loudnessValue(out, *result.loudness));
+    if (subtitles)
+        out.set(value, "subtitles", subtitleFilesValue(out, result.subtitles));
     out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
     reportJobRoute(out, value, result);
@@ -660,6 +671,22 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         auto* file = out.object();
         out.set(file, "path", out.text(path.string()));
         out.set(file, "digest", out.text(digestFile(path)));
+        out.append(files, file);
+    }
+    // Each sidecar is a published file too, listed with the digest the export verified.
+    for (const auto& track : result.subtitles) {
+        if (!track.sidecar)
+            continue;
+        auto* file = out.object();
+        out.set(file, "path", out.text(track.path.string()));
+        std::string digest;
+        if (track.digest) {
+            const auto hex = track.digest->toLowercaseHex();
+            digest = "sha256:" + std::string(hex.data(), hex.size());
+        } else {
+            digest = digestFile(track.path);
+        }
+        out.set(file, "digest", out.text(digest));
         out.append(files, file);
     }
     out.set(value, "files", files);

@@ -458,6 +458,18 @@ struct WorkerLimitArguments final {
 // Reads loudnessLufs (-40..-5) and truePeakDbtp (-12..0, default -1) of an audio-carrying export
 // (#570). Absent when loudnessLufs is not given; truePeakDbtp alone is refused. Throws InvalidInput.
 [[nodiscard]] std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments);
+// The optional `subtitles` argument of render and export (#752): {sidecar:[srt|vtt|ttml], embed,
+// nodes:[node ids]}. Sidecars and nodes are stored ascending. Absent when not given. Throws
+// InvalidInput for an unknown key or format, a duplicate, neither sidecar nor embed, or 0 or more
+// than 256 nodes.
+[[nodiscard]] std::optional<document::ExportSubtitles> subtitlesArguments(yyjson_val* arguments);
+// The same object as subtitlesArguments reads, for an output's settings.
+[[nodiscard]] yyjson_mut_val* subtitlesSettingValue(Json& out,
+                                                    const document::ExportSubtitles& subtitles);
+// [{node, language, title, format: srt|vtt|ttml|embedded, path, cues, bytes?, sha256?}], one per
+// delivered track; bytes and sha256 describe a sidecar file.
+[[nodiscard]] yyjson_mut_val*
+subtitleFilesValue(Json& out, const std::vector<host::ExportSubtitleFile>& files);
 // The optional `encoder` argument of render and export: "automatic", "software" or "hardware".
 [[nodiscard]] std::optional<document::ExportEncoderPreference>
 encoderArgument(yyjson_val* arguments);
@@ -469,6 +481,7 @@ encoderArgument(yyjson_val* arguments);
 struct TransientResult final {
     std::optional<host::ExportWorkerMemory> workerMemory;
     std::optional<host::ExportLoudnessReport> loudness;
+    std::vector<host::ExportSubtitleFile> subtitles;
     std::uint64_t job = 0;
     std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;

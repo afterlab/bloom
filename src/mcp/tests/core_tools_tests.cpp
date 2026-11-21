@@ -953,6 +953,115 @@ void retiredTransientJobs() {
         expect(contains(still, "-32602"), "a still preset refuses a loudness target: " + still);
     }
 
+    // Issue #752: subtitle sidecars and embedded tracks over MCP. The argument is checked (unknown
+    // keys and formats, duplicates, neither sidecar nor embed, node counts and ids, embedding in a
+    // container with no subtitle track), and a valid one reaches the job's output as the setting,
+    // sidecars and nodes ascending, for both export and render.
+    {
+        const auto movie = (captures / "subtitles.mov").generic_string();
+        const auto call = [&](const std::string& tool, const std::string& preset,
+                              const std::string& destination, const std::string& subtitles) {
+            return server.call(tool, R"({"composition":1,"frame":0,"preset":")" + preset +
+                                         R"(","overwrite":"replace","destination":")" +
+                                         destination + R"(","subtitles":)" + subtitles + "}");
+        };
+        const auto movieCall = [&](const std::string& subtitles) {
+            return call("export", "ProResMovV1", movie, subtitles);
+        };
+        std::string manyNodes = "[1";
+        for (int node = 2; node <= 257; ++node)
+            manyNodes += "," + std::to_string(node);
+        manyNodes += "]";
+        for (const auto& bad :
+             {std::string(R"({"sidecar":["ass"]})"), std::string(R"({"sidecar":["srt","srt"]})"),
+              std::string(R"({"sidecar":[1]})"), std::string(R"({"sidecar":"srt"})"),
+              std::string("{}"), std::string(R"({"sidecar":[]})"),
+              std::string(R"({"embed":false})"),
+              std::string(R"({"embed":"yes","sidecar":["srt"]})"),
+              std::string(R"({"sidecar":["srt"],"format":"srt"})"), std::string("[]"),
+              std::string(R"("srt")"), std::string("null"),
+              std::string(R"({"sidecar":["srt"],"nodes":[]})"),
+              std::string(R"({"sidecar":["srt"],"nodes":[0]})"),
+              std::string(R"({"sidecar":["srt"],"nodes":[-3]})"),
+              std::string(R"({"sidecar":["srt"],"nodes":[4,4]})"),
+              std::string(R"({"sidecar":["srt"],"nodes":4})"),
+              std::string(R"({"sidecar":["srt"],"nodes":)") + manyNodes + "}"}) {
+            const auto refused = movieCall(bad);
+            expect(contains(refused, "-32602"), "subtitles refused: " + bad + " " + refused);
+        }
+        expect(contains(movieCall("{}"), "sidecar format (srt, vtt or ttml) or embed=true"),
+               "an empty subtitles object says what it needs: " + movieCall("{}"));
+        expect(contains(movieCall(R"({"sidecar":["srt","srt"]})"), "each format at most once"),
+               "a duplicate format is named");
+        expect(contains(movieCall(R"({"sidecar":["srt"],"nodes":)" + manyNodes + "}"),
+                        "lists 1 to 256 nodes"),
+               "more than 256 nodes is named");
+        // Embedding needs a container that carries a track; the refusal names the sidecar formats.
+        for (const auto& [preset, extension] :
+             {std::pair<std::string, std::string>{"DnxhrMxfV1", "mxf"},
+              {"PcmWavV1", "wav"},
+              {"PngRgba8SrgbV1", "png"}}) {
+            const auto refused =
+                call("export", preset, (captures / ("embed." + extension)).generic_string(),
+                     R"({"sidecar":["vtt"],"embed":true})");
+            expect(contains(refused, "-32602") &&
+                       contains(refused, "SRT, WebVTT or TTML sidecar files"),
+                   "embedding in " + preset +
+                       " is refused, naming the sidecar formats: " + refused);
+        }
+        const auto refusedStill =
+            call("render", "PngRgba8SrgbV1", (captures / "embed.png").generic_string(),
+                 R"({"embed":true})");
+        expect(contains(refusedStill, "-32602") && contains(refusedStill, "sidecar files"),
+               "a render cannot embed: " + refusedStill);
+
+        // Valid requests run as export queue jobs, whatever route the preset would otherwise take.
+        fake->push({});
+        const auto accepted =
+            movieCall(R"({"sidecar":["vtt","ttml","srt"],"embed":true,"nodes":[15,12]})");
+        expect(contains(accepted, R"("isError":false)"),
+               "export accepts sidecars, embed and nodes: " + accepted);
+        const auto acceptedJob = std::to_string(jobOf(accepted));
+        auto subtitleStatus = server.call("export.status", "{}");
+        expect(contains(subtitleStatus,
+                        R"("subtitles":{"sidecar":["srt","vtt","ttml"],"embed":true,)"
+                        R"("nodes":[12,15]})"),
+               "the output carries the setting, sidecars and nodes ascending: " + subtitleStatus);
+        fake->push({});
+        const auto sidecarOnly = movieCall(R"({"sidecar":["ttml"]})");
+        expect(contains(sidecarOnly, R"("isError":false)"),
+               "export accepts one sidecar format: " + sidecarOnly);
+        subtitleStatus = server.call("export.status", "{}");
+        expect(contains(subtitleStatus, R"("subtitles":{"sidecar":["ttml"],"embed":false})"),
+               "embed defaults to false and nodes stay absent: " + subtitleStatus);
+        fake->push({});
+        const auto embedOnly = movieCall(R"({"embed":true})");
+        expect(contains(embedOnly, R"("isError":false)"),
+               "export accepts embed without a sidecar: " + embedOnly);
+        for (const auto& stillPreset : {"PngRgba8SrgbV1", "FlatExrRgba32fLinRec709SceneV1"}) {
+            fake->push({});
+            const auto still = call(
+                "render", stillPreset,
+                (captures / (std::string("subtitles") + (stillPreset[0] == 'P' ? ".png" : ".exr")))
+                    .generic_string(),
+                R"({"sidecar":["srt","vtt"]})");
+            expect(contains(still, R"("isError":false)") && contains(still, R"("job":")"),
+                   std::string("render with subtitles runs as an export job: ") + still);
+        }
+        subtitleStatus = server.call("export.status", "{}");
+        expect(contains(subtitleStatus, R"("subtitles":{"sidecar":["srt","vtt"],"embed":false})") &&
+                   contains(subtitleStatus, R"("id":")" + acceptedJob + '"'),
+               "a still render's output carries the setting too: " + subtitleStatus);
+        // The schemas of both tools declare the argument and its formats.
+        const auto listed = server.send(R"({"jsonrpc":"2.0","id":91,"method":"tools/list"})");
+        const auto first = listed.find(R"("subtitles":{"type":"object")");
+        expect(first != std::string::npos &&
+                   listed.find(R"("subtitles":{"type":"object")", first + 1) != std::string::npos &&
+                   contains(listed, R"("enum":["srt","vtt","ttml"])") &&
+                   contains(listed, R"("maxItems":256)"),
+               "tools/list declares subtitles on render and export");
+    }
+
     // The encoder choice over MCP (issue #455): the three values are accepted for a movie, and
     // anything else, or any value on a still, is refused.
     {

@@ -201,6 +201,9 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     // Present when the output normalized its audio loudness (#570).
     if (verification.loudness)
         out.set(value, "loudness", loudnessValue(out, *verification.loudness));
+    // The subtitle tracks the output delivered (#752); absent when it asked for none.
+    if (!verification.subtitles.empty())
+        out.set(value, "subtitles", subtitleFilesValue(out, verification.subtitles));
     // A published movie's reopen measurements (issue #424), named as in ExportReopenQuality;
     // absent for an output without a tolerance profile.
     if (const auto& quality = verification.reopenQuality) {
@@ -268,6 +271,9 @@ yyjson_mut_val* jobValue(Json& out, const host::ExportJobView& job) {
         out.set(row, "preset", out.text(output.record.presetId));
         out.set(row, "format",
                 out.text(document::exportFormatToken(output.record.settings.format)));
+        if (output.record.settings.subtitles)
+            out.set(row, "subtitles",
+                    subtitlesSettingValue(out, *output.record.settings.subtitles));
         out.set(row, "firstPath", out.text(output.destination.firstPath.string()));
         out.set(row, "lastPath", out.text(output.destination.lastPath.string()));
         out.set(row, "fileCount", out.number(output.destination.fileCount));
@@ -490,6 +496,102 @@ std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments)
           loudness.truePeakDbtp <= document::kExportTruePeakMaximumDbtp))
         throw InvalidInput("truePeakDbtp is -12 to 0");
     return loudness;
+}
+
+std::optional<document::ExportSubtitles> subtitlesArguments(yyjson_val* arguments) {
+    auto* given = member(arguments, "subtitles");
+    if (!given)
+        return std::nullopt;
+    if (!yyjson_is_obj(given))
+        throw InvalidInput("subtitles is an object: {\"sidecar\":[\"srt\",\"vtt\",\"ttml\"],"
+                           "\"embed\":false,\"nodes\":[12]}");
+    members(given, {"sidecar", "embed", "nodes"});
+    document::ExportSubtitles subtitles;
+    if (auto* sidecar = member(given, "sidecar")) {
+        if (!yyjson_is_arr(sidecar))
+            throw InvalidInput("subtitles.sidecar is a list of srt, vtt and ttml");
+        std::size_t index = 0;
+        std::size_t limit = 0;
+        yyjson_val* item = nullptr;
+        yyjson_arr_foreach(sidecar, index, limit, item) {
+            const auto format = yyjson_is_str(item)
+                                    ? document::parseExportSubtitleFormat(string(item, 16))
+                                    : std::nullopt;
+            if (!format)
+                throw InvalidInput("subtitles.sidecar formats are srt, vtt and ttml");
+            if (std::ranges::find(subtitles.sidecars, *format) != subtitles.sidecars.end())
+                throw InvalidInput("subtitles.sidecar names each format at most once");
+            subtitles.sidecars.push_back(*format);
+        }
+        std::ranges::sort(subtitles.sidecars);
+    }
+    if (auto* embed = member(given, "embed"))
+        subtitles.embed = boolean(embed);
+    if (subtitles.sidecars.empty() && !subtitles.embed)
+        throw InvalidInput("subtitles needs a sidecar format (srt, vtt or ttml) or embed=true");
+    if (auto* nodes = member(given, "nodes")) {
+        if (!yyjson_is_arr(nodes))
+            throw InvalidInput("subtitles.nodes is a list of Subtitles node ids");
+        if (yyjson_arr_size(nodes) == 0 ||
+            yyjson_arr_size(nodes) > document::kExportSubtitleMaximumNodes)
+            throw InvalidInput("subtitles.nodes lists 1 to " +
+                               std::to_string(document::kExportSubtitleMaximumNodes) +
+                               " nodes; leave it out for every Subtitles node with Export as track "
+                               "on");
+        std::vector<document::NodeId> list;
+        std::size_t index = 0;
+        std::size_t limit = 0;
+        yyjson_val* item = nullptr;
+        yyjson_arr_foreach(nodes, index, limit, item) {
+            if (!yyjson_is_uint(item) || yyjson_get_uint(item) == 0)
+                throw InvalidInput("subtitles.nodes are positive integer node ids");
+            const auto id = document::NodeId::fromRaw(yyjson_get_uint(item));
+            if (std::ranges::find(list, id) != list.end())
+                throw InvalidInput("subtitles.nodes names each node at most once");
+            list.push_back(id);
+        }
+        std::ranges::sort(list);
+        subtitles.nodes = std::move(list);
+    }
+    return subtitles;
+}
+
+yyjson_mut_val* subtitlesSettingValue(Json& out, const document::ExportSubtitles& subtitles) {
+    auto* value = out.object();
+    auto* sidecar = out.array();
+    for (const auto format : subtitles.sidecars)
+        out.append(sidecar, out.text(std::string(document::exportSubtitleFormatToken(format))));
+    out.set(value, "sidecar", sidecar);
+    out.set(value, "embed", out.boolean(subtitles.embed));
+    if (subtitles.nodes) {
+        auto* nodes = out.array();
+        for (const auto node : *subtitles.nodes)
+            out.append(nodes, out.number(node.value()));
+        out.set(value, "nodes", nodes);
+    }
+    return value;
+}
+
+yyjson_mut_val* subtitleFilesValue(Json& out, const std::vector<host::ExportSubtitleFile>& files) {
+    auto* list = out.array();
+    for (const auto& file : files) {
+        auto* row = out.object();
+        out.set(row, "node", out.number(file.node.value()));
+        out.set(row, "language", out.text(file.language));
+        out.set(row, "title", out.text(file.title));
+        out.set(row, "format",
+                out.text(file.sidecar
+                             ? std::string(document::exportSubtitleFormatToken(*file.sidecar))
+                             : std::string("embedded")));
+        out.set(row, "path", out.text(file.path.string()));
+        out.set(row, "cues", out.number(file.cues));
+        if (file.sidecar) {
+            out.set(row, "bytes", out.number(file.bytes));
+            out.set(row, "sha256", file.digest ? out.text(hex(*file.digest)) : out.null());
+        }
+        out.append(list, row);
+    }
+    return list;
 }
 
 yyjson_mut_val* loudnessValue(Json& out, const host::ExportLoudnessReport& report) {
@@ -737,6 +839,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                     result.workerMemory = output.verification->workerMemory;
                 if (output.verification->loudness)
                     result.loudness = output.verification->loudness;
+                for (const auto& file : output.verification->subtitles)
+                    result.subtitles.push_back(file);
                 for (auto& file : publishedFiles(output.verification->artifacts))
                     result.files.push_back(std::move(file));
             }

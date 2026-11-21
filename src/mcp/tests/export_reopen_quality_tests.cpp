@@ -1,7 +1,8 @@
 // The export result JSON carries a published movie's reopen measurements (issue #424) beside the
 // rest of its verification, named as in host::ExportReopenQuality, and omits the block for an
 // output without them. A wrapper around the fake export run adds the measurements the worker
-// reports for a lossy movie.
+// reports for a lossy movie. The same wrapper adds the subtitle tracks an output delivered (#752),
+// which the render result, the job's output view and export.status list.
 
 #include "unique_temp_dir.hpp"
 #include <bloom/host/export_queue.hpp>
@@ -49,8 +50,9 @@ constexpr std::string_view kDigest =
 class QualityRun final : public host::ExportRun {
   public:
     QualityRun(std::unique_ptr<host::ExportRun> inner,
-               std::optional<host::ExportReopenQuality> quality)
-        : inner_(std::move(inner)), quality_(std::move(quality)) {
+               std::optional<host::ExportReopenQuality> quality,
+               std::vector<host::ExportSubtitleFile> subtitles)
+        : inner_(std::move(inner)), quality_(std::move(quality)), subtitles_(std::move(subtitles)) {
         refresh();
     }
 
@@ -97,12 +99,15 @@ class QualityRun final : public host::ExportRun {
         const auto states = inner_->outputs();
         outputs_.assign(states.begin(), states.end());
         for (auto& output : outputs_)
-            if (output.verification)
+            if (output.verification) {
                 output.verification->reopenQuality = quality_;
+                output.verification->subtitles = subtitles_;
+            }
     }
 
     std::unique_ptr<host::ExportRun> inner_;
     std::optional<host::ExportReopenQuality> quality_;
+    std::vector<host::ExportSubtitleFile> subtitles_;
     std::vector<host::ExportOutputRunState> outputs_;
 };
 
@@ -112,11 +117,13 @@ class QualityBackend final : public host::ExportRunBackend {
         std::make_shared<host::testing::FakeExportRunBackend>();
     // The measurements the next started run reports (none: an output without them).
     std::optional<host::ExportReopenQuality> next;
+    // The subtitle tracks the next started run reports as delivered.
+    std::vector<host::ExportSubtitleFile> nextSubtitles;
 
     std::unique_ptr<host::ExportRun> start(host::ExportJobRunnerDependencies dependencies,
                                            host::ExportJobRunRequest request) override {
         return std::make_unique<QualityRun>(
-            fake->start(std::move(dependencies), std::move(request)), next);
+            fake->start(std::move(dependencies), std::move(request)), next, nextSubtitles);
     }
     host::ExportDestinationSample
     sampleDestination(const host::ExportDestinationSampleRequest& request) override {
@@ -305,6 +312,114 @@ void reopenQualityInStatus() {
     expect(yyjson_is_obj(without) && yyjson_obj_get(without, "reopenQuality") == nullptr,
            "an output without measurements omits reopenQuality");
     yyjson_doc_free(document);
+
+    // #752: a render with `subtitles` lists every delivered track in `subtitles`, and each sidecar
+    // (with the digest the export verified) in `files` beside the images; the job's output view
+    // echoes the setting; a render without the argument lists none.
+    {
+        const auto sidecarDigest = *core::Sha256Digest::fromLowercaseHex(kDigest);
+        backend->nextSubtitles = {{.node = document::NodeId::fromRaw(12),
+                                   .language = "en",
+                                   .title = "English",
+                                   .sidecar = document::ExportSubtitleFormat::Srt,
+                                   .path = captures / "subs.en.srt",
+                                   .cues = 3,
+                                   .bytes = 120,
+                                   .digest = sidecarDigest},
+                                  {.node = document::NodeId::fromRaw(12),
+                                   .language = "en",
+                                   .title = "English",
+                                   .sidecar = document::ExportSubtitleFormat::WebVtt,
+                                   .path = captures / "subs.en.vtt",
+                                   .cues = 3,
+                                   .bytes = 130,
+                                   .digest = sidecarDigest},
+                                  {.node = document::NodeId::fromRaw(15),
+                                   .language = "fra",
+                                   .title = "Francais",
+                                   .sidecar = std::nullopt,
+                                   .path = captures / "subs.mov",
+                                   .cues = 2,
+                                   .bytes = 0,
+                                   .digest = std::nullopt}};
+        const auto destination = (captures / "subs.png").generic_string();
+        const auto response = server.call(
+            "render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1","destination":")" +
+                          destination +
+                          R"(","subtitles":{"sidecar":["vtt","srt"],"nodes":[15,12]}})");
+        expect(response.find(R"("isError":false)") != std::string::npos,
+               "a render with subtitles publishes: " + response);
+        auto* parsed = yyjson_read(response.data(), response.size(), 0);
+        expect(parsed != nullptr, "the render result is JSON");
+        if (parsed != nullptr) {
+            auto* structured = yyjson_obj_get(yyjson_obj_get(yyjson_doc_get_root(parsed), "result"),
+                                              "structuredContent");
+            auto* tracks = yyjson_obj_get(structured, "subtitles");
+            expect(yyjson_arr_size(tracks) == 3, "the result lists the three tracks: " + response);
+            auto* first = yyjson_arr_get(tracks, 0);
+            const auto str = [](yyjson_val* object, const char* key) {
+                const char* value = yyjson_get_str(yyjson_obj_get(object, key));
+                return value == nullptr ? std::string{} : std::string(value);
+            };
+            expect(yyjson_get_uint(yyjson_obj_get(first, "node")) == 12 &&
+                       str(first, "language") == "en" && str(first, "title") == "English" &&
+                       str(first, "format") == "srt" &&
+                       str(first, "path") == (captures / "subs.en.srt").string() &&
+                       yyjson_get_uint(yyjson_obj_get(first, "cues")) == 3 &&
+                       yyjson_get_uint(yyjson_obj_get(first, "bytes")) == 120 &&
+                       str(first, "sha256") == "sha256:" + std::string(kDigest),
+                   "a sidecar track carries its node, language, title, format, path, cues, bytes "
+                   "and sha256: " +
+                       response);
+            expect(str(yyjson_arr_get(tracks, 1), "format") == "vtt",
+                   "the second sidecar is WebVTT");
+            auto* embedded = yyjson_arr_get(tracks, 2);
+            expect(str(embedded, "format") == "embedded" && str(embedded, "language") == "fra" &&
+                       yyjson_obj_get(embedded, "sha256") == nullptr &&
+                       yyjson_obj_get(embedded, "bytes") == nullptr,
+                   "an embedded track says embedded and carries no sidecar size or digest: " +
+                       response);
+            auto* files = yyjson_obj_get(structured, "files");
+            std::size_t sidecarFiles = 0;
+            std::size_t index = 0;
+            std::size_t count = 0;
+            yyjson_val* file = nullptr;
+            yyjson_arr_foreach(files, index, count, file) {
+                if (str(file, "path").ends_with(".srt") || str(file, "path").ends_with(".vtt")) {
+                    ++sidecarFiles;
+                    expect(str(file, "digest") == "sha256:" + std::string(kDigest),
+                           "a sidecar in files carries its verified digest");
+                }
+                expect(!str(file, "path").ends_with(".mov"),
+                       "an embedded track's movie is not listed as a sidecar file");
+            }
+            expect(sidecarFiles == 2, "files lists both sidecars: " + response);
+            yyjson_doc_free(parsed);
+        }
+        const auto job = jobOf(response);
+        const auto after = server.call("export.status", "{}");
+        auto* statusDocument = yyjson_read(after.data(), after.size(), 0);
+        expect(statusDocument != nullptr, "export.status is JSON");
+        if (statusDocument != nullptr) {
+            auto* verification = verificationOf(statusDocument, job);
+            expect(yyjson_arr_size(yyjson_obj_get(verification, "subtitles")) == 3,
+                   "the job's verification lists its subtitle tracks: " + after);
+            yyjson_doc_free(statusDocument);
+        }
+        expect(
+            after.find(R"("subtitles":{"sidecar":["srt","vtt"],"embed":false,"nodes":[12,15]})") !=
+                std::string::npos,
+            "the job's output view echoes the subtitles setting, ascending: " + after);
+
+        backend->nextSubtitles.clear();
+        const auto plainResponse = render("no-subtitles.png");
+        expect(plainResponse != 0, "a render without subtitles publishes");
+        const auto plainText = server.call(
+            "render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1","destination":")" +
+                          (captures / "no-subtitles-2.png").generic_string() + R"("})");
+        expect(plainText.find(R"("subtitles")") == std::string::npos,
+               "a render without the argument lists no subtitles: " + plainText);
+    }
 }
 
 } // namespace
