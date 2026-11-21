@@ -636,11 +636,6 @@ PropertiesRegistryRow::PropertiesRegistryRow(CompositionSession& session, docume
             field->setCompact(true);
             // The parameter's own presentation, the same one its Timeline row and node card use.
             configureValueField(*field, document::parameterPresentation(definition_));
-            if (definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey) {
-                // Properties reads letter spacing as a percentage of the font size (refresh());
-                // the stored value stays pixels, which is what the other surfaces show.
-                field->setUnit(QStringLiteral("%"));
-            }
             if (count == 3)
                 field->setMinimumWidth(kit::px(kit::Size::PropertiesComponentMinWidth));
             field->setStepper(propertiesRowControl(definition_.schemaKey) ==
@@ -731,10 +726,7 @@ void PropertiesRegistryRow::refresh() {
     for (auto* field : fields_)
         if (field) {
             field->setEnabled(editable);
-            field->setToolTip(
-                displayScale() == 0.0
-                    ? tr("Font size must resolve before editing percentage letter spacing")
-                    : QString{});
+            field->setToolTip(QString{});
         }
     for (auto* control : {static_cast<QWidget*>(selector_), static_cast<QWidget*>(segments_),
                           static_cast<QWidget*>(toggle_), static_cast<QWidget*>(color_),
@@ -774,13 +766,9 @@ void PropertiesRegistryRow::refresh() {
             if (displayScale() != 0.0)
                 projectNumericField(
                     *fields_[0], *scalar, displayScale(),
-                    definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
-                        ? QStringLiteral("%")
-                        : QString::fromStdString(document::parameterPresentation(definition_).unit),
+                    QString::fromStdString(document::parameterPresentation(definition_).unit),
                     definition_.schemaKey == document::kTextLineHeightParameterSchemaKey
                         ? QStringLiteral("×")
-                        : definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
-                        ? QStringLiteral("px")
                         : QString::fromStdString(document::parameterPresentation(definition_).unit));
         if (auto* scalar = std::get_if<double>(&value); scalar && slider_)
             slider_->setValue(*scalar);
@@ -863,22 +851,11 @@ void PropertiesRegistryRow::reset() {
     refresh();
 }
 
+// Letter spacing reads in pixels, its stored unit, as on the node card and the timeline (#757).
 double PropertiesRegistryRow::displayScale() const {
     if (definition_.schemaKey == document::kTextLineHeightParameterSchemaKey)
         return 100.0;
-    if (definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey) {
-        const auto* composition = session_.composition();
-        const auto* node = composition ? composition->graph().findNode(node_) : nullptr;
-        if (node)
-            for (const auto& binding : node->parameters)
-                if (binding.role == document::kTextSizeParameterRole)
-                    if (const auto size = session_.effectiveScalarValue(binding.parameterId);
-                        size && *size > 0)
-                        return 100.0 / *size;
-    }
-    return definition_.schemaKey == document::kTextLetterSpacingParameterSchemaKey
-               ? 0.0
-               : document::parameterPresentation(definition_).displayScale;
+    return document::parameterPresentation(definition_).displayScale;
 }
 
 void PropertiesRegistryRow::commit(const std::optional<std::size_t> component) {

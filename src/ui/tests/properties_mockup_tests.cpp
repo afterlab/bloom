@@ -335,16 +335,18 @@ void run() {
         if (r->property("role") != "line-height" && r->property("role") != "letter-spacing")
             continue;
         auto* field = r->findChild<ui::kit::KValueField*>();
-        expect(field && field->hasStepper() && field->unit() == "%",
-               "text spacing maps to generic percentage steppers");
-        if (field && r->property("role") == "letter-spacing") {
-            field->setValue(100);
+        // Line height is a percentage of the size; letter spacing reads in its stored pixels, the
+        // unit the node card and the timeline show (#757).
+        const bool spacing = r->property("role") == "letter-spacing";
+        expect(field && field->hasStepper() && field->unit() == (spacing ? "px" : "%"),
+               "line height steps in percent, letter spacing in pixels");
+        if (field && spacing) {
+            field->setValue(12);
             const auto id =
                 document::ParameterId::fromRaw(r->property("parameterId").toULongLong());
-            expect(session.effectiveScalarValue(id) == 73,
-                   "percentage spacing converts to pixel advance");
+            expect(session.effectiveScalarValue(id) == 12, "letter spacing writes pixels");
             (void)session.setSelectedTextSize(146);
-            expect(field->value() == 50, "percentage spacing reprojects after font size edit");
+            expect(field->value() == 12, "letter spacing keeps its pixels after a size edit");
         }
     }
     const auto childLayer = session.selection().contextualLayer;

@@ -1701,8 +1701,8 @@ Properties, node cards and timeline fields use the same kit gesture signals, and
 parameter field from the parameter's one presentation (`document::parameterPresentation`, applied by
 `bloom::ui::configureValueField`): hard range (the schema's own domain), soft range (the span of a
 slider beside it), step, decimals, unit and display scale. The same parameter therefore scrubs,
-steps and reads identically on all three surfaces; Properties' letter spacing alone layers its
-percent-of-size reading on top. The active field keeps its text/caret or scrub base while peer
+steps and reads identically on all three surfaces (letter spacing in pixels, its stored unit,
+everywhere). The active field keeps its text/caret or scrub base while peer
 fields show the live number. Color-picker spatial drags and channel edits use the same
 live/commit/cancel boundary; closing an active picker, with Escape too, accepts its edit. A
 `KSlider` and a `KRangeSelector` keep the same edit-session contract: a drag (or a run of keys) is
