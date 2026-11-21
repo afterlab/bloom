@@ -393,7 +393,9 @@ propertiesRowVisibility(const std::string_view role, const std::string_view sche
         schemaKey == "bloom.cryptomatte.mattes" ||
         schemaKey == document::kVideoAudioStreamParameterSchemaKey ||
         // #487: the legacy source Color Space lives in the one Input color space control.
-        schemaKey == "bloom.image.color-space" || schemaKey == "bloom.video.color-space";
+        schemaKey == "bloom.image.color-space" || schemaKey == "bloom.video.color-space" ||
+        // #752: a Subtitles node's cues are the Properties cue list (properties_subtitles.hpp).
+        schemaKey == "bloom.subtitles.cues";
     return technicalRole || technicalSchema ? PropertiesRowVisibility::Hidden
                                             : PropertiesRowVisibility::Visible;
 }

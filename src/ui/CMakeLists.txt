@@ -681,6 +681,8 @@ target_sources(
         properties_editor_registry.cpp
         properties_upstream.cpp
         properties_layer_time.cpp
+        properties_subtitles.cpp
+        properties_subtitles.hpp
         properties_layer_masks.cpp
         layer_mask_support.cpp
         path_editing.cpp

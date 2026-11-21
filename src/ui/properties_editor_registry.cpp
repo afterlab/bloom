@@ -3,6 +3,9 @@
 #include "composition_editor_support.hpp"
 #include "node_editor_items.hpp"
 #include "properties_registry_row.hpp"
+#include "properties_subtitles.hpp"
+
+#include <bloom/document/subtitles_nodes.hpp>
 #include "properties_value_outputs.hpp"
 #include "properties_sections.hpp"
 #include <QLabel>
@@ -404,6 +407,10 @@ void PropertiesEditor::configureRegistryRows() {
                                          });
             }
             bool cardPlaced = !cardAmongRows;
+            // #752: a Subtitles node's cues are its first rows: the Source row and the cue list.
+            if (node->typeId == document::kSubtitlesNodeType)
+                section->bodyLayout()->addWidget(
+                    makeSubtitlesCuePanel(session_, node->id, section->body()));
             for (const auto* declaredPointer : orderedParameters) {
                 const auto& declared = *declaredPointer;
                 if (propertiesRowVisibility(declared.role, declared.schemaKey) ==
