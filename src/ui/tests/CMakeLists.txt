@@ -1566,7 +1566,7 @@ target_link_libraries(bloom_export_panel_capture PRIVATE bloom_ui bloom_runtime_
 target_compile_definitions(bloom_export_panel_capture PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_export_panel_capture)
-foreach(scale IN ITEMS 1 1.5)
+foreach(scale IN ITEMS 1 1.5 2)
     bloom_add_test(NAME bloom.ui.export_panel_capture.dpr${scale} COMMAND bloom_export_panel_capture
         LABELS ui grammar TIMEOUT 120
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")

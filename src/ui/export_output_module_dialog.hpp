@@ -76,6 +76,11 @@ class OutputModuleDialog final : public kit::KDialog {
     [[nodiscard]] kit::KCheckBox* bakeLook() const noexcept { return bakeLook_; }
     [[nodiscard]] kit::KCheckBox* includeAudio() const noexcept { return includeAudio_; }
     [[nodiscard]] kit::KCheckBox* normalizeLoudness() const noexcept { return normalizeLoudness_; }
+    [[nodiscard]] kit::KCheckBox* subtitlesSrt() const noexcept { return subtitlesSrt_; }
+    [[nodiscard]] kit::KCheckBox* subtitlesWebVtt() const noexcept { return subtitlesWebVtt_; }
+    [[nodiscard]] kit::KCheckBox* subtitlesTtml() const noexcept { return subtitlesTtml_; }
+    [[nodiscard]] kit::KCheckBox* subtitlesEmbed() const noexcept { return subtitlesEmbed_; }
+    [[nodiscard]] kit::KLabel* subtitlesNote() const noexcept { return subtitlesNote_; }
     [[nodiscard]] kit::KCheckBox* cachedFrames() const noexcept { return cachedFrames_; }
     [[nodiscard]] kit::KCheckBox* importIntoAssets() const noexcept { return import_; }
     [[nodiscard]] kit::KValueField* startNumber() const noexcept { return startNumber_; }
@@ -125,6 +130,11 @@ class OutputModuleDialog final : public kit::KDialog {
     kit::KCheckBox* bakeLook_ = nullptr;
     kit::KCheckBox* includeAudio_ = nullptr;
     kit::KCheckBox* normalizeLoudness_ = nullptr;
+    kit::KCheckBox* subtitlesSrt_ = nullptr;
+    kit::KCheckBox* subtitlesWebVtt_ = nullptr;
+    kit::KCheckBox* subtitlesTtml_ = nullptr;
+    kit::KCheckBox* subtitlesEmbed_ = nullptr;
+    kit::KLabel* subtitlesNote_ = nullptr;
     kit::KValueField* loudnessTarget_ = nullptr;
     kit::KValueField* truePeak_ = nullptr;
     QWidget* loudnessTargetRow_ = nullptr;

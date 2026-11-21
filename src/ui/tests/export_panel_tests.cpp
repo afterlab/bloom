@@ -1174,6 +1174,140 @@ void bitrateRow(TestContext& context) {
                    "an output's own bit rate is shown and kept");
 }
 
+// The Subtitles row (#752): SRT, WebVTT and TTML sidecars and an embedded track; the track only for
+// a format whose container carries one; the node list set elsewhere is kept and shown.
+void subtitlesRow(TestContext& context) {
+    using document::ExportSubtitleFormat;
+    Rig rig;
+    auto catalogue = makeCatalogue();
+    catalogue->presets.push_back(makePreset("builtin:dnxhr-mxf", "DNxHR MXF",
+                                            host::ExportPresetCategory::Video,
+                                            document::ExportFormat::DnxhrMxf));
+    catalogue->presets.push_back(makePreset("builtin:png-sequence", "PNG sequence",
+                                            host::ExportPresetCategory::VfxSequences,
+                                            document::ExportFormat::Png));
+    catalogue->presets.push_back(makePreset("builtin:wav", "WAV", host::ExportPresetCategory::Audio,
+                                            document::ExportFormat::Wav));
+    auto output =
+        makeOutput(11, "builtin:h264-mp4", document::ExportFormat::H264Mp4, "Exports/a.mp4");
+    {
+        ep::OutputModuleDialog dialog(output, catalogue, {}, *rig.editor);
+        context.expect(!dialog.subtitlesSrt()->isChecked() &&
+                           !dialog.subtitlesWebVtt()->isChecked() &&
+                           !dialog.subtitlesTtml()->isChecked() &&
+                           !dialog.subtitlesEmbed()->isChecked() && !dialog.edit().has_value(),
+                       "no subtitle export: every Subtitles box is off and that is no edit");
+        context.expect(
+            dialog.shows(dialog.subtitlesSrt()) && dialog.shows(dialog.subtitlesWebVtt()) &&
+                dialog.shows(dialog.subtitlesTtml()) && dialog.shows(dialog.subtitlesEmbed()) &&
+                dialog.subtitlesEmbed()->isEnabled() && !dialog.shows(dialog.subtitlesNote()),
+            "MP4 shows the Subtitles row with Embed enabled and no node note");
+        context.expect(
+            dialog.subtitlesSrt()->accessibleName() == "SRT" &&
+                dialog.subtitlesEmbed()->accessibleName() == "Embed in the movie" &&
+                dialog.subtitlesSrt()->toolTip().contains(".srt") &&
+                dialog.subtitlesTtml()->toolTip().contains(".ttml") &&
+                dialog.subtitlesEmbed()->toolTip().contains("neither default nor forced"),
+            "each Subtitles box has an accessible name and a tooltip");
+        // Toggling writes ascending sidecars and the embed flag.
+        dialog.subtitlesTtml()->setChecked(true);
+        dialog.subtitlesSrt()->setChecked(true);
+        dialog.subtitlesEmbed()->setChecked(true);
+        auto edit = dialog.edit();
+        context.expect(edit.has_value() && edit->settings.has_value() &&
+                           edit->settings->subtitles.has_value() &&
+                           edit->settings->subtitles->sidecars ==
+                               std::vector{ExportSubtitleFormat::Srt, ExportSubtitleFormat::Ttml} &&
+                           edit->settings->subtitles->embed &&
+                           !edit->settings->subtitles->nodes.has_value(),
+                       "checked boxes write ascending sidecars and embed, with no node list");
+        dialog.subtitlesSrt()->setChecked(false);
+        dialog.subtitlesTtml()->setChecked(false);
+        dialog.subtitlesEmbed()->setChecked(false);
+        context.expect(!dialog.edit().has_value(),
+                       "all boxes off again writes the absent setting (no edit)");
+        // OK sends the change as the dialog's one edit.
+        dialog.subtitlesWebVtt()->setChecked(true);
+        edit = dialog.edit();
+        context.expect(edit.has_value() && edit->settings.has_value() &&
+                           edit->settings->subtitles.has_value() &&
+                           edit->settings->subtitles->sidecars ==
+                               std::vector{ExportSubtitleFormat::WebVtt} &&
+                           !edit->settings->subtitles->embed && !edit->presetId.has_value() &&
+                           !edit->destination.has_value(),
+                       "a Subtitles change is one settings edit and nothing else");
+    }
+    // A loaded setting is shown, kept unchanged, and its node list is preserved and noted.
+    {
+        auto loaded = output;
+        loaded.record.settings.subtitles = document::ExportSubtitles{
+            {ExportSubtitleFormat::Srt, ExportSubtitleFormat::WebVtt},
+            true,
+            std::vector{document::NodeId::fromRaw(7), document::NodeId::fromRaw(9)}};
+        ep::OutputModuleDialog dialog(loaded, catalogue, {}, *rig.editor);
+        context.expect(
+            dialog.subtitlesSrt()->isChecked() && dialog.subtitlesWebVtt()->isChecked() &&
+                !dialog.subtitlesTtml()->isChecked() && dialog.subtitlesEmbed()->isChecked(),
+            "loaded subtitle settings are shown");
+        context.expect(dialog.shows(dialog.subtitlesNote()) &&
+                           dialog.subtitlesNote()->text() == "2 Subtitles nodes chosen",
+                       "a named node list is noted under the row");
+        context.expect(!dialog.edit().has_value(),
+                       "showing loaded subtitle settings is not an edit");
+        dialog.subtitlesTtml()->setChecked(true);
+        const auto edit = dialog.edit();
+        context.expect(edit.has_value() && edit->settings.has_value() &&
+                           edit->settings->subtitles.has_value() &&
+                           edit->settings->subtitles->sidecars.size() == 3 &&
+                           edit->settings->subtitles->embed &&
+                           edit->settings->subtitles->nodes ==
+                               std::optional(std::vector{document::NodeId::fromRaw(7),
+                                                         document::NodeId::fromRaw(9)}),
+                       "an edit keeps the node list");
+        // Switching to a format with no track disables and clears Embed, and writes embed off.
+        dialog.format()->chooseIndex(
+            dialog.format()->findData(QStringLiteral("builtin:dnxhr-mxf")));
+        QApplication::processEvents();
+        context.expect(
+            !dialog.subtitlesEmbed()->isEnabled() && !dialog.subtitlesEmbed()->isChecked() &&
+                dialog.shows(dialog.subtitlesSrt()),
+            "switching from MP4 to MXF disables and clears Embed and keeps the sidecars");
+    }
+    // Formats that carry no track: Embed is disabled with the reason, sidecars still apply.
+    const std::pair<const char*, document::ExportFormat> carryNone[] = {
+        {"builtin:dnxhr-mxf", document::ExportFormat::DnxhrMxf},
+        {"builtin:png-sequence", document::ExportFormat::Png},
+        {"builtin:wav", document::ExportFormat::Wav}};
+    for (const auto& [id, format] : carryNone) {
+        auto other = makeOutput(12, id, format, "Exports/b");
+        other.record.settings.subtitles =
+            document::ExportSubtitles{{ExportSubtitleFormat::Srt}, true, std::nullopt};
+        ep::OutputModuleDialog dialog(other, catalogue, {}, *rig.editor);
+        const auto tip = dialog.subtitlesEmbed()->toolTip();
+        context.expect(
+            !dialog.subtitlesEmbed()->isEnabled() && !dialog.subtitlesEmbed()->isChecked() &&
+                tip.contains("carry no subtitle track") && tip.contains("SRT, WebVTT or TTML") &&
+                dialog.shows(dialog.subtitlesSrt()) && dialog.subtitlesSrt()->isChecked(),
+            "MXF, PNG sequence and WAV: Embed is disabled with the reason; sidecars still apply");
+        dialog.subtitlesWebVtt()->setChecked(true);
+        const auto edit = dialog.edit();
+        context.expect(edit.has_value() && edit->settings->subtitles.has_value() &&
+                           !edit->settings->subtitles->embed &&
+                           edit->settings->subtitles->sidecars ==
+                               std::vector{ExportSubtitleFormat::Srt, ExportSubtitleFormat::WebVtt},
+                       "MXF, PNG sequence and WAV: settings write embed off, sidecars ascending");
+    }
+    // Back to a format that embeds: the box is enabled again.
+    ep::OutputModuleDialog back(
+        makeOutput(13, "builtin:dnxhr-mxf", document::ExportFormat::DnxhrMxf, "Exports/c.mxf"),
+        catalogue, {}, *rig.editor);
+    back.format()->chooseIndex(back.format()->findData(QStringLiteral("builtin:prores-422hq-mov")));
+    QApplication::processEvents();
+    context.expect(back.subtitlesEmbed()->isEnabled() &&
+                       back.subtitlesEmbed()->toolTip().contains("neither default"),
+                   "choosing a format that embeds enables Embed again");
+}
+
 void addAndRemoveOutputs(TestContext& context) {
     Rig rig;
     rig.publish([&](host::ExportQueueSnapshot& snapshot) {
@@ -1782,6 +1916,7 @@ int main(int argc, char** argv) {
     saveAsPreset(context);
     everyFormatIsOffered(context);
     bitrateRow(context);
+    subtitlesRow(context);
     addAndRemoveOutputs(context);
     quickPickMenus(context);
     replaceConfirm(context);

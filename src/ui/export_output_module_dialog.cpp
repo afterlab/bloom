@@ -67,6 +67,11 @@ using document::ExportFormat;
     return format == ExportFormat::HevcMp4 || format == ExportFormat::HevcMov ? 20000 : 30000;
 }
 
+[[nodiscard]] QString embedSubtitlesTip() {
+    return QObject::tr(
+        "Write the subtitles as a track in the movie; the track is neither default nor forced.");
+}
+
 [[nodiscard]] QString quoted(const QString& name) { return QStringLiteral("“%1”").arg(name); }
 
 } // namespace
@@ -188,6 +193,32 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     truePeak_->setFixedWidth(kit::px(kit::Size::DropdownWidth));
     truePeakRow_ = fieldRow(this, {truePeak_});
     (void)qualityLeft->addRow(tr("True peak"), truePeakRow_);
+    // #752: subtitle sidecar files and an embedded track, for every format (the track only where
+    // the container carries one; see showSettings).
+    const auto subtitleBox = [this, qualityRight](const QString& label, const QString& name,
+                                                  const QString& text, const QString& tip) {
+        auto* box = check(this, name, text);
+        box->setToolTip(tip);
+        (void)qualityRight->addCheckRow(label, *box, text);
+        if (auto* words = findChild<QWidget*>(name + QStringLiteral("Label")))
+            words->setToolTip(tip);
+        return box;
+    };
+    subtitlesSrt_ = subtitleBox(tr("Subtitles"), QStringLiteral("exportSubtitlesSrt"), tr("SRT"),
+                                tr("Write name.language.srt beside the export (for example "
+                                   "Shot.en.srt), one file per language."));
+    subtitlesWebVtt_ = subtitleBox(QString{}, QStringLiteral("exportSubtitlesVtt"), tr("WebVTT"),
+                                   tr("Write name.language.vtt beside the export (for example "
+                                      "Shot.en.vtt), one file per language."));
+    subtitlesTtml_ = subtitleBox(QString{}, QStringLiteral("exportSubtitlesTtml"), tr("TTML"),
+                                 tr("Write name.language.ttml beside the export (for example "
+                                    "Shot.en.ttml), one file per language."));
+    subtitlesEmbed_ = subtitleBox(QString{}, QStringLiteral("exportSubtitlesEmbed"),
+                                  tr("Embed in the movie"), embedSubtitlesTip());
+    subtitlesNote_ = new kit::KLabel(QString{}, this, kit::TypeRole::UiSmall);
+    subtitlesNote_->setObjectName(QStringLiteral("exportSubtitlesNodes"));
+    subtitlesNote_->setWordWrap(true);
+    (void)qualityRight->addRow(subtitlesNote_);
     colourSpace_ = dropdown(this, QStringLiteral("exportColourSpace"), tr("Color space"));
     colourSpaceRow_ = fieldRow(this, {colourSpace_});
     (void)qualityRight->addRow(tr("Color space"), colourSpaceRow_);
@@ -450,6 +481,35 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
     bakeLook_->setChecked(settings.bakeLook);
     includeAudio_->setChecked(settings.includeAudio);
     cachedFrames_->setChecked(settings.useCachedFrames);
+    // Subtitles. The Embed box is unchecked and disabled, with the reason, for a format whose
+    // container carries no track: a persisted embed=true is then not shown, and settings() writes
+    // embed=false for that format (the export's preflight reports a stored embed as blocking).
+    {
+        const auto has = [&](const document::ExportSubtitleFormat sidecar) {
+            return settings.subtitles && std::ranges::find(settings.subtitles->sidecars, sidecar) !=
+                                             settings.subtitles->sidecars.end();
+        };
+        const bool embeds = document::exportFormatEmbedsSubtitles(format);
+        subtitlesSrt_->setChecked(has(document::ExportSubtitleFormat::Srt));
+        subtitlesWebVtt_->setChecked(has(document::ExportSubtitleFormat::WebVtt));
+        subtitlesTtml_->setChecked(has(document::ExportSubtitleFormat::Ttml));
+        subtitlesEmbed_->setChecked(embeds && settings.subtitles && settings.subtitles->embed);
+        subtitlesEmbed_->setEnabled(embeds);
+        const auto tip =
+            embeds
+                ? embedSubtitlesTip()
+                : tr("MXF, image sequences and WAV carry no subtitle track; choose SRT, WebVTT or "
+                     "TTML sidecar files instead.");
+        subtitlesEmbed_->setToolTip(tip);
+        if (auto* words = findChild<QWidget*>(QStringLiteral("exportSubtitlesEmbedLabel")))
+            words->setToolTip(tip);
+        const auto chosen =
+            settings.subtitles && settings.subtitles->nodes ? settings.subtitles->nodes->size() : 0;
+        const bool named = settings.subtitles && settings.subtitles->nodes;
+        subtitlesNote_->setText(chosen == 1 ? tr("1 Subtitles node chosen")
+                                            : tr("%1 Subtitles nodes chosen").arg(chosen));
+        qualityRight_->setRowVisible(subtitlesNote_, named);
+    }
     normalizeLoudness_->setChecked(settings.loudness.has_value());
     // Named, not value_or({}): one standard library declines to deduce the braced default.
     const auto loudness = settings.loudness.value_or(document::ExportLoudness{});
@@ -512,6 +572,26 @@ document::ExportOutputSettings OutputModuleDialog::settings() const {
             if (!base_.loudness || std::llround(loudness.truePeakDbtp) != truePeak_->integerValue())
                 loudness.truePeakDbtp = static_cast<double>(truePeak_->integerValue());
             settings.loudness = loudness;
+        }
+    }
+    {
+        // No sidecar and no embed: no subtitle export. Otherwise the sidecars in ascending order,
+        // the embed only where the container carries a track; the node list is kept as loaded.
+        document::ExportSubtitles subtitles;
+        if (subtitlesSrt_->isChecked())
+            subtitles.sidecars.push_back(document::ExportSubtitleFormat::Srt);
+        if (subtitlesWebVtt_->isChecked())
+            subtitles.sidecars.push_back(document::ExportSubtitleFormat::WebVtt);
+        if (subtitlesTtml_->isChecked())
+            subtitles.sidecars.push_back(document::ExportSubtitleFormat::Ttml);
+        subtitles.embed =
+            subtitlesEmbed_->isChecked() && document::exportFormatEmbedsSubtitles(format);
+        if (subtitles.sidecars.empty() && !subtitles.embed) {
+            settings.subtitles.reset();
+        } else {
+            if (base_.subtitles)
+                subtitles.nodes = base_.subtitles->nodes;
+            settings.subtitles = std::move(subtitles);
         }
     }
     if (isImage(format)) {

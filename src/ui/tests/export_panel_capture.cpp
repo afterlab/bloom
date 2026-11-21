@@ -21,6 +21,7 @@
 #include <bloom/ui/kit/button.hpp>
 #include <bloom/ui/kit/dialog.hpp>
 #include <bloom/ui/kit/dropdown.hpp>
+#include <bloom/ui/kit/switch_control.hpp>
 #include <bloom/ui/kit/text_field.hpp>
 #include <bloom/ui/kit/theme.hpp>
 
@@ -87,9 +88,10 @@ int main(int argc, char** argv) {
     const QString directory = argc > 1 ? QString::fromLocal8Bit(argv[1])
                                        : QStringLiteral(BLOOM_GRAMMAR_ARTIFACT_DIR);
     QDir().mkpath(directory);
-    const QString dpr = app.devicePixelRatio() > 1.2 || qEnvironmentVariable("QT_SCALE_FACTOR") == "1.5"
-                            ? QStringLiteral("dpr15")
-                            : QStringLiteral("dpr1");
+    const auto scale = qEnvironmentVariable("QT_SCALE_FACTOR");
+    const QString dpr = scale == "2"                                       ? QStringLiteral("dpr2")
+                        : (app.devicePixelRatio() > 1.2 || scale == "1.5") ? QStringLiteral("dpr15")
+                                                                           : QStringLiteral("dpr1");
 
     auto seed = document::makeNewProject("Export Capture", "Shot010", core::RationalTime::fromInteger(90));
     document::Document doc(std::move(seed.project));
@@ -238,6 +240,13 @@ int main(int argc, char** argv) {
     auto* prores = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(11));
     settle();
     shot("output-module-prores", prores);
+    // Subtitles (#752): sidecars and the embedded track on, then the same row on a format with no
+    // track.
+    prores->subtitlesSrt()->setChecked(true);
+    prores->subtitlesTtml()->setChecked(true);
+    prores->subtitlesEmbed()->setChecked(true);
+    settle();
+    shot("output-module-subtitles", prores);
     prores->reject();
     settle();
     auto* exr = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(12));
