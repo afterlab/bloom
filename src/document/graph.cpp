@@ -1,4 +1,5 @@
 #include <bloom/document/graph.hpp>
+#include <bloom/document/resample_filter.hpp>
 
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/node_group_nodes.hpp>
@@ -91,6 +92,9 @@ constexpr std::array kLayerOutputBindings{
                              bloom::document::kBlendModeParameterSchemaKey},
     ExpectedParameterBinding{bloom::document::kTimeRemapParameterRole,
                              bloom::document::kTimeRemapParameterSchemaKey, false},
+    // #742: optional; absent is Bilinear.
+    ExpectedParameterBinding{bloom::document::kLayerFilterParameterRole,
+                             bloom::document::kLayerFilterParameterSchemaKey, false},
 };
 
 [[nodiscard]] std::span<const ExpectedParameterBinding>

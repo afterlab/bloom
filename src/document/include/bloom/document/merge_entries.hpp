@@ -100,6 +100,9 @@ struct EntryLayerRole {
     std::string_view schemaKey;
 };
 [[nodiscard]] std::span<const EntryLayerRole> entryLayerRoles() noexcept;
+// The roles an entry layer may leave unbound: Time Remap (ADR 0024, off) and the #742 filter
+// (Bilinear). Creating an entry layer binds neither, so creating one never changes the picture.
+[[nodiscard]] bool isOptionalEntryLayerRole(std::string_view role) noexcept;
 
 // Entry layers' document rules: the slot exists in the owning Merge and names the layer, the slot
 // is not fed directly by a Layer node, the parameters bind exactly the entry roles (Time Remap

@@ -4,6 +4,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/runtime/gpu_coverage_contract.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 
@@ -1002,12 +1003,13 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // not.
     expectations.expect(
         // ADR 0024: schema 5 appends the optional animatable Time Remap.
-        layer != nullptr && layer->parameters.size() == 7 &&
+        layer != nullptr && layer->parameters.size() == 8 &&
             std::ranges::all_of(
                 std::span(layer->parameters).first(5),
                 [](const auto& parameter) { return parameter.supportsAnimation; }) &&
             !layer->parameters[5].supportsAnimation && layer->parameters[6].supportsAnimation &&
-            !layer->parameters[6].required && solid != nullptr &&
+            !layer->parameters[6].required && !layer->parameters[7].supportsAnimation &&
+            !layer->parameters[7].required && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
             text->parameters.size() == 12 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
@@ -1024,7 +1026,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                         "and it agrees with the shared schema predicates for every registered "
                         "parameter, so the two can never drift");
     expectations.expect(
-        layer != nullptr && layer->parameters.size() == 7 &&
+        layer != nullptr && layer->parameters.size() == 8 &&
             layer->parameters[6].role == document::kTimeRemapParameterRole &&
             layer->parameters[6].schemaKey == document::kTimeRemapParameterSchemaKey &&
             layer->parameters[0].role == document::kPositionParameterRole &&
@@ -1044,20 +1046,28 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             layer->parameters[4].valueKind == runtime::ParameterValueKind::Float64 &&
             layer->parameters[5].role == document::kBlendModeParameterRole &&
             layer->parameters[5].schemaKey == document::kBlendModeParameterSchemaKey &&
-            layer->parameters[5].valueKind == runtime::ParameterValueKind::Integer,
+            layer->parameters[5].valueKind == runtime::ParameterValueKind::Integer &&
+            layer->parameters[7].role == document::kLayerFilterParameterRole &&
+            layer->parameters[7].schemaKey == document::kLayerFilterParameterSchemaKey &&
+            layer->parameters[7].valueKind == runtime::ParameterValueKind::Integer,
         "the Layer Output schema is exactly position, anchor, scale, rotation, opacity, blend "
-        "mode and the optional Time Remap, in the registered order");
-    expectations.expect(layer != nullptr && layer->parameters.size() == 7 &&
-                            layer->parameters[1].defaultValue ==
-                                document::ParameterValue{document::kDefaultAnchor} &&
-                            layer->parameters[2].defaultValue ==
-                                document::ParameterValue{document::kDefaultScale} &&
-                            layer->parameters[3].defaultValue ==
-                                document::ParameterValue{document::kDefaultRotationDegrees} &&
-                            layer->parameters[5].defaultValue ==
-                                document::ParameterValue{document::kDefaultBlendModeValue},
-                        "the transform defaults are the identity transform -- center anchor, unit "
-                        "scale, no rotation -- and the blend mode defaults to Normal");
+        "mode, the optional Time Remap and (#742) the optional resampling filter, in the "
+        "registered order");
+    expectations.expect(
+        layer != nullptr && layer->parameters.size() == 8 &&
+            layer->parameters[1].defaultValue ==
+                document::ParameterValue{document::kDefaultAnchor} &&
+            layer->parameters[2].defaultValue ==
+                document::ParameterValue{document::kDefaultScale} &&
+            layer->parameters[3].defaultValue ==
+                document::ParameterValue{document::kDefaultRotationDegrees} &&
+            layer->parameters[5].defaultValue ==
+                document::ParameterValue{document::kDefaultBlendModeValue} &&
+            layer->parameters[7].defaultValue ==
+                document::ParameterValue{std::int64_t{document::kResampleFilterAutomaticValue}},
+        "the transform defaults are the identity transform -- center anchor, unit "
+        "scale, no rotation -- the blend mode defaults to Normal and a new layer's filter to "
+        "Automatic");
     expectations.expect(registry.registerDefinition(customSolid()) ==
                             runtime::NodeRegistrationStatus::Frozen,
                         "registration is closed after freeze");

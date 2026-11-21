@@ -1,5 +1,6 @@
 #include <bloom/document/transform_2d_nodes.hpp>
 #include <bloom/document/parameter.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/alpha_association_nodes.hpp>
@@ -363,6 +364,11 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && bloom::core::blendModeFromStoredValue(*stored).has_value();
     }
+    if (schemaKey == kLayerFilterParameterSchemaKey) {
+        // #742: 0 Bilinear, 1 Nearest, 2 Trilinear, 3 Anisotropic, 4 Automatic.
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= 0 && *value <= kResampleFilterAutomaticValue;
+    }
     if (schemaKey == kGradientRepeatParameterSchemaKey) {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value <= 2;
@@ -632,8 +638,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     }
     if (schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter") {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
+        // #742 filter: 0 Bilinear, 1 Nearest, 2 Trilinear, 3 Anisotropic, 4 Automatic.
         return value != nullptr && *value >= 0 &&
-               *value <= (schemaKey == "bloom.transform-2d.extent" ? 2 : 1);
+               *value <= (schemaKey == "bloom.transform-2d.extent" ? 2 : 4);
     }
     if (schemaKey.starts_with("bloom.resize-fit.")) {
         if (schemaKey == "bloom.resize-fit.bypass")
@@ -642,7 +649,7 @@ constantMatchesSchema(const std::string_view schemaKey,
         if (!value)
             return false;
         if (schemaKey == "bloom.resize-fit.filter")
-            return *value == 0 || *value == 1;
+            return *value >= 0 && *value <= 4;
         if (schemaKey == "bloom.resize-fit.policy")
             return *value >= 0 && *value <= 1;
         return *value >= 1 && *value <= 32768;
@@ -752,6 +759,7 @@ constantMatchesSchema(const std::string_view schemaKey,
                                           const bloom::document::ParameterSource& source) {
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
          schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
+         schemaKey == bloom::document::kLayerFilterParameterSchemaKey ||
          schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey ||
          bloom::document::isRecipeIntegerSchemaKey(schemaKey) ||
          schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||

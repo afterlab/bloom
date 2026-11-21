@@ -2,6 +2,7 @@
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/parameter_presentation.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/lens_flare_nodes.hpp>
@@ -195,6 +196,7 @@ const std::vector<Entry>& table() {
         {kOpacityParameterSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {kTimeRemapParameterSchemaKey, number(kLowest, kHighest, 0.0, 10.0, 0.01, 3, kSeconds)},
         {kBlendModeParameterSchemaKey, choice()},
+        {kLayerFilterParameterSchemaKey, choice()},
         // #480: the finite value a Shuffle or Pass writes for a NaN or infinite sample (a far
         // depth, for one), within the Float32 range a gathered sample holds.
         {"bloom.channel-shuffle.non-finite",

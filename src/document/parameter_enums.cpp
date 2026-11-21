@@ -22,6 +22,7 @@
 #include <bloom/document/image_preview.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/parameter_enums.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/matte_nodes.hpp>
@@ -285,14 +286,18 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
         return {{"Over the image", kAlphaContourOver},
                 {"Under the image", kAlphaContourUnder},
                 {"Contour only", kAlphaContourOnly}};
-    if (schemaKey == "bloom.resize-fit.filter")
-        return sequential({"Bilinear", "Nearest"});
+    // #742: Automatic (Trilinear, which is Bilinear unless the image shrinks) leads the list.
+    if (schemaKey == "bloom.resize-fit.filter" || schemaKey == "bloom.transform-2d.filter" ||
+        schemaKey == kLayerFilterParameterSchemaKey)
+        return {{"Automatic", kResampleFilterAutomaticValue},
+                {"Bilinear", 0},
+                {"Nearest", 1},
+                {"Trilinear", 2},
+                {"Anisotropic", 3}};
     if (schemaKey == "bloom.resize-fit.policy")
         return sequential({"Fit", "Fill"});
     if (schemaKey == "bloom.transform-2d.extent")
         return sequential({"Transformed", "Input", "Display"});
-    if (schemaKey == "bloom.transform-2d.filter")
-        return sequential({"Bilinear", "Nearest"});
     if (schemaKey == "bloom.ocio-file.interpolation")
         return sequential({"Linear", "Tetrahedral", "Best"});
     if (schemaKey == "bloom.ocio-file.direction")

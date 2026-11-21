@@ -29,6 +29,7 @@
 #include <bloom/document/grade_curves.hpp>
 #include <bloom/document/image_channel_nodes.hpp>
 #include <bloom/document/node_definition_registry.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/matte_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 
@@ -113,12 +114,16 @@ template <typename Definition>
 // Checked here, generically, so no lowering can declare a parameter the editor cannot link or a
 // socket that writes nothing -- and so the rule has one statement rather than one per lowering.
 // `imageInputCount` is how many leading image transport ports precede the operand block.
+// The first `socketed` parameters (all of them by default) each have an operand socket, in order,
+// after the image inputs; the rest are inline selectors without one.
 [[nodiscard]] bool hasParameterSockets(const NodeDefinition& definition,
-                                       const std::size_t imageInputCount) noexcept {
-    if (definition.inputs.size() != imageInputCount + definition.parameters.size()) {
+                                       const std::size_t imageInputCount,
+                                       std::size_t socketed = static_cast<std::size_t>(-1)) noexcept {
+    socketed = std::min(socketed, definition.parameters.size());
+    if (definition.inputs.size() != imageInputCount + socketed) {
         return false;
     }
-    for (std::size_t index = 0; index < definition.parameters.size(); ++index) {
+    for (std::size_t index = 0; index < socketed; ++index) {
         const auto& declared = definition.parameters[index];
         const auto& socket = definition.inputs[imageInputCount + index];
         if (socket.name != declared.role || socket.required ||
@@ -992,7 +997,7 @@ template <typename Definition>
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasLeadingImageInput(definition, kLayerOutputContentInputPort, false) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
-               definition.parameters.size() == 7 &&
+               definition.parameters.size() == 8 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
                hasParameter(definition, 1, kAnchorParameterRole, kAnchorParameterSchemaKey,
@@ -1008,12 +1013,16 @@ template <typename Definition>
                // Schema 5 (ADR 0024): the optional, animatable Time Remap comes last.
                hasParameter(definition, 6, kTimeRemapParameterRole, kTimeRemapParameterSchemaKey,
                             ParameterValueKind::Float64, true, false) &&
+               // #742: the optional filter selector comes last and has no socket.
+               hasParameter(definition, 7, kLayerFilterParameterRole,
+                            kLayerFilterParameterSchemaKey, ParameterValueKind::Integer, false,
+                            false) &&
                (definition.inputs.size() == 9 && definition.outputs.size() == 2 &&
                 definition.inputs[1].name == kLayerOutputAudioInputPort &&
                 definition.inputs[1].valueKind == SocketValueKind::Audio &&
                 !definition.inputs[1].required &&
                 hasOutput(definition, kLayerOutputAudioOutputPort, SocketValueKind::Audio) &&
-                hasParameterSockets(definition, 2)) &&
+                hasParameterSockets(definition, 2, 7)) &&
                !definition.layerSlotInput.has_value();
     case NodeLoweringKind::LayerStack:
         return hasCanonicalKey(definition, kLayerStackNodeType, kLayerStackNodeSchemaVersion) &&
@@ -1249,7 +1258,11 @@ template <typename Definition>
               ParameterValueKind::Integer, true, false, kDefaultBlendModeValue},
              // ADR 0024: absent means Time Remap is disabled. EnableLayerTimeRemap binds it.
              {std::string(kTimeRemapParameterRole), std::string(kTimeRemapParameterSchemaKey),
-              ParameterValueKind::Float64, false, true, 0.0}},
+              ParameterValueKind::Float64, false, true, 0.0},
+             // #742: the transform's resample filter, an inline selector without a socket. A new
+             // Layer node binds Automatic; absent (a layer saved before it existed) is Bilinear.
+             {std::string(kLayerFilterParameterRole), std::string(kLayerFilterParameterSchemaKey),
+              ParameterValueKind::Integer, false, false, kResampleFilterAutomaticValue}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Layers,
@@ -1355,8 +1368,9 @@ template <typename Definition>
           ParameterValueKind::Integer, true, false, std::int64_t{1}},
          {"pixelAspectDenominator", "bloom.resize-fit.pixel-aspect-denominator",
           ParameterValueKind::Integer, true, false, std::int64_t{1}},
+         // #742: a new node is Automatic (Trilinear); a saved Bilinear (0) keeps its meaning.
          {"filter", "bloom.resize-fit.filter", ParameterValueKind::Integer, true, false,
-          std::int64_t{0}},
+          bloom::document::kResampleFilterAutomaticValue},
          {"bypass", "bloom.resize-fit.bypass", ParameterValueKind::Boolean, true, false, false}},
         std::nullopt,
         NodeCardinality::Many,
@@ -1401,7 +1415,7 @@ template <typename Definition>
              {"extent", "bloom.transform-2d.extent", ParameterValueKind::Integer, true, false,
               std::int64_t{0}},
              {"filter", "bloom.transform-2d.filter", ParameterValueKind::Integer, true, false,
-              std::int64_t{0}}},
+              bloom::document::kResampleFilterAutomaticValue}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Transform};

@@ -1,4 +1,5 @@
 #include <bloom/document/merge_entries.hpp>
+#include <bloom/document/resample_filter.hpp>
 
 #include <bloom/document/value_nodes.hpp>
 
@@ -19,6 +20,8 @@ constexpr std::array kEntryLayerRoles{
     EntryLayerRole{kOpacityParameterRole, kOpacityParameterSchemaKey},
     EntryLayerRole{kBlendModeParameterRole, kBlendModeParameterSchemaKey},
     EntryLayerRole{kTimeRemapParameterRole, kTimeRemapParameterSchemaKey},
+    // #742: optional like Time Remap; absent is Bilinear.
+    EntryLayerRole{kLayerFilterParameterRole, kLayerFilterParameterSchemaKey},
 };
 
 [[nodiscard]] const EdgeRecord* edgeInto(const CanonicalGraph& graph, const NodeId node,
@@ -214,6 +217,10 @@ std::optional<NodeId> mergeEntryAdjustment(const CanonicalGraph& graph, const No
 
 std::span<const EntryLayerRole> entryLayerRoles() noexcept { return kEntryLayerRoles; }
 
+bool isOptionalEntryLayerRole(const std::string_view role) noexcept {
+    return role == kTimeRemapParameterRole || role == kLayerFilterParameterRole;
+}
+
 ValidationResult validateEntryLayers(const CanonicalGraph& graph,
                                      const ParameterStore& parameters) {
     ValidationResult result;
@@ -281,7 +288,7 @@ ValidationResult validateEntryLayers(const CanonicalGraph& graph,
                            "An entry layer parameter is a constant or an animation curve");
         }
         for (const auto& role : kEntryLayerRoles)
-            if (role.role != kTimeRemapParameterRole && !seen.contains(role.role))
+            if (!isOptionalEntryLayerRole(role.role) && !seen.contains(role.role))
                 result.add(ValidationCode::MissingReference, path + ".parameters",
                            "Entry layer must bind " + std::string(role.role));
     }
