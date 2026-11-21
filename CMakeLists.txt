@@ -176,6 +176,30 @@ if(BUILD_TESTING)
             -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_memory_reading.cmake"
         LABELS quality build unit
         TIMEOUT 60)
+    # #749: on macOS every registered test runs with a home of its own, so no test reaches the
+    # user's real per-user folders there (cmake/BloomTesting.cmake). Registered on macOS only:
+    # Linux and Windows find those folders from XDG_* and LOCALAPPDATA, which the runner and the
+    # fixtures set, not from the home, so no test there has or needs a home of its own. The second
+    # test proves the check rejects each way a test can miss it, on every system.
+    if(APPLE)
+        bloom_add_test(
+            NAME bloom.quality.test_private_home
+            COMMAND ${CMAKE_COMMAND} "-DTREE=${CMAKE_BINARY_DIR}" "-DCONFIG=$<CONFIG>"
+                -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_private_home.cmake"
+            LABELS quality build
+            TIMEOUT 60)
+    endif()
+    set(bloom_home_check_rejected fixture.no-properties fixture.no-home fixture.another-home
+        fixture.home-elsewhere fixture.no-fixed-home fixture.other-fixed-home
+        fixture.replaced-later fixture.sub-no-home)
+    list(JOIN bloom_home_check_rejected "," bloom_home_check_rejected)
+    bloom_add_test(
+        NAME bloom.quality.test_private_home_rejects
+        COMMAND ${CMAKE_COMMAND} "-DTREE=${PROJECT_SOURCE_DIR}/cmake/tests/test_private_home"
+            "-DEXPECT_REJECTED=${bloom_home_check_rejected}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_private_home.cmake"
+        LABELS quality build unit
+        TIMEOUT 60)
 endif()
 
 add_subdirectory(tools/quality/json)

@@ -138,6 +138,20 @@ function(bloom_add_test)
     # (src/crash/include/bloom/crash/crash_reports.hpp). A test that sets its own folder keeps it:
     # the later entry wins.
     list(PREPEND ARG_ENVIRONMENT "BLOOM_TEST_CRASH_DIRECTORY=${CMAKE_BINARY_DIR}/test-crash-reports")
+    # #749: on macOS every per-user folder is found from the home folder: Bloom's cache and data
+    # folders (~/Library/Caches/bloom, ~/Library/Application Support/Afterlab/Bloom), Qt's
+    # standard locations and the preferences QSettings writes. The XDG_* and LOCALAPPDATA
+    # overrides that keep a test away from the user's own state on Linux and Windows do not reach
+    # most of them there, so each test gets a home of its own in the build tree, in HOME and in
+    # CFFIXED_USER_HOME (the variable CoreFoundation and Foundation take the home from). A test that
+    # sets its own keeps it: the later entry wins. bloom.quality.test_private_home checks that every
+    # registered test has it.
+    if(APPLE)
+        set(bloom_test_home "${CMAKE_BINARY_DIR}/test-home/${ARG_NAME}")
+        file(MAKE_DIRECTORY "${bloom_test_home}")
+        list(PREPEND ARG_ENVIRONMENT "HOME=${bloom_test_home}"
+             "CFFIXED_USER_HOME=${bloom_test_home}")
+    endif()
     # Every signal or termination a process supervisor sends during the suite is logged, with its
     # target and the target's name at that moment, beside CTest's own logs (local-validation.md):
     # a test killed with no line naming it was not killed by a supervisor.
