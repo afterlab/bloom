@@ -15,6 +15,9 @@ import time
 import unittest
 import wave
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stdio_child  # noqa: E402
+
 MCP, CLI = sys.argv[1:3]
 del sys.argv[1:3]
 # Captures publish into the per-user cache; keep this test's out of the real one.
@@ -53,8 +56,7 @@ class SharedServer:
     """One bloom-mcp for the cases that only exchange messages; each starts a new project."""
 
     def __init__(self):
-        self.process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE)
+        self.process = stdio_child.start([MCP])
         self.lines = queue.Queue()
         threading.Thread(target=self.read, daemon=True).start()
         self.initialized = self.send(INIT)
@@ -77,7 +79,7 @@ class SharedServer:
         except queue.Empty:
             raise AssertionError('bloom-mcp did not answer within 90 seconds') from None
         if answer is None:
-            raise AssertionError(self.process.stderr.read().decode(errors='replace'))
+            raise AssertionError(stdio_child.errors(self.process))
         return json.loads(answer)
 
     def exchange(self, lines):
@@ -97,10 +99,7 @@ class SharedServer:
         return responses
 
     def close(self):
-        self.process.stdin.close()
-        self.process.wait(timeout=60)
-        self.process.stdout.close()
-        self.process.stderr.close()
+        stdio_child.end(self.process, 60)
 
 
 SHARED = None
@@ -123,8 +122,7 @@ def restart_shared():
     global SHARED
     broken, SHARED = SHARED, None
     try:
-        broken.process.kill()
-        broken.process.wait()
+        stdio_child.kill(broken.process)
     finally:
         SHARED = SharedServer()
 
@@ -175,15 +173,14 @@ class Protocol(unittest.TestCase):
 
     def test_large_parameters_paged_and_revision_bound(self):
         text = 'é' * 380000  # 760,000 UTF-8 bytes per value; three exceed 2 MiB together.
-        process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+        process = stdio_child.start([MCP])
 
         def call(line):
             process.stdin.write((line + '\n').encode())
             process.stdin.flush()
             response = process.stdout.readline()
             if not response:
-                raise AssertionError(process.stderr.read().decode(errors='replace'))
+                raise AssertionError(stdio_child.errors(process))
             return json.loads(response)
 
         try:
@@ -254,8 +251,7 @@ class Protocol(unittest.TestCase):
                                                   'parameter': parameter, 'expectedRevision': 3}))
             self.assertIn('error', stale_value)
         finally:
-            process.stdin.close()
-            self.assertEqual(process.wait(timeout=30), 0)
+            stdio_child.end(process, 30, expect_status=0)
 
     def test_parameter_projection(self):
         color = [0.2, 0.3, 0.4, 1.0]
@@ -451,8 +447,7 @@ class Protocol(unittest.TestCase):
     def test_event_subscription_on_stdio(self):
         """#747 (D2): after events.subscribe, notifications/bloom/events arrive on stdout between
         answers, coalesced into ranges with counts; events.unsubscribe ends them."""
-        process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                   stderr=subprocess.PIPE)
+        process = stdio_child.start([MCP])
         lines = queue.Queue()
 
         def read():
@@ -499,10 +494,7 @@ class Protocol(unittest.TestCase):
             write(tool(4, 'events.unsubscribe', {}))
             self.assertTrue(answer(4)['result']['structuredContent']['ended'])
         finally:
-            process.stdin.close()
-            process.wait(timeout=60)
-            process.stdout.close()
-            process.stderr.close()
+            stdio_child.end(process, 60)
 
     def test_context_defaults_match_the_python_client(self):
         """Omitted contextual arguments come from the session, exactly as they do in Python."""
@@ -624,8 +616,8 @@ class Protocol(unittest.TestCase):
 
     def test_cancel_active_render(self):
         with tempfile.TemporaryDirectory(prefix='bloom-mcp-cancel-') as directory:
-            process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE)
+            process = stdio_child.start([MCP])
+            ended = False
             try:
                 process.stdin.write((INIT + '\n').encode())
                 process.stdin.flush()
@@ -643,17 +635,20 @@ class Protocol(unittest.TestCase):
                     time.sleep(0.005)
                 cancellation = {'jsonrpc': '2.0', 'method': 'notifications/cancelled',
                                 'params': {'requestId': 2}}
-                # The cancelled result answers at once; process exit after end of input then
-                # scales with machine load (device teardown), so ctest's test timeout bounds it.
-                output, diagnostic = process.communicate((json.dumps(cancellation) + '\n').encode())
-                self.assertEqual(process.returncode, 0, diagnostic.decode())
-                result = json.loads(output.splitlines()[-1])
+                # The cancelled result answers at once, then the server exits at end of input.
+                process.stdin.write((json.dumps(cancellation) + '\n').encode())
+                process.stdin.flush()
+                answer = process.stdout.readline()
+                if not answer:
+                    raise AssertionError(stdio_child.errors(process))
+                result = json.loads(answer)
+                ended = True
+                stdio_child.end(process, 60, expect_status=0)
                 self.assertTrue(result['result']['isError'], result)
                 self.assertLess(len(list(pathlib.Path(directory).glob('*.png'))), 1001)
             finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+                if not ended:
+                    stdio_child.kill(process)
 
     def test_media4_tiff_export(self):
         with tempfile.TemporaryDirectory(prefix='bloom-mcp-export-') as directory:
@@ -722,8 +717,8 @@ class Protocol(unittest.TestCase):
                 file.writeframes(b''.join(
                     struct.pack('<hh', *(2 * [round(0.25 * 32767 * math.sin(
                         2 * math.pi * 440 * frame / 48000))])) for frame in range(48000)))
-            process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                       stderr=subprocess.PIPE)
+            process = stdio_child.start([MCP])
+            ended = False
             try:
                 def call(line, answered=True):
                     process.stdin.write((line + '\n').encode())
@@ -766,12 +761,11 @@ class Protocol(unittest.TestCase):
                     self.assertAlmostEqual(loudness['gainDb'], -23 - loudness['measuredLufs'],
                                            delta=0.01)
                 self.assertNotIn('loudness', export(6, 'PcmWavV1', 'plain.wav'))
-                _, diagnostic = process.communicate()
-                self.assertEqual(process.returncode, 0, diagnostic.decode(errors='replace'))
+                ended = True
+                stdio_child.end(process, 60, expect_status=0)
             finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait()
+                if not ended:
+                    stdio_child.kill(process)
 
     def test_export_encoder_choice(self):
         # encoder=software makes the same movie with Bloom's FFmpeg encoder on every platform,

@@ -140,12 +140,19 @@ class Session:
         return {output['name']: output['id'] for output in answer.get('outputs', [])}
 
     def close(self):
+        """Ends the server at end of input. One that does not exit is killed (it is this sweep's
+        own child) and the failure says so with what it wrote to stderr."""
         try:
             self.process.stdin.close()
+        except OSError:
+            pass  # Already gone; wait() says how it ended.
+        try:
             self.process.wait(timeout=30)
-        except Exception:  # pylint: disable=broad-except
+        except subprocess.TimeoutExpired:
             self.process.kill()
-            self.process.wait()
+            message = f'bloom-mcp did not exit within 30 s after its input closed, so the sweep killed it; {self.death()}'
+            self.errors.close()
+            raise SweepError(message) from None
         self.errors.close()
 
 

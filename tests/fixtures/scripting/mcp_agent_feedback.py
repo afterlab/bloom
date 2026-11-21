@@ -3,11 +3,13 @@ import json
 import os
 import struct
 import zlib
-import subprocess
 import sys
 import tempfile
 import unittest
 import wave
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stdio_child  # noqa: E402
 
 MCP = sys.argv[1]
 del sys.argv[1]
@@ -20,8 +22,7 @@ class Server:
     """One bloom-mcp process, initialized, answering one call at a time."""
 
     def __init__(self, *arguments):
-        self.process = subprocess.Popen([MCP, *arguments], stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.process = stdio_child.start([MCP, *arguments])
         self.next_id = 1
         self.send({'jsonrpc': '2.0', 'id': 0, 'method': 'initialize',
                    'params': {'protocolVersion': '2025-11-25', 'capabilities': {},
@@ -36,7 +37,7 @@ class Server:
     def receive(self):
         line = self.process.stdout.readline()
         if not line:
-            raise AssertionError(self.process.stderr.read().decode(errors='replace'))
+            raise AssertionError(stdio_child.errors(self.process))
         return json.loads(line)
 
     def raw(self, name, arguments):
@@ -74,15 +75,21 @@ class Server:
         raise AssertionError(f'no node has a {role} parameter')
 
     def close(self):
-        self.process.stdin.close()
-        self.process.wait(timeout=60)
-        self.process.stdout.close()
-        self.process.stderr.close()
+        stdio_child.end(self.process, 60)
+
+    def kill(self):
+        stdio_child.kill(self.process)
+
+
+def read_bytes(path):
+    with open(path, 'rb') as file:
+        return file.read()
 
 
 def png_pixel(path, x, y):
     """One RGBA8 pixel of a non-interlaced 8-bit RGBA PNG, decoded with the standard library."""
-    data = open(path, 'rb').read()
+    with open(path, 'rb') as file:
+        data = file.read()
     assert data[:8] == b'\x89PNG\r\n\x1a\n'
     offset, chunks, width, height = 8, b'', 0, 0
     while offset < len(data):
@@ -145,8 +152,7 @@ class AgentFeedback(unittest.TestCase):
                 # A server a failed case left unusable is replaced, so the failure stays its own.
                 if attempt:
                     raise
-                type(self).shared.process.kill()
-                type(self).shared.process.wait()
+                type(self).shared.kill()
                 type(self).shared = Server()
         self.server = self.shared
 
@@ -432,7 +438,7 @@ class AgentFeedback(unittest.TestCase):
         self.assertEqual(names, ['seq.0000.png', 'seq.0001.png'])
         # #453: an existing frame is never replaced unless overwrite is "replace", and a range is
         # checked frame by frame.
-        frames = {name: open(os.path.join(folder.name, name), 'rb').read() for name in names}
+        frames = {name: read_bytes(os.path.join(folder.name, name)) for name in names}
         for policy in (None, 'ask', 'refuse'):
             arguments = {'composition': 1, 'first': 0, 'last': 1, 'preset': 'PngRgba8SrgbV1',
                          'destination': os.path.join(folder.name, 'seq.####.png')}
@@ -441,7 +447,7 @@ class AgentFeedback(unittest.TestCase):
             again = server.call('render', arguments)
             self.assertEqual(again['diagnostic']['code'], 'bloom.mcp.preflight-blocked', again)
         for name, data in frames.items():
-            self.assertEqual(open(os.path.join(folder.name, name), 'rb').read(), data)
+            self.assertEqual(read_bytes(os.path.join(folder.name, name)), data)
         with open(os.path.join(folder.name, 'only.0001.png'), 'wb') as existing:
             existing.write(b'not rendered by Bloom')
         lone = server.call('render', {'composition': 1, 'first': 0, 'last': 1,

@@ -16,6 +16,9 @@ import tempfile
 import unittest
 import zlib
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stdio_child  # noqa: E402
+
 MCP, CLI, PYTHON_DIR = sys.argv[1:4]
 del sys.argv[1:4]
 if PYTHON_DIR != '-':
@@ -40,8 +43,7 @@ class Server:
     """One bloom-mcp process driven line by line."""
 
     def __init__(self):
-        self.process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE)
+        self.process = stdio_child.start([MCP])
         self.next = 1
         self.initialize = self.send('initialize', {
             'protocolVersion': '2025-11-25', 'capabilities': {},
@@ -51,10 +53,7 @@ class Server:
         self.revision = 0
 
     def close(self):
-        self.process.stdin.close()
-        self.process.wait(timeout=30)
-        self.process.stdout.close()
-        self.process.stderr.close()
+        stdio_child.end(self.process, 30)
 
     def send(self, method, params=None):
         self.next += 1
@@ -63,7 +62,7 @@ class Server:
         self.process.stdin.flush()
         response = self.process.stdout.readline()
         if not response:
-            raise AssertionError(self.process.stderr.read().decode(errors='replace'))
+            raise AssertionError(stdio_child.errors(self.process))
         return json.loads(response)
 
     def tool(self, name, arguments):
@@ -242,8 +241,7 @@ class ReadBack(unittest.TestCase):
                 # A server a failed case left unusable is replaced, so the failure stays its own.
                 if attempt:
                     raise
-                type(self).shared.process.kill()
-                type(self).shared.process.wait()
+                stdio_child.kill(type(self).shared.process)
                 type(self).shared = Server()
         self.server = self.shared
         self.server.query(kind='context')

@@ -4,11 +4,13 @@ import json
 import os
 import pathlib
 import socket
-import subprocess
 import sys
 import tempfile
 import time
 import unittest
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stdio_child  # noqa: E402
 
 HOST_BINARY = sys.argv[1]
 del sys.argv[1]
@@ -33,9 +35,9 @@ class Host:
             self.temporary = tempfile.TemporaryDirectory(prefix='bloom-mcp-http-')
             folder = self.temporary.name
         self.folder = pathlib.Path(folder)
-        self.process = subprocess.Popen(
+        self.process = stdio_child.start(
             [HOST_BINARY, '--port', str(self.port), '--folder', str(self.folder), *extra],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            text=True)
         self.status = self.process.stdout.readline().strip()
 
     @property
@@ -51,19 +53,17 @@ class Host:
                 return
 
     def close(self):
-        if self.process.poll() is None:
-            try:
-                self.process.stdin.write('quit\n')
-                self.process.stdin.close()
-            except BrokenPipeError:
-                pass
-            try:
-                self.process.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait()
-        if self.temporary:
-            self.temporary.cleanup()
+        try:
+            if self.process.poll() is None:
+                try:
+                    self.process.stdin.write('quit\n')
+                    self.process.stdin.flush()
+                except BrokenPipeError:
+                    pass
+            stdio_child.end(self.process, 60)
+        finally:
+            if self.temporary:
+                self.temporary.cleanup()
 
 
 def raw(port, data, timeout=10):

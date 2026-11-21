@@ -1,13 +1,16 @@
 """MCP parity operations through the stdio server: an agent adds layers from assets the way an asset
 drop does, duplicates and deletes them, and every step is one undoable history entry."""
 import json
+import os
 import pathlib
 import struct
-import subprocess
 import sys
 import tempfile
 import unittest
 import zlib
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import stdio_child  # noqa: E402
 
 MCP = sys.argv.pop(1)
 
@@ -27,8 +30,7 @@ class Server:
     """One stdio server kept open, so each call can read the previous call's result."""
 
     def __init__(self):
-        self.process = subprocess.Popen([MCP], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=subprocess.PIPE)
+        self.process = stdio_child.start([MCP])
         self.next_id = 1
         self.call('initialize', {'protocolVersion': '2025-11-25', 'capabilities': {},
                                  'clientInfo': {'name': 'Bloom parity', 'version': '1'}})
@@ -41,7 +43,10 @@ class Server:
     def call(self, method, params):
         self.next_id += 1
         self.send({'jsonrpc': '2.0', 'id': self.next_id, 'method': method, 'params': params})
-        return json.loads(self.process.stdout.readline())
+        line = self.process.stdout.readline()
+        if not line:
+            raise AssertionError(stdio_child.errors(self.process))
+        return json.loads(line)
 
     def tool(self, name, arguments):
         response = self.call('tools/call', {'name': name, 'arguments': arguments})
@@ -58,10 +63,7 @@ class Server:
         return self.tool('history', {'action': action, 'expectedRevision': self.revision()})
 
     def close(self):
-        self.process.stdin.close()
-        self.process.wait(timeout=60)
-        self.process.stdout.close()
-        self.process.stderr.close()
+        stdio_child.end(self.process, 60)
 
 
 def outputs(result, name):
@@ -91,8 +93,7 @@ class ParityOperations(unittest.TestCase):
                 # A server a failed case left unusable is replaced, so the failure stays its own.
                 if attempt:
                     raise
-                type(self).shared.process.kill()
-                type(self).shared.process.wait()
+                stdio_child.kill(type(self).shared.process)
                 type(self).shared = Server()
         self.server = self.shared
 

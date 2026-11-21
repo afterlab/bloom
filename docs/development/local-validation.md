@@ -175,6 +175,13 @@ Shared test support lives in `tests/support`:
   test-mode folder, the macOS preferences or the Windows registry) that the same test of another
   build tree shares.
 
+A Python fixture that starts a stdio server (`bloom-mcp`, the MCP HTTP test host) starts and ends
+it through `tests/fixtures/scripting/stdio_child.py` (#750). The server's standard error goes to a
+file, so it never blocks on a full pipe and a failure can show it. `end(process, timeout)` closes the
+server's input and waits for it to exit. A server still running after the timeout is killed, because
+it is the fixture's own child and must not outlive the test, and the failure names it with its
+standard error. A server that does not exit at end of input is a failure, never killed silently.
+
 Two test runs on one machine (two build trees, or a developer's run beside a validation run) never
 share a fixture: a test never joins the system temporary directory with a fixed name. Test code
 reaches it only through `unique_temp_dir.hpp` or a `QTemporaryDir`, and the repository hygiene
