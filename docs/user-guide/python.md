@@ -239,6 +239,13 @@ bloom.ops.merge.insert_layer_node(plate["merge"], plate["slot"])
   "Adjustment Layer N". Outputs `node`, `layerSlot` and `layer`. Wire filters between the
   Adjustment node's `image` output and the entry.
 
+`bloom.data.outputs(node, *, composition=None, frame=None, time=None, expected_revision=None)`
+evaluates a node at a frame (or a time in seconds; neither is the context's time) and returns what
+MCP `query kind:"outputs"` returns, in snake_case: `outputs` lists each output's `name`, `kind` and
+`value` (vectors and colours are tuples, a space is a dict with its `matrix`), with a `note` for an
+output that has no one value. An unknown node or composition, or a stale `expected_revision`, raises
+`ValueError`.
+
 `bloom.data.merge_entries(composition)` lists every Merge entry, the output Merge first and each
 Merge top to bottom: `merge`, `slot`, `index` (0 is the top), `output_merge`, `layer` (the
 entry's layer id or `None`), `layer_kind` (`"node"`, `"entry"` or `"none"`), `entry_layer`,

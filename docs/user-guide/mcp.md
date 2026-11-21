@@ -839,6 +839,12 @@ through the same route (`help` lists them with their arguments):
   bounds: `local` (the content rectangle before the layer transform), `corners` (four corners after
   it) and `output` (their axis-aligned box), with the space stated in the answer; a time outside the
   layer reads `visible:false` with a reason.
+- `kind:"outputs"` with `node`, optional `composition`, `time` and `expectedRevision` evaluates the
+  node at that time and lists every output with its socket `kind` and `value`: numbers, vectors
+  (`[x, y]`), colours, text, paths and number lists as their parameters are written, and a space as
+  `{name, dimensions, matrix, affine, range, parent}` (`matrix` is four rows of four: units to
+  composition pixels). Nothing has to be connected to the node. Picture, sound and field outputs
+  read `value:null` with a `note`; `diagnostics` lists what the node reported.
 - `kind:"history"` lists the undo history (labels, the current position, `canUndo`, `canRedo`).
 - `kind:"viewer"` and `kind:"preview-cache"` read the Viewer state and the RAM preview (filled
   range, fill rate, budget, stop reason; what is not known reads `null`). The viewer state always

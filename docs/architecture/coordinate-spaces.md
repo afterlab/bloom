@@ -148,6 +148,16 @@ direction there) and a tick's label position. Unconnected, they use their own `o
 `pixelsPerUnit`; an unturned Origin and scale space with the same numbers gives exactly the same
 paths.
 
+While something is connected to `space`, `origin` and `pixelsPerUnit` are inactive
+(`document::isParameterInactive`, the rule every reader asks): Properties, the node card and the
+Timeline show no row for them, and the compiler lowers them to their defaults, so setting or wiring
+one changes neither the plan nor its cache identity. The rule is on the connection and the role,
+because these rows share the generic Vector 2 operand key with rows that stay active (Axis Tick's
+`labelOffset`); it needs no stored change, so saved projects open and draw as before. A wired
+placement row keeps its row on the card so its link never dangles. A connected space that is refused
+upstream reaches the node as "no space", which then places at the defaults (0, 0) and 100 pixels
+per unit; the refusal is reported on the Coordinate Space.
+
 ## How things stay aligned
 
 Every consumer reads the one map at the same time, so a change to the space reaches all of them in
@@ -185,9 +195,20 @@ on every frame it reads.
 
 Python, JSON scripts and MCP build a space like any node: `bloom.node.add` with
 `bloom.coordinate-space`, `bloom.node.set-parameter-value` for its parameters, and `bloom.node.connect`
-from its `space` output to a `space` input (there is no parameter to set). Readouts are read by
-driving a parameter from a Space Readout output, or through the node's card text. There is no query
-that returns a value node's outputs directly.
+from its `space` output to a `space` input (there is no parameter to set).
+
+Any node's outputs are read as values at a time with MCP `query {kind:"outputs", composition, node,
+time}` and Python `bloom.data.outputs(node, frame=..., time=...)`. Both call
+`scripting::readNodeOutputs` (`src/scripting/include/bloom/scripting/readings.hpp`), which compiles
+the plan with the node as a value readout and evaluates it on the CPU reference path off the UI
+thread, stopping when the caller stops waiting. Each output is listed with its socket kind and its
+value: a Space Readout's origin, axes, scale and rotation as numbers and vectors, its matrix as a
+Number List, its names as text; To Space and From Space as vectors; a Coordinate Space's own output
+as `{name, dimensions, matrix, affine, range, parent}`, where `matrix` is the 4x4 above as four rows.
+Pictures, sound and fields are listed with no value and a note. The answer carries the revision it
+read; an unknown composition or node, or a stale `expectedRevision`, is refused as other queries
+refuse. `tests/fixtures/scripting/agent_reference.py` checks that MCP and Python answer the same
+values for the same saved project.
 
 ## Related work
 

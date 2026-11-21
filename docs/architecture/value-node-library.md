@@ -550,7 +550,7 @@ Function Plot samples a group's function over a range and answers the curve as a
 | `origin` | Vector 2 | 0, 0 | Where argument 0 with answer 0 lands, in pixels |
 | `pixelsPerUnit` | Vector 2 | 100, 100 | Pixels per unit along X and Y |
 | `smooth` | Boolean | on | Auto anchors, whose handles are derived, so the curve is smooth; off gives Corner anchors, a polyline |
-| `space` | Space (socket only) | none | A coordinate space to draw in (#591); when connected, it places every sample and `origin` and `pixelsPerUnit` are not read |
+| `space` | Space (socket only) | none | A coordinate space to draw in (#591); when connected, it places every sample and `origin` and `pixelsPerUnit` are inactive (no row, not lowered; `coordinate-spaces.md`) |
 
 Every parameter except `group` is an operand, so a wire can drive the range, the resolution and the
 placement. Sample `i` of `n` is at `x = start + (end - start) * i / (n - 1)`, and the last is exactly

@@ -36,7 +36,9 @@ size and corners are in the parent's units. Moving the parent then moves both.
 
 - **Function Plot**, **Axes** and **Axis Tick** each have a **Space** input. Connect the same space to
   all of them and the curve, the axes, the ticks and the label positions agree, whatever the space
-  does. Without a space they use their own Origin and Pixels Per Unit, as before.
+  does. Without a space they use their own Origin and Pixels Per Unit, as before; while a space is
+  connected those two rows are hidden on the card and in Properties, because the space places the
+  drawing instead.
 - Draw a plot or axes as an entry of a Merge (Shape, with its Path driven by the plot or the axes)
   so its path's pixels are the frame's pixels.
 - To place a layer at a point of the space, add **Place in Space**, connect the space, set
@@ -59,11 +61,15 @@ position: it turns and scales with the space but does not move with its origin.
 A Coordinate Space answers no space, and its card says why, when its range does not run forward, a
 number is not finite or is huge, three of its corners are on one line, it has no size along an axis,
 its name is very long, or it is nested more than sixteen spaces deep. Everything reading it then
-falls back as if nothing were connected: a plot uses its own placement, and a layer placed in the
-space stays at its offset.
+falls back: a plot, axes or a tick still connected to it place at their default origin (0, 0) and
+100 pixels per unit, and a layer placed in the space stays at its offset. Fix the space, or
+disconnect it to use the node's own placement.
 
 ## From a script or an agent
 
 Build a space like any node: add `bloom.coordinate-space`, set its parameters, and connect its
-`space` output to each `space` input with `bloom.node.connect`. See
+`space` output to each `space` input with `bloom.node.connect`. Read what any node answers at a
+time with MCP `query {"kind":"outputs","node":...}` or Python `bloom.data.outputs(node)`: a Space
+Readout's origin, axes, scale and matrix, a conversion's result, or the space itself with its map.
+See
 [Scripting Bloom with Python](python.md) and [Using Bloom from an agent](mcp.md).
