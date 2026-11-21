@@ -2960,7 +2960,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
-                              coordinate-space-axes subtitles)
+                              coordinate-space-axes subtitles subtitles-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2986,7 +2986,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
-                              coordinate-space-axes subtitles)
+                              coordinate-space-axes subtitles subtitles-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

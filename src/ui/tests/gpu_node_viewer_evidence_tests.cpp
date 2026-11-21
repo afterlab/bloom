@@ -143,6 +143,8 @@ struct Scenario final {
     bool coordinateSpace = false;
     // #752: the source is a Subtitles node; these cues are set on it (bloom.subtitles.set-cues).
     std::vector<document::Cue> cues = {};
+    // #752: values of the Layer Output itself (a scale, a rotation).
+    Values layerValues = {};
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -254,6 +256,10 @@ struct Scenario final {
         second.text = "<b>A second line</b>";
         out["subtitles"].cues = {first, second};
     }
+    // #752: the same Subtitles on a scaled and rotated layer: the layer redraws the cues' paths
+    // through its matrix (the vector leaf), never resampling the node's image.
+    out["subtitles-transformed"] = out["subtitles"];
+    out["subtitles-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
@@ -890,6 +896,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(connect(session, last, layerNode,
                                   std::string(document::kLayerOutputContentInputPort)),
                           "the chain feeds the layer");
+        if (!scenario->layerValues.empty())
+            checks.expect(setValues(session, layerNode, scenario->layerValues),
+                          "the layer's own values are set");
         if (scenario->pixelArt) {
             auto pixelArt = commands::compositionSettingsOf(*session.composition());
             pixelArt.pixelArt = true;
