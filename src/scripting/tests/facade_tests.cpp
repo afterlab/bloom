@@ -22,9 +22,10 @@ int main() {
     // #637 adds bloom.node.write-to-path; #703 bloom.node.insert-on-link; #701
     // bloom.node.delete-unused; #627 bloom.node.write-to-number-list; #636
     // bloom.node.bake-to-keyframes; #747 bloom.animation.set-key-tracks; #742
-    // bloom.layer.set-filter.
-    if (registry.descriptors().size() != 158U ||
+    // bloom.layer.set-filter; #743 bloom.layer.set-snap.
+    if (registry.descriptors().size() != 159U ||
         registry.find("bloom.layer.set-filter") == nullptr ||
+        registry.find("bloom.layer.set-snap") == nullptr ||
         registry.find("bloom.animation.set-key-tracks") == nullptr ||
         registry.find("bloom.node.bake-to-keyframes") == nullptr ||
         registry.find("bloom.node.write-to-number-list") == nullptr ||

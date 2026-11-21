@@ -2676,11 +2676,15 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("actionSafe", ValueKind::Double, 0.9, "Action-safe fraction, 0..1."),
          maybe("titleSafe", ValueKind::Double, 0.8, "Title-safe fraction, inside action safe."),
          maybe("anchor", ValueKind::Integer, std::int64_t{4},
-               "Resize anchor 0..8 (row * 3 + column); 4 keeps content centered.")},
+               "Resize anchor 0..8 (row * 3 + column); 4 keeps content centered."),
+         maybe("pixelArt", ValueKind::Boolean, true,
+               "Pixel-art mode: Automatic filters read Nearest and layers whose snap is Automatic "
+               "snap to whole pixels.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
             commands::CompositionSettingsChange change;
+            change.pixelArt = boolean(args, op, "pixelArt", error, false);
             change.name = text(args, op, "name", error, false);
             const auto width = integer(args, op, "width", error, false);
             const auto height = integer(args, op, "height", error, false);
@@ -3360,7 +3364,8 @@ OperationRegistry OperationRegistry::builtIn() {
         {compositionArgument(), layerArgument(),
          need("filter", ValueKind::Integer, std::int64_t{4},
               "Integer. The layer transform's resample filter: 0 Bilinear, 1 Nearest, 2 Trilinear "
-              "(mipmapped), 3 Anisotropic, 4 Automatic (Trilinear).")},
+              "(mipmapped), 3 Anisotropic, 4 Automatic (Trilinear, or Nearest in a pixel-art "
+              "composition).")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3375,6 +3380,27 @@ OperationRegistry OperationRegistry::builtIn() {
             return OperationCreateResult(std::make_unique<commands::SetLayerFilter>(
                                              document::CompositionId::fromRaw(*composition),
                                              document::LayerId::fromRaw(*layer), *filter),
+                                         std::nullopt);
+        });
+
+    // #743: whether the layer's position snaps to whole pixels.
+    add("bloom.layer.set-snap",
+        {compositionArgument(), layerArgument(),
+         need("snap", ValueKind::Integer, std::int64_t{1},
+              "Integer. Whether the layer's final position rounds to whole pixels: 0 Off, 1 On, "
+              "2 Automatic (on in a pixel-art composition).")},
+        [](const std::string& op, const Arguments& args) {
+            OperationCreateResult error(nullptr, std::nullopt);
+            const auto composition = id(args, op, "composition", error);
+            const auto layer = id(args, op, "layer", error);
+            const auto snap = integer(args, op, "snap", error);
+            if (!composition || !layer || !snap)
+                return error;
+            if (*snap < 0 || *snap > 2)
+                return failure(op, "snap", "snap is 0 Off, 1 On or 2 Automatic");
+            return OperationCreateResult(std::make_unique<commands::SetLayerSnap>(
+                                             document::CompositionId::fromRaw(*composition),
+                                             document::LayerId::fromRaw(*layer), *snap),
                                          std::nullopt);
         });
 

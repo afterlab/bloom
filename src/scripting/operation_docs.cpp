@@ -485,12 +485,21 @@ constexpr std::array kNotes{
     OperationNotes{"bloom.layer.set-filter",
         "Sets how a layer's transform resamples its image: Bilinear, Nearest (pixel art, IDs), "
         "Trilinear (mipmapped, smooth when the layer is shrunk), Anisotropic (sharper when it is "
-        "shrunk more along one axis) or Automatic (Trilinear). Trilinear and Anisotropic equal "
+        "shrunk more along one axis) or Automatic (Trilinear, or Nearest in a pixel-art "
+        "composition). Trilinear and Anisotropic equal "
         "Bilinear when the layer is not shrunk. A layer saved without a filter is Bilinear; a "
         "plain Merge entry takes bloom.merge.set-entry-parameter with role filter.",
         "parameter", "bloom.merge.set-entry-parameter query:layers",
         "[invalid-argument] The filter is not 0..4 => pick 0 Bilinear, 1 Nearest, 2 Trilinear, "
         "3 Anisotropic or 4 Automatic."},
+    OperationNotes{"bloom.layer.set-snap",
+        "Sets whether a layer's position snaps to whole pixels: the final position on screen, "
+        "after parenting, rounds to the nearest pixel, so a moving pixel-art sprite keeps its "
+        "pixels whole. Off, On or Automatic (on in a pixel-art composition). A layer saved "
+        "without a snap does not snap; a plain Merge entry takes bloom.merge.set-entry-parameter "
+        "with role snap.",
+        "parameter", "bloom.layer.set-filter bloom.composition.set-settings query:layers",
+        "[invalid-argument] The snap is not 0..2 => pick 0 Off, 1 On or 2 Automatic."},
     OperationNotes{"bloom.layer.add-mask",
         "Adds a mask to a layer. The path is in the layer's content space (pixels of the layer's "
         "own content, before its transform).",

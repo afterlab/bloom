@@ -399,6 +399,20 @@ void addMergeEntryOperations(std::vector<OperationDescriptor>& descriptors) {
                                                                           value);
                     }));
             }
+            // #743: the optional snap likewise, through bloom.layer.set-snap's command.
+            if (*roleName == document::kLayerSnapParameterRole) {
+                if (key)
+                    return argumentFailure(op, "time", "the snap is not animatable");
+                const auto snap = integerOf(args.at("value"));
+                if (!snap || *snap < 0 || *snap > 2)
+                    return argumentFailure(op, "value", "snap is 0 Off, 1 On or 2 Automatic");
+                return made(std::make_unique<commands::EntryLayerEdit>(
+                    entry->composition, entry->merge, entry->slot,
+                    [composition = entry->composition,
+                     value = *snap](const LayerId layer) -> std::unique_ptr<commands::Operation> {
+                        return std::make_unique<commands::SetLayerSnap>(composition, layer, value);
+                    }));
+            }
             return made(std::make_unique<commands::EntryLayerEdit>(
                 entry->composition, entry->merge, entry->slot,
                 [composition = entry->composition, role = *roleName,

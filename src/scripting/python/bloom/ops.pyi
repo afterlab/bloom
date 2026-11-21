@@ -3138,7 +3138,7 @@ class CompositionOps:
         Related: bloom.composition.set-settings, transact
         """
         ...
-    def set_settings(self, name: str = ..., width: int = ..., height: int = ..., pixelAspectNumerator: int = ..., pixelAspectDenominator: int = ..., frameRateNumerator: int = ..., frameRateDenominator: int = ..., duration: Time = ..., start: Time = ..., dropFrame: bool = ..., background: tuple[float, float, float, float] = ..., workingColorSpace: str = ..., actionSafe: float = ..., titleSafe: float = ..., anchor: int = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def set_settings(self, name: str = ..., width: int = ..., height: int = ..., pixelAspectNumerator: int = ..., pixelAspectDenominator: int = ..., frameRateNumerator: int = ..., frameRateDenominator: int = ..., duration: Time = ..., start: Time = ..., dropFrame: bool = ..., background: tuple[float, float, float, float] = ..., workingColorSpace: str = ..., actionSafe: float = ..., titleSafe: float = ..., anchor: int = ..., pixelArt: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.composition.set-settings  (operation, composition)
         Changes the named Composition Settings in one step; omitted settings stay. A size change keeps
         top-level layers pinned to `anchor`.
@@ -3214,6 +3214,9 @@ class CompositionOps:
                 6  Bottom left
                 7  Bottom centre
                 8  Bottom right
+          pixelArt  bool  optional
+              Pixel-art mode: Automatic filters read Nearest and layers whose snap is Automatic snap to
+              whole pixels.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -6190,9 +6193,9 @@ class LayerOps:
         """bloom.layer.set-filter  (operation, layer)
         Sets how a layer's transform resamples its image: Bilinear, Nearest (pixel art, IDs), Trilinear
         (mipmapped, smooth when the layer is shrunk), Anisotropic (sharper when it is shrunk more along
-        one axis) or Automatic (Trilinear). Trilinear and Anisotropic equal Bilinear when the layer is
-        not shrunk. A layer saved without a filter is Bilinear; a plain Merge entry takes
-        bloom.merge.set-entry-parameter with role filter.
+        one axis) or Automatic (Trilinear, or Nearest in a pixel-art composition). Trilinear and
+        Anisotropic equal Bilinear when the layer is not shrunk. A layer saved without a filter is
+        Bilinear; a plain Merge entry takes bloom.merge.set-entry-parameter with role filter.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -6206,7 +6209,8 @@ class LayerOps:
               Range: >= 1
           filter  int  required
               Integer. The layer transform's resample filter: 0 Bilinear, 1 Nearest, 2 Trilinear
-              (mipmapped), 3 Anisotropic, 4 Automatic (Trilinear).
+              (mipmapped), 3 Anisotropic, 4 Automatic (Trilinear, or Nearest in a pixel-art
+              composition).
           merge  id  optional
               Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
               no layer yet its own layer is created at its defaults in the same undo step; the result
@@ -6975,6 +6979,74 @@ class LayerOps:
             bloom-cli run edits.json   # [{"op":"bloom.layer.set-shy","args":{"shy":true}}]
 
         Related: query:layers, transact
+        """
+        ...
+    def set_snap(self, snap: int, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.set-snap  (operation, layer)
+        Sets whether a layer's position snaps to whole pixels: the final position on screen, after
+        parenting, rounds to the nearest pixel, so a moving pixel-art sprite keeps its pixels whole.
+        Off, On or Automatic (on in a pixel-art composition). A layer saved without a snap does not
+        snap; a plain Merge entry takes bloom.merge.set-entry-parameter with role snap.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer to edit: a layer id, not its node's id. Defaults to the first selected layer. Or
+              give merge and slot instead to edit a Merge entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          snap  int  required
+              Integer. Whether the layer's final position rounds to whole pixels: 0 Off, 1 On, 2
+              Automatic (on in a pixel-art composition).
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          parameter parameter
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: parameter
+          (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.invalid-argument
+              When: The snap is not 0..2
+              Do: pick 0 Off, 1 On or 2 Automatic.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.set-snap","args":{"snap":1}}]}}
+          Python:
+            bloom.ops.layer.set_snap(snap=1)
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.set-snap","args":{"snap":1}}]
+
+        Related: bloom.layer.set-filter, bloom.composition.set-settings, query:layers, transact
         """
         ...
     def set_solo(self, solo: bool, merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
@@ -7760,6 +7832,7 @@ class MergeOps:
                 "blendMode"  blendMode
                 "timeRemap"  timeRemap
                 "filter"  filter
+                "snap"  snap
           value  value  required
               Value. In the parameter's stored units: [x, y] for position, anchor and scale, degrees for
               rotation, 0..1 for opacity, a blend mode's value or label, seconds for timeRemap, 0..4 for
