@@ -8,7 +8,10 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <map>
+#include <tuple>
 #include <string>
+#include <type_traits>
 #include <utility>
 
 namespace bloom::document {
@@ -318,6 +321,49 @@ std::optional<std::string> CueListValue::problem() const {
 }
 
 bool CueListValue::isValid() const { return !problem().has_value(); }
+
+void reconcileCueIds(const CueListValue& previous, CueListValue& next) {
+    // Three passes, each matching every previous cue at most once and in list order: the same
+    // start, end and text; then the same start and end (the text was corrected); then the same
+    // text (the cue was retimed).
+    std::vector<bool> taken(previous.cues.size(), false);
+    std::vector<std::uint64_t> assigned(next.cues.size(), 0);
+    const auto pass = [&](const auto& keyOf) {
+        std::map<std::invoke_result_t<decltype(keyOf), const Cue&>, std::vector<std::size_t>> open;
+        for (auto index = previous.cues.size(); index > 0; --index)
+            if (!taken[index - 1])
+                open[keyOf(*previous.cues[index - 1])].push_back(index - 1);
+        for (std::size_t index = 0; index < next.cues.size(); ++index) {
+            if (assigned[index] != 0)
+                continue;
+            const auto found = open.find(keyOf(*next.cues[index]));
+            if (found == open.end())
+                continue;
+            while (!found->second.empty() && taken[found->second.back()])
+                found->second.pop_back();
+            if (found->second.empty())
+                continue;
+            const auto match = found->second.back();
+            found->second.pop_back();
+            taken[match] = true;
+            assigned[index] = previous.cues[match]->id;
+        }
+    };
+    pass([](const Cue& cue) { return std::tuple(cue.start, cue.end, std::string_view(cue.text)); });
+    pass([](const Cue& cue) { return std::pair(cue.start, cue.end); });
+    pass([](const Cue& cue) { return std::string_view(cue.text); });
+    std::uint64_t fresh = std::max<std::uint64_t>(previous.nextCueId, 1);
+    std::vector<CueHandle> cues;
+    cues.reserve(next.cues.size());
+    for (std::size_t index = 0; index < next.cues.size(); ++index) {
+        auto cue = std::make_shared<Cue>(*next.cues[index]);
+        cue->id = assigned[index] != 0 ? assigned[index] : fresh++;
+        cues.push_back(std::move(cue));
+    }
+    next.cues = std::move(cues);
+    next.nextCueId = fresh;
+    canonicalizeCueList(next);
+}
 
 const CueStyle* CueListValue::findStyle(const std::string_view name) const noexcept {
     const auto found = std::ranges::lower_bound(

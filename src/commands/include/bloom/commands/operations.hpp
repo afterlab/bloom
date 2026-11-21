@@ -7,6 +7,7 @@
 #include <bloom/commands/layer_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operation.hpp>
+#include <bloom/document/cue_list.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -167,6 +168,35 @@ class AddTextLayer final : public Operation {
     double size_ = document::kDefaultTextSizePixels;
     core::Color4d color_{1.0, 1.0, 1.0, 1.0};
     TextLayerStyle style_;
+};
+
+// #752: bloom.layer.add-subtitles. A Subtitles node holding `cues` (read before the operation is
+// built, its provenance a linked file or authored) as the content of a new layer on top of the
+// stack, the topology AddTextLayer builds. The node's canvas is the composition frame, so the layer
+// sits at the frame's centre.
+class AddSubtitlesLayer final : public Operation {
+  public:
+    // `warnings` are the read's report rows, published as the operation's warnings. Besides the
+    // layer outputs, one "cue" output names each cue of the list.
+    AddSubtitlesLayer(document::CompositionId compositionId, std::string name,
+                      document::CueListValue cues, std::vector<std::string> warnings = {})
+        : compositionId_(compositionId), name_(std::move(name)), cues_(std::move(cues)),
+          warnings_(std::move(warnings)) {}
+
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::size_t workUnits() const noexcept override {
+        return cues_.cues.empty() ? 1 : cues_.cues.size();
+    }
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return compositionId_;
+    }
+
+  private:
+    document::CompositionId compositionId_;
+    std::string name_;
+    document::CueListValue cues_;
+    std::vector<std::string> warnings_;
 };
 
 class SetProjectName final : public Operation {

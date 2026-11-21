@@ -4,6 +4,7 @@
 
 #include <bloom/document/animation.hpp>
 #include <bloom/document/evaluation_inputs.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
 
 #include <algorithm>
 #include <array>
@@ -97,6 +98,52 @@ void componentChangeSpans(const std::vector<Keyframe>& before, const std::vector
                 result.push_back({start, end});
         }
     return result;
+}
+
+// #752: the times a cue list edit changed, on the Subtitles node's own clock: the union of the old
+// and new [start, end) spans of every cue added, removed or changed (a cue's fades fall inside its
+// span). nullopt when the change reaches every time: the language or a style changed, or `owner`'s
+// Cues or Index output is read (a list passed on, or an index that every later cue shifts).
+[[nodiscard]] std::optional<std::vector<RenderTimeSpan>>
+cueListChangeSpans(const document::Composition& before, const document::Composition& after,
+                   const document::NodeId owner, const document::CueListValue& old,
+                   const document::CueListValue& current) {
+    for (const auto* composition : {&before, &after}) {
+        const auto& graph = composition->graph();
+        const auto reads = [&](const std::string_view port) {
+            return port == document::kSubtitlesCuesPort || port == document::kSubtitlesIndexPort;
+        };
+        if (std::ranges::any_of(graph.edges(), [&](const document::EdgeRecord& edge) {
+                return edge.source.nodeId == owner && reads(edge.source.port);
+            }))
+            return std::nullopt;
+        for (const auto& record : composition->parameters().records())
+            if (const auto* driver = std::get_if<document::DriverBindingSource>(&record.source);
+                driver != nullptr && driver->sourceNodeId == owner && reads(driver->outputPort))
+                return std::nullopt;
+    }
+    if (old.language != current.language || old.styles != current.styles)
+        return std::nullopt;
+    std::map<std::uint64_t, const document::Cue*> previous;
+    for (const auto& cue : old.cues)
+        previous.emplace(cue->id, cue.get());
+    std::vector<RenderTimeSpan> spans;
+    for (const auto& cue : current.cues) {
+        const auto found = previous.find(cue->id);
+        if (found != previous.end()) {
+            const auto* was = found->second;
+            previous.erase(found);
+            if (was == cue.get() || *was == *cue)
+                continue;
+            spans.push_back({was->start, was->end});
+        }
+        spans.push_back({cue->start, cue->end});
+    }
+    for (const auto& [id, removed] : previous) {
+        static_cast<void>(id);
+        spans.push_back({removed->start, removed->end});
+    }
+    return spans;
 }
 
 // ADR 0024 layer-owned time. Key times of a retimed layer's own parameters are layer time, and of
@@ -354,6 +401,24 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
     const auto far = core::RationalTime::fromInteger(std::int64_t{1} << 40);
     const auto nearFar = core::RationalTime::fromInteger(-(std::int64_t{1} << 40));
 
+    // #752: a cue list constant's change, when its one owner is a Subtitles node.
+    const auto cueEditSpans = [&](const document::ParameterRecord& was,
+                                  const document::ParameterRecord& now,
+                                  const document::ParameterId id)
+        -> std::optional<std::vector<RenderTimeSpan>> {
+        const auto* a = std::get_if<document::ConstantValueSource>(&was.source);
+        const auto* b = std::get_if<document::ConstantValueSource>(&now.source);
+        const auto* oldList = a ? std::get_if<document::CueListValue>(&a->value) : nullptr;
+        const auto* newList = b ? std::get_if<document::CueListValue>(&b->value) : nullptr;
+        const auto found = owners.find(id);
+        if (oldList == nullptr || newList == nullptr || found == owners.end() ||
+            found->second.size() != 1)
+            return std::nullopt;
+        const auto* node = after->graph().findNode(found->second.front());
+        if (node == nullptr || node->typeId != document::kSubtitlesNodeType)
+            return std::nullopt;
+        return cueListChangeSpans(*before, *after, node->id, *oldList, *newList);
+    };
     std::vector<RenderTimeSpan> changed;
     for (const auto& [id, pair] : parameters) {
         const auto [old, current] = pair;
@@ -374,6 +439,15 @@ std::optional<AffectedTimeFootprint> parameterEditFootprint(
             std::vector<RenderTimeSpan> unbounded;
             if (a != nullptr && b != nullptr && curveChangeSpans(*a, *b, far, unbounded, nearFar))
                 clockTimes = std::move(unbounded);
+        } else if (const auto cueSpans =
+                       !sameRecord && old != nullptr && current != nullptr &&
+                               old->schemaKey == current->schemaKey
+                           ? cueEditSpans(*old, *current, id)
+                           : std::nullopt) {
+            times = intersect(*cueSpans, whole);
+            clockTimes = *cueSpans;
+            if (times.empty() && cueSpans->empty())
+                continue; // only the provenance changed: nothing renders differently
         } else if (!sameRecord) {
             times = whole;
         } else {

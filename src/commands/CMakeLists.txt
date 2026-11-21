@@ -17,6 +17,7 @@ target_sources(
         node_operations.cpp
         keyframe_bake_operations.cpp
         number_list_write_operations.cpp
+        subtitles_operations.cpp
         path_write_operations.cpp
         entry_layer_operations.cpp
         svg_import_operations.cpp
@@ -61,6 +62,7 @@ target_sources(
             include/bloom/commands/node_operations.hpp
             include/bloom/commands/keyframe_bake_operations.hpp
             include/bloom/commands/number_list_write_operations.hpp
+            include/bloom/commands/subtitles_operations.hpp
             include/bloom/commands/path_write_operations.hpp
             include/bloom/commands/group_definition_operations.hpp
             include/bloom/commands/path_glow_presets.hpp

@@ -165,3 +165,10 @@ target_link_libraries(bloom_commands_svg_import_test PRIVATE bloom_commands bloo
 bloom_enable_warnings(bloom_commands_svg_import_test)
 bloom_add_test(NAME bloom.commands.svg-import COMMAND bloom_commands_svg_import_test
     LABELS commands unit TIMEOUT 60)
+
+# #752: the cue-list edits: undo, structural sharing, ids, footprints and refusals.
+add_executable(bloom_commands_subtitles_test subtitles_operations_tests.cpp)
+target_link_libraries(bloom_commands_subtitles_test PRIVATE bloom_commands)
+bloom_enable_warnings(bloom_commands_subtitles_test)
+bloom_add_test(NAME bloom.commands.subtitles COMMAND bloom_commands_subtitles_test
+               LABELS commands unit TIMEOUT 30)

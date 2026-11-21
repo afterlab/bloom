@@ -28,6 +28,7 @@ struct DataBlockRecordIdTag;
 struct LayerMaskIdTag;
 struct ExportJobIdTag;
 struct ExportOutputIdTag;
+struct CueIdTag;
 
 using AssetFolderId = core::Id<AssetFolderIdTag>;
 using AssetId = core::Id<AssetIdTag>;
@@ -50,6 +51,9 @@ using LayerMaskId = core::Id<LayerMaskIdTag>;
 // namespace; a deleted or undone job never frees its id for reuse.
 using ExportJobId = core::Id<ExportJobIdTag>;
 using ExportOutputId = core::Id<ExportOutputIdTag>;
+// #752: a cue's identity within its cue list (document::Cue::id). Not allocated here: each list
+// numbers its own cues from its nextCueId and never reuses one.
+using CueId = core::Id<CueIdTag>;
 
 struct IdAllocatorHighWater final {
     std::uint64_t composition = 0;

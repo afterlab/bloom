@@ -171,6 +171,14 @@ struct CueListValue {
 // Sorts the cues into (start, end, id) order and the styles by name. Does not validate.
 void canonicalizeCueList(CueListValue& list);
 
+// #752: gives `next` (a list just read, its ids 1..n) the ids of `previous` wherever a cue keeps
+// its times or its text, so a reload keeps every reference to a cue that was not replaced. Three
+// passes match the same start, end and text, then the same start and end, then the same text; each
+// previous cue is matched at most once, in list order. The other cues take fresh ids from
+// `previous.nextCueId` upward (never an id `previous` used), and `next.nextCueId` follows them.
+// `next` is canonicalized.
+void reconcileCueIds(const CueListValue& previous, CueListValue& next);
+
 // The WebVTT default color classes, which are built-in styles: `white lime cyan red yellow
 // magenta blue black` and their `bg_` forms. Every list may name them without declaring them.
 [[nodiscard]] bool isBuiltInCueStyleName(std::string_view name) noexcept;

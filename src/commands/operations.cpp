@@ -1,5 +1,7 @@
 #include <bloom/commands/node_layout_arrange.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
+#include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/resample_filter.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 
@@ -755,6 +757,46 @@ OperationResult AddShapeLayer::apply(document::Draft& draft) const {
         {"layer", "slot", "shapeNode", "layerOutputNode", "positionParameter", "anchorParameter",
          "scaleParameter", "rotationParameter", "opacityParameter", "blendModeParameter",
          "shapeToLayerEdge", "layerToStackEdge"});
+}
+
+std::string_view AddSubtitlesLayer::typeId() const noexcept { return "bloom.layer.add-subtitles"; }
+OperationResult AddSubtitlesLayer::apply(document::Draft& draft) const {
+    auto* composition = draft.project().findComposition(compositionId_);
+    if (!composition)
+        return invalidComposition(compositionId_);
+    if (!document::isValidHumanFacingName(name_))
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "A subtitles layer's name is 1 to 4096 bytes of text");
+    if (auto problem = cues_.problem())
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "The cues do not form a valid list: " + *problem);
+    const auto definition = document::subtitlesDefinition();
+    StructuredLayerDescriptor descriptor{document::kSubtitlesNodeType,
+                                         document::kSubtitlesNodeSchemaVersion,
+                                         document::kSubtitlesImagePort,
+                                         {}};
+    for (const auto& parameter : definition.parameters) {
+        auto value = parameter.defaultValue;
+        if (parameter.role == document::kSubtitlesCuesRole)
+            value = cues_;
+        descriptor.sourceParameters.push_back(
+            {parameter.role, parameter.schemaKey, std::move(value), parameter.role});
+    }
+    auto added = addStructuredLayer(
+        draft, *composition, name_, std::move(descriptor),
+        document::Vec2d{static_cast<double>(composition->format().width()) / 2.0,
+                        static_cast<double>(composition->format().height()) / 2.0},
+        1.0,
+        {"layer", "slot", "subtitlesNode", "layerOutputNode", "positionParameter",
+         "anchorParameter", "scaleParameter", "rotationParameter", "opacityParameter",
+         "blendModeParameter", "subtitlesToLayerEdge", "layerToStackEdge"});
+    if (added.status == OperationStatus::Rejected)
+        return added;
+    for (const auto& cue : cues_.cues)
+        added.outputs.push_back({"cue", document::CueId::fromRaw(cue->id)});
+    for (const auto& warning : warnings_)
+        added.issues.push_back({OperationIssueCode::InvalidValue, warning});
+    return added;
 }
 
 std::string_view AddSolidLayer::typeId() const noexcept { return "bloom.layer.add-solid"; }
