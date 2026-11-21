@@ -4,6 +4,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <algorithm>
+#include <bloom/core/coordinate_space.hpp>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/runtime/audio_analysis.hpp>
@@ -14,6 +15,7 @@
 #include <bloom/ui/composition_authoring.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <chrono>
+#include <cmath>
 #include <mutex>
 #include <optional>
 #include <thread>
@@ -109,6 +111,29 @@ QString numberListReadout(const std::vector<double>& values) {
                                 .arg(shown.join(QStringLiteral(", ")));
 }
 
+// #591: a space as its name and its size per unit at its origin.
+QString spaceReadout(const runtime::CompiledSpaceValue& held) {
+    if (held.value == nullptr)
+        return QObject::tr("No space");
+    const auto& space = *held.value;
+    const auto name = space.name.empty() ? QObject::tr("Unnamed space")
+                                         : QString::fromStdString(space.name);
+    const auto read = core::space::readout(space.toPixels);
+    if (!read)
+        return QObject::tr("%1: origin at infinity").arg(name);
+    // Short enough for a Properties row: the name and the scale at the origin. Where the origin
+    // lands is Space Readout's to say.
+    auto text = QObject::tr("%1 · %2 × %3 px/unit")
+                    .arg(name)
+                    .arg(read->scale.x, 0, 'g', 4)
+                    .arg(read->scale.y, 0, 'g', 4);
+    if (std::abs(read->rotationDegrees) > 0.0)
+        text += QObject::tr(" · %1°").arg(read->rotationDegrees, 0, 'g', 4);
+    if (!core::space::isAffine(space.toPixels))
+        text += QObject::tr(" · perspective");
+    return text;
+}
+
 QString valueText(const runtime::CompiledValue& value) {
     return std::visit(
         [](const auto& held) -> QString {
@@ -135,6 +160,8 @@ QString valueText(const runtime::CompiledValue& value) {
                     .arg(held.value->anchorCount());
             else if constexpr (std::is_same_v<T, runtime::CompiledNumberList>)
                 return numberListReadout(*held.values);
+            else if constexpr (std::is_same_v<T, runtime::CompiledSpaceValue>)
+                return spaceReadout(held);
             else
                 return QString::number(static_cast<qlonglong>(held));
         },

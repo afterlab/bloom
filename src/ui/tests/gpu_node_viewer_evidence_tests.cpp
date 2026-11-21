@@ -137,6 +137,9 @@ struct Scenario final {
     // #743: the composition is in pixel-art mode (Automatic filters read Nearest, Automatic snaps
     // round the layer to whole pixels).
     bool pixelArt = false;
+    // #591: the source is a stroked Shape whose path is an Axes drawn in a Coordinate Space; the
+    // animated role is the space's, so a RAM preview moves every point of the path through it.
+    bool coordinateSpace = false;
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -217,6 +220,18 @@ struct Scenario final {
                                   Vec2d{0.3, 0.2},
                                   Vec2d{2.7, 1.1}};
     out["pixel-art-automatic"].pixelArt = true;
+    // #591: Axes in a coordinate space drawn by a stroked Shape, the space's origin keyed.
+    out["coordinate-space-axes"] = {"bloom.shape-source",
+                                    {{"kind", std::int64_t{6}},
+                                     {"fillEnabled", false},
+                                     {"strokeEnabled", true},
+                                     {"strokeWidth", 3.0}},
+                                    {},
+                                    {},
+                                    "origin",
+                                    Vec2d{960.0, 540.0},
+                                    Vec2d{880.0, 600.0}};
+    out["coordinate-space-axes"].coordinateSpace = true;
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
@@ -811,6 +826,23 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         checks.expect(source.isValid() && setValues(session, source, scenario->sourceValues),
                       "the source node is added");
         document::NodeId last = source;
+        document::NodeId space;
+        if (scenario->coordinateSpace) {
+            space = addNode(session, "bloom.coordinate-space");
+            const auto axes = addNode(session, "bloom.axes");
+            checks.expect(
+                space.isValid() && axes.isValid() &&
+                    setValues(session, space,
+                              {{"origin", document::Vec2d{960.0, 540.0}},
+                               {"pixelsPerUnit", document::Vec2d{80.0, 60.0}},
+                               {"rotation", 15.0}}) &&
+                    setValues(session, axes,
+                              {{"xMin", -6.0}, {"xMax", 6.0}, {"yMin", -4.0}, {"yMax", 4.0},
+                               {"tickLength", 12.0}}) &&
+                    connect(session, space, axes, "space", "space") &&
+                    connect(session, axes, source, "path", "path"),
+                "the axes are drawn in the space and feed the shape's path");
+        }
         if (scenario->group) {
             checks.expect(buildNodeGroup(session, *scenario, source, layerNode),
                           "the Node Group is built, wired and given its exposure");
@@ -834,10 +866,13 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(ui::applyCompositionSettings(session, compositionId, pixelArt),
                           "the composition is put in pixel-art mode");
         }
-        if (options.ramFrames > 0 && (!scenario->effect.empty() || scenario->animateSource) &&
+        if (options.ramFrames > 0 &&
+            (!scenario->effect.empty() || scenario->animateSource || scenario->coordinateSpace) &&
             !scenario->animatedRole.empty()) {
             // Key the animated value on the first and on the last frame.
-            const auto effect = scenario->animateSource ? source : last;
+            const auto effect = scenario->coordinateSpace ? space
+                                : scenario->animateSource ? source
+                                                          : last;
             const auto lastFrame = core::RationalTime::create(options.ramFrames - 1, 25).value();
             const auto parameter = ui::nodeRoleParameter(session, effect, scenario->animatedRole);
             checks.expect(parameter.has_value(), "the animated value exists");

@@ -748,6 +748,7 @@ target_sources(
         viewer_editor_motion.cpp
         viewer_editor_line.cpp
         viewer_editor_warp.cpp
+        viewer_editor_space.cpp
         viewer_editor_analysis.cpp
         viewer_editor_probe.cpp
         composition_preview_controller_analysis.cpp

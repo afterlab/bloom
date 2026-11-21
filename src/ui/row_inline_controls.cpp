@@ -33,6 +33,9 @@ RowInline rowInlineFor(const std::string_view schemaKey) {
     // #349 Image Compare's split line turns about the middle of the image like a dial.
     if (schemaKey == document::imagePixelSchemaKey(document::kImageCompareNodeType, "angle"))
         return RowInline::AngleDial;
+    // #591 Coordinate Space's turn about its origin.
+    if (schemaKey == document::kSpaceRotationParameterSchemaKey)
+        return RowInline::AngleDial;
     if (schemaKey == document::motionSchemaKey(kCameraShakeNodeType, "seed") ||
         schemaKey == document::motionSchemaKey(document::kFrameRateHoldNodeType, "seed") ||
         // #527 Dither's pattern placement, #510 Turbulent's noise and Drizzle's drops.

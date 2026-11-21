@@ -96,14 +96,14 @@ void testLayoutSelectionAndSockets() {
     // Task S1, item 6: the socket palette is its own, not the Data* palette's.
     // ADAPTED (task S7): three more kinds, plus Audio. Both vector widths share SocketVector
     // deliberately -- they read as one family, and a cross-width link is refused by the kind check
-    // regardless.
+    // regardless. #591: a space shares Path's ink and is drawn as a square.
     const std::array mapping{
         kit::Color::SocketImage,       kit::Color::SocketAudio,      kit::Color::SocketColor,
         kit::Color::SocketScalar,      kit::Color::SocketVector,     kit::Color::SocketString,
         kit::Color::SocketInteger,     kit::Color::SocketBoolean,    kit::Color::SocketVector,
         kit::Color::SocketImage,       kit::Color::SocketChannelSet, kit::Color::SocketScalarField,
         kit::Color::SocketVectorField, kit::Color::SocketColorField, kit::Color::SocketPath,
-        kit::Color::SocketNumberList};
+        kit::Color::SocketNumberList,  kit::Color::SocketPath};
     for (std::size_t i = 0; i < mapping.size(); ++i)
         expect(socketColorToken(static_cast<document::SocketValueKind>(i)) == mapping[i],
                "all socket palette mappings use the socket roles");

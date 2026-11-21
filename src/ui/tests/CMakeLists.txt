@@ -1473,6 +1473,13 @@ target_include_directories(bloom_layer_filter_snap_capture PRIVATE ${CMAKE_CURRE
 target_link_libraries(bloom_layer_filter_snap_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_layer_filter_snap_capture)
 
+# #591 review captures of the coordinate space nodes' Properties and cards (a tool, not a test):
+# bloom_coordinate_space_capture <directory>, with QT_SCALE_FACTOR 1 or 1.5.
+add_executable(bloom_coordinate_space_capture coordinate_space_capture.cpp)
+target_include_directories(bloom_coordinate_space_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_coordinate_space_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_coordinate_space_capture)
+
 # The shared global-preferences model: defaults, round-trip, invalid-value fallback, and the
 # absolute-path/zero-budget rules the existing readers rely on. Also covers non-finite grid values.
 add_executable(bloom_application_preferences_test application_preferences_tests.cpp)
@@ -1929,6 +1936,18 @@ target_link_libraries(bloom_warp_viewer_ui_test PRIVATE bloom_ui bloom_runtime_c
 target_include_directories(bloom_warp_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
 bloom_enable_warnings(bloom_warp_viewer_ui_test)
 bloom_add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test
+    LABELS ui integration TIMEOUT 180
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
+
+# #591: the on-Viewer handles of a Coordinate Space: its origin, rectangle centre or corners, each
+# drag one command, Escape confirming it, and no handles for a parented space.
+add_executable(bloom_space_viewer_ui_test space_viewer_ui_tests.cpp)
+target_include_directories(bloom_space_viewer_ui_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_space_viewer_ui_test PRIVATE bloom_ui bloom_runtime_compiler
+    bloom_runtime_evaluator bloom_commands Qt6::Test)
+target_include_directories(bloom_space_viewer_ui_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+bloom_enable_warnings(bloom_space_viewer_ui_test)
+bloom_add_test(NAME bloom.ui.space-viewer COMMAND bloom_space_viewer_ui_test
     LABELS ui integration TIMEOUT 180
     ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
@@ -2940,7 +2959,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-warp procedural-warp-bend procedural-warp-split
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
-                              procedural-warp-magnify-pull procedural-warp-ripple-pulse)
+                              procedural-warp-magnify-pull procedural-warp-ripple-pulse
+                              coordinate-space-axes)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2950,7 +2970,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #742, #743, #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #743, #511, #528, #519, #527, #510 and #591: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
                               corner-pin-trilinear pixel-art-automatic
@@ -2965,7 +2985,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-warp procedural-warp-bend procedural-warp-split
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
-                              procedural-warp-magnify-pull procedural-warp-ripple-pulse)
+                              procedural-warp-magnify-pull procedural-warp-ripple-pulse
+                              coordinate-space-axes)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

@@ -1110,6 +1110,7 @@ void ViewerEditor::paintViewerContent(QPainter& painter) {
     paintMotionHandles(painter, painted.mapping);
     paintLineHandles(painter, painted.mapping);
     paintWarpHandles(painter, painted.mapping);
+    paintSpaceHandles(painter, painted.mapping);
 
     if (coverSnapshotInProgress_)
         coverCaptureDisplay_ = std::move(painted);
@@ -1349,6 +1350,8 @@ void ViewerEditor::mousePressEvent(QMouseEvent* event) {
         return;
     if (!reference && warpHandlePress(event))
         return;
+    if (!reference && spaceHandlePress(event))
+        return;
     if (!reference && cryptomattePress(event))
         return;
     if (!reference && textEditPress(event))
@@ -1493,6 +1496,8 @@ void ViewerEditor::mouseMoveEvent(QMouseEvent* event) {
         return;
     if (warpHandleMove(event))
         return;
+    if (spaceHandleMove(event))
+        return;
     if (textEdit_) {
         if (textEdit_->dragging)
             moveTextCaret(event->position(), true);
@@ -1612,6 +1617,8 @@ void ViewerEditor::mouseReleaseEvent(QMouseEvent* event) {
         return;
     if (warpHandleRelease(event))
         return;
+    if (spaceHandleRelease(event))
+        return;
     if (textEdit_ && event->button() == Qt::LeftButton) {
         textEdit_->dragging = false;
         event->accept();
@@ -1713,6 +1720,11 @@ void ViewerEditor::keyPressEvent(QKeyEvent* event) {
     }
     if (warpDrag_ && event->key() == Qt::Key_Escape) {
         finishWarpHandle();
+        event->accept();
+        return;
+    }
+    if (spaceDrag_ && event->key() == Qt::Key_Escape) {
+        finishSpaceHandle();
         event->accept();
         return;
     }

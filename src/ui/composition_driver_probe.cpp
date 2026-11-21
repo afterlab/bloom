@@ -117,8 +117,9 @@ runtime::SnapshotCompileResult compileDriverProbe(const document::Snapshot& snap
             return {};
         }
         // #627: no image node reads a list, so a list output is compiled as a value readout
-        // instead of through a private sink.
-        if (*kind == document::SocketValueKind::NumberList) {
+        // instead of through a private sink. #591: nor a space, which no parameter can hold.
+        if (*kind == document::SocketValueKind::NumberList ||
+            *kind == document::SocketValueKind::Space) {
             valueReadouts.push_back(output.nodeId);
             continue;
         }

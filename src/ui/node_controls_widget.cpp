@@ -708,6 +708,11 @@ struct Controls final {
                                     0.0, 200.0, 100.0, 50.0});
         controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
                                     0.0, 100.0, 0.0, 25.0});
+    } else if (typeId == document::kCoordinateSpaceNodeType) {
+        // #591: the turn on a dial (clockwise on screen); the card shows only what the mode reads
+        // (the origin and scale, the rectangle or the corners), as Properties does.
+        controls.angles.push_back(
+            angle("rotation", std::string(document::kSpaceRotationParameterSchemaKey), false, false));
     } else if (typeId == document::kShapeMorphNodeType) {
         // #597: how far from the first shape to the second, on a track, in percent.
         controls.sliders.push_back({"amount", std::string(document::kMorphAmountSchemaKey), 0.0,

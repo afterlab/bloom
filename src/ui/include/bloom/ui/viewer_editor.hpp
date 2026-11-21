@@ -876,6 +876,18 @@ class ViewerEditor final : public QWidget,
     bool warpHandleRelease(QMouseEvent* event);
     void finishWarpHandle();
     void paintWarpHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
+    // #591 Coordinate Space: the selected space's origin, rectangle centre or corners as handles
+    // over the frame, each drag one edit of one parameter (viewer_editor_space.cpp).
+    struct SpaceHandleDrag final {
+        document::NodeId node;
+        std::string role;
+    };
+    std::optional<SpaceHandleDrag> spaceDrag_;
+    bool spaceHandlePress(QMouseEvent* event);
+    bool spaceHandleMove(QMouseEvent* event);
+    bool spaceHandleRelease(QMouseEvent* event);
+    void finishSpaceHandle();
+    void paintSpaceHandles(QPainter& painter, const std::optional<ViewerMapping>& painted) const;
     bool textPress(QMouseEvent* event);
     bool creationMove(QMouseEvent* event);
     bool creationRelease(QMouseEvent* event);

@@ -59,6 +59,10 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
         return kit::Color::SocketPath;
     case runtime::SocketValueKind::NumberList:
         return kit::Color::SocketNumberList;
+    // #591: no hue is left 20 degrees from every other socket role, so a space shares the Path's
+    // pale steel blue (both are geometry) and is told apart by its square socket and its name.
+    case runtime::SocketValueKind::Space:
+        return kit::Color::SocketPath;
     }
     return kit::Color::SocketImage;
 }
@@ -692,6 +696,8 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Path");
     case document::SocketValueKind::NumberList:
         return QStringLiteral("Number List");
+    case document::SocketValueKind::Space:
+        return QStringLiteral("Space");
     }
     return {};
 }
@@ -924,6 +930,12 @@ void SocketItem::paint(QPainter* painter, const QStyleOptionGraphicsItem*, QWidg
         const qreal r = radius * 1.25;
         painter->drawPolygon(QPolygonF({QPointF(0.0, -r), QPointF(r, 0.0), QPointF(0.0, r),
                                         QPointF(-r, 0.0)}));
+        return;
+    }
+    // #591: a space socket is a square -- the frame it carries -- since it shares Path's ink.
+    if (kind == document::SocketValueKind::Space) {
+        const qreal r = radius * 0.9;
+        painter->drawRect(QRectF(-r, -r, 2.0 * r, 2.0 * r));
         return;
     }
     if (!multiInput()) {
