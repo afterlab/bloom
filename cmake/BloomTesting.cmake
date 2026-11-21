@@ -38,6 +38,49 @@ set(BLOOM_TEST_FIXED_MEMORY_READING "17179869184,8589934592,8589934592"
 # properties through this function's arguments (or guard with `if(TEST <name>)`), because
 # set_tests_properties fails for a test that is not registered. Never replace a registered test's
 # ENVIRONMENT afterwards (it would drop the reading); pass it here, or APPEND to the property.
+# Whether `target` links Qt, directly or through the libraries it links (their interface and, for a
+# static library, its own links). Sets `result` in the caller.
+function(_bloom_links_qt target result)
+    set(pending "${target}")
+    set(seen)
+    while(pending)
+        list(POP_FRONT pending current)
+        if(current IN_LIST seen)
+            continue()
+        endif()
+        list(APPEND seen "${current}")
+        set(links)
+        foreach(property IN ITEMS LINK_LIBRARIES INTERFACE_LINK_LIBRARIES)
+            get_target_property(values "${current}" ${property})
+            if(values)
+                list(APPEND links ${values})
+            endif()
+        endforeach()
+        foreach(link IN LISTS links)
+            string(REGEX REPLACE "^\\$<LINK_ONLY:(.*)>$" "\\1" link "${link}")
+            if(link MATCHES "^Qt6?::")
+                set(${result} TRUE PARENT_SCOPE)
+                return()
+            endif()
+            if(TARGET "${link}")
+                get_target_property(imported "${link}" IMPORTED)
+                if(NOT imported)
+                    list(APPEND pending "${link}")
+                endif()
+            endif()
+        endforeach()
+    endwhile()
+    set(${result} FALSE PARENT_SCOPE)
+endfunction()
+
+function(_bloom_isolate_test_settings target)
+    _bloom_links_qt("${target}" links_qt)
+    if(links_qt)
+        target_sources("${target}"
+                       PRIVATE "${PROJECT_SOURCE_DIR}/tests/support/isolated_qt_settings_startup.cpp")
+    endif()
+endfunction()
+
 function(bloom_add_test)
     set(options STRESS BENCH COMPOSITOR RUN_SERIAL)
     set(one_value_args NAME TIMEOUT WORKING_DIRECTORY SKIP_RETURN_CODE LIVE_MEMORY)
@@ -86,6 +129,19 @@ function(bloom_add_test)
         if(NOT bloom_test_target_imported AND bloom_test_target_type STREQUAL "EXECUTABLE")
             target_include_directories("${bloom_test_target}"
                                        PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+            # #749: a test program that links Qt keeps its default settings in a file of its own
+            # (tests/support/isolated_qt_settings_startup.cpp). Decided once the whole build is
+            # read, when every target_link_libraries of the program has been seen.
+            get_property(bloom_test_settings_deferred TARGET "${bloom_test_target}"
+                         PROPERTY BLOOM_TEST_SETTINGS_DEFERRED)
+            if(NOT bloom_test_settings_deferred)
+                set_property(TARGET "${bloom_test_target}"
+                             PROPERTY BLOOM_TEST_SETTINGS_DEFERRED TRUE)
+                # A deferred call reads its arguments when it runs, so the name is put in now.
+                cmake_language(EVAL CODE
+                    "cmake_language(DEFER DIRECTORY [[${CMAKE_SOURCE_DIR}]]
+                                    CALL _bloom_isolate_test_settings [[${bloom_test_target}]])")
+            endif()
             # macOS scans every new program file once, when it first starts, one file at a time
             # (Gatekeeper's online check and XProtect), and a test waits for that. A relink that
             # gives the same bytes keeps the old, already scanned file (#727;
@@ -138,14 +194,14 @@ function(bloom_add_test)
     # (src/crash/include/bloom/crash/crash_reports.hpp). A test that sets its own folder keeps it:
     # the later entry wins.
     list(PREPEND ARG_ENVIRONMENT "BLOOM_TEST_CRASH_DIRECTORY=${CMAKE_BINARY_DIR}/test-crash-reports")
-    # #749: on macOS every per-user folder is found from the home folder: Bloom's cache and data
-    # folders (~/Library/Caches/bloom, ~/Library/Application Support/Afterlab/Bloom), Qt's
-    # standard locations and the preferences QSettings writes. The XDG_* and LOCALAPPDATA
-    # overrides that keep a test away from the user's own state on Linux and Windows do not reach
-    # most of them there, so each test gets a home of its own in the build tree, in HOME and in
-    # CFFIXED_USER_HOME (the variable CoreFoundation and Foundation take the home from). A test that
-    # sets its own keeps it: the later entry wins. bloom.quality.test_private_home checks that every
-    # registered test has it.
+    # #749: on macOS Bloom's cache and data folders (~/Library/Caches/bloom,
+    # ~/Library/Application Support/Afterlab/Bloom) and Qt's standard locations are found from the
+    # home folder. The XDG_* and LOCALAPPDATA overrides that keep a test away from the user's own
+    # state on Linux and Windows do not reach most of them there, so each test gets a home of its
+    # own in the build tree, in HOME and in CFFIXED_USER_HOME (the variable CoreFoundation and
+    # Foundation take the home from). A test that sets its own keeps it: the later entry wins.
+    # bloom.quality.test_private_home checks that every registered test has it. (The preferences
+    # daemon ignores both, which is why a Qt test's settings are a file of its own instead.)
     if(APPLE)
         set(bloom_test_home "${CMAKE_BINARY_DIR}/test-home/${ARG_NAME}")
         file(MAKE_DIRECTORY "${bloom_test_home}")

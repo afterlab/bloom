@@ -169,26 +169,31 @@ Shared test support lives in `tests/support`:
   and removed when the process exits or the object is destroyed. A file Windows still holds open is
   left and named on stderr; cleanup alone never fails a test. A child process the test starts gets
   the folder by argument or environment.
-- `isolated_qt_settings.hpp`: `isolateQtSettings()`, called in a Qt test's `main` before any
-  `QSettings` is made, puts the default settings in an INI file in the process's own folder.
+- `isolated_qt_settings.hpp`: `isolateQtSettings()` puts the default settings in an INI file in
+  the process's own folder. Every registered Qt test program calls it when its application object
+  is made (`isolated_qt_settings_startup.cpp`); a test that calls it itself, before any `QSettings`
+  is made, is unchanged by that.
   Without it a test's settings live in one per-user place (the configuration folder, Qt's
   test-mode folder, the macOS preferences or the Windows registry) that the same test of another
   build tree shares.
 
-No test reaches the user's own per-user folders on macOS either (#749). There every per-user
-folder is found from the home folder: Bloom's cache and data folders (`~/Library/Caches/bloom`,
-`~/Library/Application Support/Afterlab/Bloom`), Qt's standard locations and the preferences a
-native `QSettings` writes, and the `XDG_*` and `LOCALAPPDATA` overrides the runner and the fixtures
-set on Linux and Windows reach only the cache (`XDG_CACHE_HOME`). So `bloom_add_test` gives each
-test a home of its own on macOS, `<build>/test-home/<test name>`, in `HOME` and in
-`CFFIXED_USER_HOME` (the variable CoreFoundation and Foundation take the home from); a test that
-sets its own keeps it. Two checks hold it: `bloom.quality.test_private_home` reads the CTest files
-and fails for any registered test without that home (its self-test,
+No test reaches the user's own per-user folders on macOS either (#749). There Bloom's cache and
+data folders (`~/Library/Caches/bloom`, `~/Library/Application Support/Afterlab/Bloom`) and Qt's
+standard locations are found from the home folder, and the `XDG_*` and `LOCALAPPDATA` overrides
+the runner and the fixtures set on Linux and Windows reach only the cache (`XDG_CACHE_HOME`). So
+`bloom_add_test` gives each test a home of its own on macOS, `<build>/test-home/<test name>`, in
+`HOME` and in `CFFIXED_USER_HOME` (the variable CoreFoundation and Foundation take the home from); a
+test that sets its own keeps it. The macOS preferences daemon ignores both and keeps a native
+`QSettings` in the user's real home, so settings are kept away by another route on every system:
+`bloom_add_test` adds `tests/support/isolated_qt_settings_startup.cpp` to every test program that
+links Qt, which calls `isolateQtSettings()` when the application object is made (unless the program
+chose an INI default of its own first). Two checks hold it: `bloom.quality.test_private_home` reads
+the CTest files and fails for any registered test without that home (its self-test,
 `bloom.quality.test_private_home_rejects`, runs on every system), and
 `bloom.quality.private_home_locations` runs as a test and requires Bloom's cache, data and GPU
-pipeline cache folders, Qt's writable standard locations and a native `QSettings` file it writes to
-land in the test's own home and nowhere in the real home's folders. Both are registered on macOS
-only, because only there does a test need a home of its own.
+pipeline cache folders and Qt's writable standard locations to be in the test's own home and
+nowhere in the real home's folders, and its default settings to be a file in its process folder.
+Both are registered on macOS only, because only there does a test need a home of its own.
 
 A Python fixture that starts a stdio server (`bloom-mcp`, the MCP HTTP test host) starts and ends
 it through `tests/fixtures/scripting/stdio_child.py` (#750). The server's standard error goes to a
