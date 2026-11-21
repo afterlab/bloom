@@ -3764,21 +3764,31 @@ lowerText(const document::NodeRecord& node) {
         const auto specFor = [](const std::string_view role) {
             return document::textStylingParameterSpecForRole(role);
         };
+        // A value the node does not read now (document::isParameterInactive: the background's
+        // values while it is Off, the outline's color and join while its width is a constant 0)
+        // lowers at its default, as an unbound one does; its curve is not compiled.
+        const auto unread = [&](const std::string_view role) {
+            const auto* binding = findParameterBinding(node, role);
+            const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+            return binding == nullptr ||
+                   (parameter != nullptr &&
+                    document::isParameterInactive(*composition_, node, parameter->schemaKey, role));
+        };
         const auto scalar =
             [&](const std::string_view role) -> std::optional<runtime::CompiledScalarParameter> {
-            const auto* binding = findParameterBinding(node, role);
-            if (binding == nullptr)
+            if (unread(role))
                 return runtime::CompiledScalarParameter{{}, specFor(role)->value};
-            return compiledScalarParameter(binding);
+            return compiledScalarParameter(findParameterBinding(node, role));
         };
         const auto colorOf =
             [&](const std::string_view role) -> std::optional<runtime::CompiledColorParameter> {
-            const auto* binding = findParameterBinding(node, role);
-            if (binding == nullptr)
+            if (unread(role))
                 return runtime::CompiledColorParameter{{}, specFor(role)->color};
-            return compiledColorParameter(binding);
+            return compiledColorParameter(findParameterBinding(node, role));
         };
         const auto discrete = [&](const std::string_view role) {
+            if (unread(role))
+                return static_cast<std::int64_t>(specFor(role)->value);
             const auto* value = parameterConstant<std::int64_t>(findParameterBinding(node, role));
             return value == nullptr ? static_cast<std::int64_t>(specFor(role)->value) : *value;
         };

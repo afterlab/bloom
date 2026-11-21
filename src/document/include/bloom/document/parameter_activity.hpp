@@ -4,7 +4,9 @@
 // Gaussian Blur's vertical radius reads nothing until Separate axes is on, its channel radii nothing
 // until Per-channel radius is on, and Denoise & Smooth's frame count only in Temporal mode, its
 // radius in every mode but Temporal, its strength only while Auto strength is off and its sample
-// region only while Auto strength is on (#524, #514).
+// region only while Auto strength is on (#524, #514). #757: a Text Source's background color,
+// padding and corner radius only while Background is not Off, its outline color and join only while
+// Outline width is not a constant 0.
 //
 // One rule for every reader: Properties and the Timeline hide an inactive row, and the compiler
 // leaves an inactive parameter's animation curve out of the plan, so a curve keyed on a value the

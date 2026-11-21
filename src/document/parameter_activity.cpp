@@ -6,6 +6,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
@@ -37,13 +38,34 @@ namespace {
     return std::nullopt;
 }
 
-// #591: whether something is wired into `node`'s space input.
-[[nodiscard]] bool spaceConnected(const Composition& composition, const NodeRecord& node) {
+// A constant number of `node`; none when it is not a constant (keyed, driven or unbound).
+[[nodiscard]] std::optional<double> constantNumberOf(const Composition& composition,
+                                                     const NodeRecord& node,
+                                                     const std::string_view role) {
+    for (const auto& binding : node.parameters)
+        if (binding.role == role) {
+            const auto* parameter = composition.parameters().find(binding.parameterId);
+            const auto* constant =
+                parameter ? std::get_if<ConstantValueSource>(&parameter->source) : nullptr;
+            if (const auto* number = constant ? std::get_if<double>(&constant->value) : nullptr)
+                return *number;
+        }
+    return std::nullopt;
+}
+
+// Whether something is wired into `node`'s input `port`.
+[[nodiscard]] bool inputConnected(const Composition& composition, const NodeRecord& node,
+                                  const std::string_view port) {
     for (const auto& edge : composition.graph().edges())
         if (const auto* input = std::get_if<NodeInputRef>(&edge.destination);
-            input != nullptr && input->nodeId == node.id && input->port == kSpacePortName)
+            input != nullptr && input->nodeId == node.id && input->port == port)
             return true;
     return false;
+}
+
+// #591: whether something is wired into `node`'s space input.
+[[nodiscard]] bool spaceConnected(const Composition& composition, const NodeRecord& node) {
+    return inputConnected(composition, node, kSpacePortName);
 }
 
 } // namespace
@@ -63,6 +85,27 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
 
 bool isParameterInactive(const Composition& composition, const NodeRecord& node,
                          const std::string_view schemaKey) {
+    // #757 Text Source: the background's color, padding and corner radius are read only while a
+    // Background is drawn; the outline's color and join only while its width can be other than 0
+    // (keyed or driven, it can). An unbound role reads its default (Off, 0).
+    if (node.typeId == kTextSourceNodeType) {
+        const auto* spec = textStylingParameterSpec(schemaKey);
+        if (spec == nullptr)
+            return false;
+        if (spec->role == "backgroundColor" || spec->role == "backgroundPadding" ||
+            spec->role == "backgroundRadius")
+            return constantOf(composition, node, "background").value_or(kTextBackgroundOff) ==
+                   kTextBackgroundOff;
+        if (spec->role == "outlineColor" || spec->role == "outlineJoin") {
+            const bool unbound = std::ranges::none_of(node.parameters, [](const auto& binding) {
+                return binding.role == "outlineWidth";
+            });
+            const auto width = unbound ? std::optional(0.0)
+                                       : constantNumberOf(composition, node, "outlineWidth");
+            return width == 0.0 && !inputConnected(composition, node, "outlineWidth");
+        }
+        return false;
+    }
     if (schemaKey == "bloom.blur.radius-y")
         return constantOf(composition, node, "separate").value_or(0) == 0;
     if (schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||

@@ -28,10 +28,13 @@
 #include "text_styled_frame.hpp"
 
 #include <bloom/commands/animation_operations.hpp>
+#include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/parameter_activity.hpp>
 #include <bloom/document/text_styling.hpp>
+#include <bloom/document/value_nodes.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
 #include <bloom/runtime/text_markup.hpp>
 
@@ -512,6 +515,86 @@ void animationTests(Expectations& expectations,
         gpu.emplace_back("animated frame " + std::to_string(index * 5), frames[index]);
 }
 
+// TX1b: the activity rule every surface and the compiler read. Background Off leaves the
+// background's color, padding and corner radius unread; a constant Outline width of 0 leaves the
+// outline's color and join unread. An unread value lowers at its default even when keyed (its curve
+// is not compiled, and the text still compiles), and is read again as soon as Background is on or
+// the width can change (keyed or driven).
+void activityTests(Expectations& expectations) {
+    const auto inactive = [](const Fixture& made, const std::string_view role) {
+        const auto& owner = composition(made.document, made.main);
+        const auto* node = owner.graph().findNode(made.node);
+        const auto* record = owner.parameters().find(made.id(role));
+        return node != nullptr && record != nullptr &&
+               document::isParameterInactive(owner, *node, record->schemaKey, role);
+    };
+    const std::vector<std::string_view> unread{"backgroundColor", "backgroundPadding",
+                                               "backgroundRadius", "outlineColor", "outlineJoin"};
+    auto made = fixture("Plain words");
+    auto plain = fixture("Plain words");
+    expectations.expect(std::ranges::all_of(unread, [&](auto role) { return inactive(*made, role); }) &&
+                            !inactive(*made, "background") && !inactive(*made, "outlineWidth") &&
+                            !inactive(*made, "markup") && !inactive(*made, "accent1"),
+                        "Background Off and Outline width 0 leave exactly their rows unread");
+    made->key<commands::InsertColor4Keyframe>("backgroundColor", core::Color4d{1.0, 0.0, 0.0, 1.0},
+                                              core::Color4d{0.0, 0.0, 1.0, 1.0});
+    made->key<commands::InsertScalarKeyframe>("backgroundPadding", 0.1, 0.6);
+    made->key<commands::InsertColor4Keyframe>("outlineColor", core::Color4d{0.0, 1.0, 0.0, 1.0},
+                                              core::Color4d{1.0, 0.0, 0.0, 1.0});
+    made->set("outlineJoin", std::int64_t{document::kTextOutlineJoinBevel});
+    if (const auto plan = compile(expectations, *made, "keyed unread values")) {
+        const auto* text = textOf(*plan);
+        expectations.expect(text != nullptr && !text->style.has_value(),
+                            "keyed unread values compile, and the text lowers plain");
+    }
+    {
+        const auto keyed = referenceAt(expectations, *made, frameTime(5), "keyed unread values");
+        const auto reference = referenceAt(expectations, *plain, frameTime(5), "plain");
+        expectations.expect(keyed && reference && samePixels(*keyed, *reference),
+                            "keyed unread values draw exactly as plain text");
+    }
+    made->set("background", std::int64_t{document::kTextBackgroundBlock});
+    expectations.expect(!inactive(*made, "backgroundColor") && !inactive(*made, "backgroundPadding") &&
+                            !inactive(*made, "backgroundRadius") && inactive(*made, "outlineColor"),
+                        "a Background reads its color, padding and radius again");
+    {
+        const auto first = referenceAt(expectations, *made, frameTime(0), "background frame 0");
+        const auto last = referenceAt(expectations, *made, frameTime(10), "background frame 10");
+        expectations.expect(first && last && countPixels(*first, reddish) > 100 &&
+                                countPixels(*last, bluish) > 100,
+                            "the keyed background color draws once Background is on");
+    }
+    made->key<commands::InsertScalarKeyframe>("outlineWidth", 0.5, 4.0);
+    expectations.expect(!inactive(*made, "outlineColor") && !inactive(*made, "outlineJoin"),
+                        "an animated Outline width reads the outline's color and join");
+    expectations.expect(compile(expectations, *made, "animated outline width") != nullptr,
+                        "the keyed outline color compiles once it is read");
+    // A width driven by a value node can change too, even at 0.
+    auto driven = fixture("Driven");
+    {
+        commands::Transaction transaction("Add value", driven->document.snapshot().revision());
+        transaction.emplace<commands::AddNode>(driven->main,
+                                               std::string(document::kScalarValueNodeType),
+                                               document::Vec2d{});
+        auto result = driven->commands.execute(std::move(transaction));
+        const auto value =
+            result.succeeded() ? result.outputId<document::NodeId>(commands::kAddNodeOutput)
+                               : std::nullopt;
+        expectations.expect(value.has_value(), "a Scalar node is added");
+        if (value) {
+            expectations.expect(inactive(*driven, "outlineColor"),
+                                "an unconnected width of 0 leaves the outline color unread");
+            execute<commands::ConnectPorts>(
+                driven->document, driven->commands, driven->main,
+                document::OutputPortRef{*value, std::string(document::kValuePortName)},
+                document::NodeInputRef{driven->node, "outlineWidth"});
+            expectations.expect(!inactive(*driven, "outlineColor") &&
+                                    !inactive(*driven, "outlineJoin"),
+                                "a connected Outline width reads the outline's color and join");
+        }
+    }
+}
+
 void cacheTests(Expectations& expectations) {
     // One evaluator (one operation cache) across the plans an edit makes: the text's image is
     // evaluated again only when what it draws changes.
@@ -617,6 +700,7 @@ int main(int argc, char** argv) {
         outlineTests(expectations, references);
         backgroundTests(expectations, references);
         animationTests(expectations, references);
+        activityTests(expectations);
         cacheTests(expectations);
         outlineSourceTests(expectations);
         budgetAndCancelTests(expectations);

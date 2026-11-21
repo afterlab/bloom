@@ -713,6 +713,10 @@ struct Controls final {
         // #591: nothing of their own to draw. The widget is what lets the card follow activity:
         // while a space is connected it places the drawing, so Origin and Pixels Per Unit have no
         // row (a linked one still shows, so its link never dangles), as in Properties.
+    } else if (typeId == document::kTextSourceNodeType) {
+        // #757: nothing of its own to draw either; with it the card hides the background's color,
+        // padding and corner radius while Background is Off, and the outline's color and join while
+        // Outline width is a constant 0, as Properties and the timeline do.
     } else if (typeId == document::kCoordinateSpaceNodeType) {
         // #591: the turn on a dial (clockwise on screen); the card shows only what the mode reads
         // (the origin and scale, the rectangle or the corners), as Properties does.
