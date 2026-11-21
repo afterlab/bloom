@@ -1001,6 +1001,38 @@ void mergeEntryOperations() {
     expect(!badFilter.succeeded() && badFilter.diagnostic &&
                badFilter.diagnostic->argument == "filter",
            "a filter outside 0..4 is refused naming filter");
+    // #743: the optional snap by role, then by bloom.layer.set-snap on the same entry.
+    args = at(second);
+    args["role"] = Value("snap");
+    args["value"] = Value(std::int64_t{1});
+    expect(fixture.run("bloom.merge.set-entry-parameter", args).succeeded(),
+           "an entry's snap is set by role");
+    entry = view(second);
+    expect(entry && roleValue(*entry, "snap") == document::ParameterValue(std::int64_t{1}),
+           "the entry layer snaps (On)");
+    args = at(second);
+    args["snap"] = Value(std::int64_t{2});
+    expect(fixture.run("bloom.layer.set-snap", args).succeeded(),
+           "set-snap addresses the entry by merge and slot");
+    entry = view(second);
+    expect(entry && roleValue(*entry, "snap") == document::ParameterValue(std::int64_t{2}),
+           "the entry layer's snap is now Automatic");
+    args = at(second);
+    args["snap"] = Value(std::int64_t{3});
+    auto badSnap = fixture.run("bloom.layer.set-snap", args);
+    expect(!badSnap.succeeded() && badSnap.diagnostic && badSnap.diagnostic->argument == "snap",
+           "a snap outside 0..2 is refused naming snap");
+    // #743: pixel-art mode through the composition settings, and back off.
+    auto pixelArt = fixture.run("bloom.composition.set-settings",
+                                {{"composition", composition}, {"pixelArt", Value(true)}});
+    fixture.refresh();
+    expect(pixelArt.succeeded() && fixture.composition(fixture.main).pixelArt(),
+           "set-settings turns pixel-art mode on");
+    pixelArt = fixture.run("bloom.composition.set-settings",
+                           {{"composition", composition}, {"pixelArt", Value(false)}});
+    fixture.refresh();
+    expect(pixelArt.succeeded() && !fixture.composition(fixture.main).pixelArt(),
+           "and off");
     args = at(second);
     args["role"] = Value("position");
     args["value"] = Value(document::Vec2d{10.0, 20.0});
