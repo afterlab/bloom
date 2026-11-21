@@ -147,10 +147,12 @@ bool sameEvaluationLayout(const NodeLayout& left, const NodeLayout& right) {
 
 bool sameEvaluationInputs(const Composition& left, const Composition& right) {
     // Evaluation inputs of the shell. name, folder, workArea, safeAreas, timecode and
-    // backgroundColor are presentation (see the header).
+    // backgroundColor are presentation (see the header). #743: pixel-art mode resolves filters
+    // and snapping, so it is an evaluation input.
     if (left.id() != right.id() || left.duration() != right.duration() ||
         left.format() != right.format() ||
-        left.workingColorSpaceId() != right.workingColorSpaceId())
+        left.workingColorSpaceId() != right.workingColorSpaceId() ||
+        left.pixelArt() != right.pixelArt())
         return false;
     if (left.contentIdentity() == right.contentIdentity())
         return true;

@@ -150,6 +150,8 @@ struct DecodedComposition final {
     document::CompositionTimecode timecode{};
     // #378: the Assets folder holding the composition. Absent means the root.
     std::optional<document::AssetFolderId> folder{};
+    // #743: pixel-art mode. Absent means off.
+    bool pixelArt = false;
 
     friend bool operator==(const DecodedComposition&, const DecodedComposition&) = default;
 };

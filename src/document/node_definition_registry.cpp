@@ -710,13 +710,18 @@ template <typename Definition>
         if (definition.key.typeId == "bloom.transform-2d") {
             const auto motion = bloom::document::transformMotionBlurParameterDefinitions();
             const auto extra = transform2DSkewOpacityParameters();
+            // #743: Snap to Pixels, an optional constant Boolean without a socket, comes last.
             return definition.key.schemaVersion == 1 && definition.inputs.size() == 8 &&
                    hasLeadingImageInput(definition, "input") &&
-                   definition.parameters.size() == 6 + motion.size() + extra.size() &&
+                   definition.parameters.size() == 7 + motion.size() + extra.size() &&
                    std::equal(motion.begin(), motion.end(), definition.parameters.begin() + 6) &&
                    std::equal(extra.begin(), extra.end(),
-                              definition.parameters.end() -
+                              definition.parameters.end() - 1 -
                                   static_cast<std::ptrdiff_t>(extra.size())) &&
+                   definition.parameters.back() ==
+                       ParameterDefinition{"snap",
+                                           std::string(bloom::document::kTransform2DSnapParameterSchemaKey),
+                                           ParameterValueKind::Boolean, false, false, false} &&
                    definition.inputs[5] ==
                        InputPortDefinition{"skew", SocketValueKind::Scalar, false} &&
                    definition.inputs[6] ==
@@ -997,7 +1002,7 @@ template <typename Definition>
         return hasCanonicalKey(definition, kLayerOutputNodeType, kLayerOutputNodeSchemaVersion) &&
                hasLeadingImageInput(definition, kLayerOutputContentInputPort, false) &&
                hasImageOutput(definition, kLayerOutputOutputPort) &&
-               definition.parameters.size() == 8 &&
+               definition.parameters.size() == 9 &&
                hasParameter(definition, 0, kPositionParameterRole, kPositionParameterSchemaKey,
                             ParameterValueKind::Vec2d, true) &&
                hasParameter(definition, 1, kAnchorParameterRole, kAnchorParameterSchemaKey,
@@ -1017,6 +1022,9 @@ template <typename Definition>
                hasParameter(definition, 7, kLayerFilterParameterRole,
                             kLayerFilterParameterSchemaKey, ParameterValueKind::Integer, false,
                             false) &&
+               // #743: the optional pixel snap after it, no socket either.
+               hasParameter(definition, 8, kLayerSnapParameterRole, kLayerSnapParameterSchemaKey,
+                            ParameterValueKind::Integer, false, false) &&
                (definition.inputs.size() == 9 && definition.outputs.size() == 2 &&
                 definition.inputs[1].name == kLayerOutputAudioInputPort &&
                 definition.inputs[1].valueKind == SocketValueKind::Audio &&
@@ -1262,7 +1270,11 @@ template <typename Definition>
              // #742: the transform's resample filter, an inline selector without a socket. A new
              // Layer node binds Automatic; absent (a layer saved before it existed) is Bilinear.
              {std::string(kLayerFilterParameterRole), std::string(kLayerFilterParameterSchemaKey),
-              ParameterValueKind::Integer, false, false, kResampleFilterAutomaticValue}},
+              ParameterValueKind::Integer, false, false, kResampleFilterAutomaticValue},
+             // #743: pixel snap, an inline selector without a socket. A new Layer node binds
+             // Automatic; absent (a layer saved before it existed) does not snap.
+             {std::string(kLayerSnapParameterRole), std::string(kLayerSnapParameterSchemaKey),
+              ParameterValueKind::Integer, false, false, kLayerSnapAutomatic}},
             std::nullopt,
             NodeCardinality::Many,
             NodeCategory::Layers,
@@ -1428,6 +1440,10 @@ template <typename Definition>
     definition.inputs.push_back({"skew", SocketValueKind::Scalar, false});
     definition.inputs.push_back({"skewAxis", SocketValueKind::Scalar, false});
     definition.inputs.push_back({"opacity", SocketValueKind::Scalar, false});
+    // #743: Snap to Pixels, optional (a node saved without it does not snap), no socket.
+    definition.parameters.push_back({"snap",
+                                     std::string(bloom::document::kTransform2DSnapParameterSchemaKey),
+                                     ParameterValueKind::Boolean, false, false, false});
     return definition;
 }
 

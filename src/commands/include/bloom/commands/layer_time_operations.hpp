@@ -105,6 +105,25 @@ class SetLayerFilter final : public Operation {
     std::int64_t filter_ = 0;
 };
 
+// #743: sets the pixel snap of the layer's position (0 Off, 1 On, 2 Automatic: on in a pixel-art
+// composition) the same way, binding the optional `snap` parameter when the layer has none (a layer
+// saved before it existed, which does not snap).
+class SetLayerSnap final : public Operation {
+  public:
+    SetLayerSnap(document::CompositionId composition, document::LayerId layer, std::int64_t snap)
+        : composition_(composition), layer_(layer), snap_(snap) {}
+    [[nodiscard]] std::string_view typeId() const noexcept override;
+    [[nodiscard]] OperationResult apply(document::Draft& draft) const override;
+    [[nodiscard]] std::optional<document::CompositionId> renderScope() const noexcept override {
+        return composition_;
+    }
+
+  private:
+    document::CompositionId composition_;
+    document::LayerId layer_;
+    std::int64_t snap_ = 0;
+};
+
 // Unbinds the Time Remap parameter and erases it with its curve.
 class DisableLayerTimeRemap final : public Operation {
   public:

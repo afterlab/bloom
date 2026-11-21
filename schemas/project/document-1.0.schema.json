@@ -437,6 +437,9 @@
                 },
                 "folder": {
                     "$ref": "#/$defs/objectId"
+                },
+                "pixelArt": {
+                    "const": true
                 }
             },
             "unevaluatedProperties": true

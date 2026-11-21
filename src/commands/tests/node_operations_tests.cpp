@@ -1285,8 +1285,9 @@ void testRecipeCommands(TestContext& test) {
     (void)exercise<SetParameterSource>(test, fixture, *stMapEdges, ConstantValueSource{std::int64_t{3}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *pinCorner,
                                ConstantValueSource{Vec2d{2.0e6, 0.0}});
+    // #742: 3 Trilinear, 4 Anisotropic and 5 Automatic are filters; 6 is not.
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *pinFilter,
-                               ConstantValueSource{std::int64_t{3}});
+                               ConstantValueSource{std::int64_t{6}});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *displaceAmount,
                                ConstantValueSource{2.0e5});
     refuse<SetParameterSource>(test, fixture, OperationIssueCode::InvalidValue, *displaceChannel,
@@ -1852,9 +1853,9 @@ void testRemoveAndDissolve(TestContext& test) {
     exercise<DissolveNode>(test, fixture, *loose);
     const auto& dissolved = composition(fixture.document.snapshot());
     test.expect(!dissolved.graph().findNode(*loose) && !dissolved.nodeLayout().contains(*loose) &&
-                    // ADAPTED (task S4, then blend modes, then #742's filter): a new Layer Output
-                    // node owns seven parameters, so dissolving one orphans seven.
-                    dissolved.parameters().records().size() == count - 7 &&
+                    // ADAPTED (task S4, then blend modes, then #742's filter and #743's snap): a
+                    // new Layer Output node owns eight parameters, so dissolving one orphans eight.
+                    dissolved.parameters().records().size() == count - 8 &&
                     std::ranges::count_if(
                         dissolved.graph().edges(),
                         [&](const auto& edge) { return edge.source.nodeId == source; }) == 2,

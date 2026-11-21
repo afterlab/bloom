@@ -61,10 +61,14 @@ namespace {
 } // namespace
 
 CompositionSettings compositionSettingsOf(const document::Composition& composition) {
-    return CompositionSettings{
-        composition.name(),     composition.format(),          composition.duration(),
-        composition.timecode(), composition.backgroundColor(), composition.workingColorSpaceId(),
-        composition.safeAreas()};
+    return CompositionSettings{composition.name(),
+                               composition.format(),
+                               composition.duration(),
+                               composition.timecode(),
+                               composition.backgroundColor(),
+                               composition.workingColorSpaceId(),
+                               composition.safeAreas(),
+                               composition.pixelArt()};
 }
 
 std::optional<std::string> compositionSettingsIssue(const CompositionSettings& settings) {
@@ -104,6 +108,7 @@ OperationResult AddCompositionWithSettings::apply(document::Draft& draft) const 
         composition->setTimecode(settings_.timecode);
         composition->setWorkingColorSpaceId(settings_.workingColorSpaceId);
         composition->setSafeAreas(settings_.safeAreas);
+        composition->setPixelArt(settings_.pixelArt);
     }
     return result;
 }
@@ -164,6 +169,7 @@ OperationResult SetCompositionSettings::apply(document::Draft& draft) const {
     composition->setBackgroundColor(settings_.background);
     composition->setWorkingColorSpaceId(settings_.workingColorSpaceId);
     composition->setSafeAreas(settings_.safeAreas);
+    composition->setPixelArt(settings_.pixelArt);
     return OperationResult::applied();
 }
 
@@ -206,6 +212,8 @@ OperationResult UpdateCompositionSettings::apply(document::Draft& draft) const {
         settings.safeAreas.action = *change_.actionSafe;
     if (change_.titleSafe)
         settings.safeAreas.title = *change_.titleSafe;
+    if (change_.pixelArt)
+        settings.pixelArt = *change_.pixelArt;
     return SetCompositionSettings(composition_, std::move(settings), anchor_).apply(draft);
 }
 

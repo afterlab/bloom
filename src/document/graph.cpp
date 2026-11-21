@@ -95,6 +95,9 @@ constexpr std::array kLayerOutputBindings{
     // #742: optional; absent is Bilinear.
     ExpectedParameterBinding{bloom::document::kLayerFilterParameterRole,
                              bloom::document::kLayerFilterParameterSchemaKey, false},
+    // #743: optional; absent does not snap.
+    ExpectedParameterBinding{bloom::document::kLayerSnapParameterRole,
+                             bloom::document::kLayerSnapParameterSchemaKey, false},
 };
 
 [[nodiscard]] std::span<const ExpectedParameterBinding>

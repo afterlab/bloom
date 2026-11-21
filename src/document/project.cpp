@@ -113,7 +113,8 @@ Composition::Composition(const CompositionId id, std::string name,
 Composition::Composition(const Composition& other)
     : workArea_(other.workArea_), timecode_(other.timecode_), folder_(other.folder_),
       workingColorSpaceId_(other.workingColorSpaceId_), safeAreas_(other.safeAreas_),
-      backgroundColor_(other.backgroundColor_), id_(other.id_), name_(other.name_),
+      backgroundColor_(other.backgroundColor_), pixelArt_(other.pixelArt_), id_(other.id_),
+      name_(other.name_),
       duration_(other.duration_), format_(other.format_), frozenContent_(other.frozenContent_) {
     if (other.editableContent_) {
         editableContent_ = std::make_unique<Content>(*other.editableContent_);

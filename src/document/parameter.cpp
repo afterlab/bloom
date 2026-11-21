@@ -369,6 +369,13 @@ constantMatchesSchema(const std::string_view schemaKey,
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value != nullptr && *value >= 0 && *value <= kResampleFilterAutomaticValue;
     }
+    if (schemaKey == kLayerSnapParameterSchemaKey) {
+        // #743: 0 Off, 1 On, 2 Automatic.
+        const auto* value = std::get_if<std::int64_t>(&constant.value);
+        return value != nullptr && *value >= kLayerSnapOff && *value <= kLayerSnapAutomatic;
+    }
+    if (schemaKey == kTransform2DSnapParameterSchemaKey)
+        return std::holds_alternative<bool>(constant.value);
     if (schemaKey == kGradientRepeatParameterSchemaKey) {
         const auto* value = std::get_if<std::int64_t>(&constant.value);
         return value && *value >= 0 && *value <= 2;
@@ -760,6 +767,8 @@ constantMatchesSchema(const std::string_view schemaKey,
     if ((schemaKey.starts_with("bloom.ocio-") || schemaKey.starts_with("bloom.resize-fit.") ||
          schemaKey == "bloom.transform-2d.extent" || schemaKey == "bloom.transform-2d.filter" ||
          schemaKey == bloom::document::kLayerFilterParameterSchemaKey ||
+         schemaKey == bloom::document::kLayerSnapParameterSchemaKey ||
+         schemaKey == bloom::document::kTransform2DSnapParameterSchemaKey ||
          schemaKey == bloom::document::kImagePreviewDisplayParameterSchemaKey ||
          bloom::document::isRecipeIntegerSchemaKey(schemaKey) ||
          schemaKey == bloom::document::kAlphaAssociationModeSchemaKey ||

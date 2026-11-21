@@ -114,7 +114,7 @@ class Composition final {
     // accounting. Draft-local mutable content has its own identity until publication freezes it.
     [[nodiscard]] const void* contentIdentity() const noexcept { return &content(); }
     // The composition's own settings (id, name, duration, format, work area, working color space,
-    // safe areas, background, timecode, folder) equal `other`'s. With the same contentIdentity(),
+    // safe areas, background, timecode, folder, pixel-art mode) equal `other`'s. With the same contentIdentity(),
     // two compositions are the same composition.
     [[nodiscard]] bool sameShell(const Composition& other) const noexcept;
     // The content's whole charge: contentShellByteCharge() plus every record's charge.
@@ -157,6 +157,10 @@ class Composition final {
     void setSafeAreas(SafeAreaSettings settings) noexcept { safeAreas_ = settings; }
     [[nodiscard]] CompositionTimecode timecode() const noexcept { return timecode_; }
     void setTimecode(CompositionTimecode timecode) noexcept { timecode_ = timecode; }
+    // #743 pixel-art mode: an Automatic resample filter resolves to Nearest instead of Trilinear,
+    // and a layer whose pixel snap is Automatic snaps to whole pixels. An evaluation input.
+    [[nodiscard]] bool pixelArt() const noexcept { return pixelArt_; }
+    void setPixelArt(const bool enabled) noexcept { pixelArt_ = enabled; }
     // #378: the Assets folder holding this composition; null is the root.
     [[nodiscard]] const std::optional<AssetFolderId>& folder() const noexcept { return folder_; }
     void setFolder(std::optional<AssetFolderId> folder) noexcept { folder_ = folder; }
@@ -268,6 +272,7 @@ class Composition final {
     std::optional<std::string> workingColorSpaceId_{};
     SafeAreaSettings safeAreas_{};
     core::Color4d backgroundColor_{0.0, 0.0, 0.0, 1.0};
+    bool pixelArt_ = false;
     CompositionId id_;
     std::string name_;
     core::RationalTime duration_;

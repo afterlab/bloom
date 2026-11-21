@@ -197,6 +197,7 @@ const std::vector<Entry>& table() {
         {kTimeRemapParameterSchemaKey, number(kLowest, kHighest, 0.0, 10.0, 0.01, 3, kSeconds)},
         {kBlendModeParameterSchemaKey, choice()},
         {kLayerFilterParameterSchemaKey, choice()},
+        {kLayerSnapParameterSchemaKey, choice()},
         // #480: the finite value a Shuffle or Pass writes for a NaN or infinite sample (a far
         // depth, for one), within the Float32 range a gathered sample holds.
         {"bloom.channel-shuffle.non-finite",

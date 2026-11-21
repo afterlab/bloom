@@ -246,8 +246,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (const auto* warp = warpParameterSpec(schemaKey);
         warp != nullptr && warp->kind == WarpParameterKind::Choice) {
         Options options;
+        // #742: a warp's Filter leads with Automatic, its default, as the resample filters do.
+        if (warp->role == "filter")
+            options.push_back({std::string(warp->choices[static_cast<std::size_t>(
+                                   kWarpFilterAutomatic)]),
+                               kWarpFilterAutomatic});
         for (std::size_t index = 0; index < warp->choices.size(); ++index)
-            options.push_back({std::string(warp->choices[index]), static_cast<std::int64_t>(index)});
+            if (warp->role != "filter" || static_cast<std::int64_t>(index) != kWarpFilterAutomatic)
+                options.push_back(
+                    {std::string(warp->choices[index]), static_cast<std::int64_t>(index)});
         return options;
     }
     // #587 Test Card.
@@ -294,6 +301,9 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
                 {"Nearest", 1},
                 {"Trilinear", 2},
                 {"Anisotropic", 3}};
+    // #743: Automatic (on in a pixel-art composition) leads the list.
+    if (schemaKey == kLayerSnapParameterSchemaKey)
+        return {{"Automatic", kLayerSnapAutomatic}, {"Off", kLayerSnapOff}, {"On", kLayerSnapOn}};
     if (schemaKey == "bloom.resize-fit.policy")
         return sequential({"Fit", "Fill"});
     if (schemaKey == "bloom.transform-2d.extent")

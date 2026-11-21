@@ -605,9 +605,9 @@ void aSharedLayerNodeReturnsToEveryEntry() {
     const auto* b = entryLayer(fixture.comp(), nested, second);
     expect(a && b && a->entryOwned() && b->entryOwned() && a->layerId != b->layerId && a->solo &&
                b->solo &&
-               // #742: the node's filter binding (a new node's Automatic) is carried with the
-               // other six.
-               a->parameters.size() == 7 && b->parameters.size() == 7,
+               // #742, #743: the node's filter and snap bindings (a new node's Automatic) are
+               // carried with the other six.
+               a->parameters.size() == 8 && b->parameters.size() == 8,
            "each entry of a shared Layer node gets its own copy of its values");
     expect(noOrphanParameters(fixture.comp()) &&
                fixture.document.snapshot().project().validate().ok(),

@@ -189,6 +189,7 @@ ReconstructDocumentResult reconstructDocument(DecodedDocumentEnvelope envelope) 
         composition.setWorkingColorSpaceId(std::move(decodedComposition.workingColorSpaceId));
         composition.setTimecode(decodedComposition.timecode);
         composition.setFolder(decodedComposition.folder);
+        composition.setPixelArt(decodedComposition.pixelArt);
 
         if (!project.addComposition(std::move(composition))) {
             return ReconstructDocumentResult::failure({.stage = ReconstructionStage::CompositionAdd,

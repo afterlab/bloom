@@ -2256,6 +2256,10 @@ layerMaskModeName(const bloom::document::LayerMaskMode mode) noexcept {
     if (const auto& folder = composition.folder();
         folder && !emitNamedId(state, "folder", folder->value()))
         return false;
+    // #743: pixel-art mode, written only when it is on (absent is off).
+    if (composition.pixelArt() &&
+        (!state.ok(writer.memberName("pixelArt")) || !state.ok(writer.booleanValue(true))))
+        return false;
     if (!emitRetainedTrailing(state)) {
         return false;
     }

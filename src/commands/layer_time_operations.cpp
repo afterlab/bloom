@@ -255,13 +255,19 @@ OperationResult EnableLayerTimeRemap::apply(document::Draft& draft) const {
 
 std::string_view SetLayerFilter::typeId() const noexcept { return "bloom.layer.set-filter"; }
 
-OperationResult SetLayerFilter::apply(document::Draft& draft) const {
-    if (filter_ < 0 || filter_ > document::kResampleFilterAutomaticValue)
-        return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "A layer filter is 0 Bilinear, 1 Nearest, 2 Trilinear, "
-                                         "3 Anisotropic or 4 Automatic");
+namespace {
+
+// #742/#743: sets an optional constant of the layer's transform (`role` under `schemaKey`) on its
+// Layer node (current schema) or its entry layer, binding it when the layer has none.
+OperationResult setOptionalLayerConstant(document::Draft& draft,
+                                         const document::CompositionId compositionId,
+                                         const document::LayerId layerId,
+                                         const std::string_view role,
+                                         const std::string_view schemaKey,
+                                         const document::ParameterValue& value,
+                                         const std::string_view what) {
     Target target;
-    if (auto failure = findTarget(draft, composition_, layer_, target))
+    if (auto failure = findTarget(draft, compositionId, layerId, target))
         return std::move(*failure);
     auto& composition = *target.composition;
     if (!target.layer->entryOwned()) {
@@ -269,19 +275,18 @@ OperationResult SetLayerFilter::apply(document::Draft& draft) const {
         if (node == nullptr || node->schemaVersion != document::kLayerOutputNodeSchemaVersion)
             return OperationResult::rejected(
                 OperationIssueCode::InvalidTarget,
-                "Layer " + std::to_string(layer_.value()) + " in composition " +
-                    std::to_string(composition_.value()) +
-                    " has no Layer node at the current schema, so it cannot hold a filter");
+                "Layer " + std::to_string(layerId.value()) + " in composition " +
+                    std::to_string(compositionId.value()) +
+                    " has no Layer node at the current schema, so it cannot hold a " +
+                    std::string(what));
     }
     auto* bindings = detail::mutableLayerBindings(composition.graph(), *target.layer);
     if (bindings == nullptr)
         return OperationResult::rejected(
             OperationIssueCode::InvalidTarget,
-            "Layer " + std::to_string(layer_.value()) + " in composition " +
-                std::to_string(composition_.value()) + " has no parameter bindings");
-    const document::ParameterValue value{filter_};
-    const auto bound = std::ranges::find(*bindings, document::kLayerFilterParameterRole,
-                                         &document::ParameterBinding::role);
+            "Layer " + std::to_string(layerId.value()) + " in composition " +
+                std::to_string(compositionId.value()) + " has no parameter bindings");
+    const auto bound = std::ranges::find(*bindings, role, &document::ParameterBinding::role);
     if (bound != bindings->end()) {
         const auto* record = composition.parameters().find(bound->parameterId);
         const auto* constant =
@@ -291,25 +296,50 @@ OperationResult SetLayerFilter::apply(document::Draft& draft) const {
         if (!composition.parameters().setSource(bound->parameterId,
                                                 document::ConstantValueSource{value}))
             return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                             "The layer filter could not be set");
-        auto result = spanResult(composition_, *target.layer, composition.duration());
+                                             "The layer " + std::string(what) +
+                                                 " could not be set");
+        auto result = spanResult(compositionId, *target.layer, composition.duration());
         result.outputs.push_back({"parameter", bound->parameterId});
         return result;
     }
     const auto parameterId = draft.ids().allocateParameter();
     if (!parameterId)
         return detail::exhaustedIds("parameter");
-    if (!composition.parameters().insert({*parameterId,
-                                          std::string(document::kLayerFilterParameterSchemaKey),
-                                          document::ConstantValueSource{value}}))
+    if (!composition.parameters().insert(
+            {*parameterId, std::string(schemaKey), document::ConstantValueSource{value}}))
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
-                                         "The layer filter parameter could not be created");
-    bindings->push_back({std::string(document::kLayerFilterParameterRole), *parameterId});
+                                         "The layer " + std::string(what) +
+                                             " parameter could not be created");
+    bindings->push_back({std::string(role), *parameterId});
     if (target.layer->entryOwned())
         std::ranges::sort(*bindings, {}, &document::ParameterBinding::role);
-    auto result = spanResult(composition_, *target.layer, composition.duration());
+    auto result = spanResult(compositionId, *target.layer, composition.duration());
     result.outputs.push_back({"parameter", *parameterId});
     return result;
+}
+
+} // namespace
+
+OperationResult SetLayerFilter::apply(document::Draft& draft) const {
+    if (filter_ < 0 || filter_ > document::kResampleFilterAutomaticValue)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "A layer filter is 0 Bilinear, 1 Nearest, 2 Trilinear, "
+                                         "3 Anisotropic or 4 Automatic");
+    return setOptionalLayerConstant(draft, composition_, layer_,
+                                    document::kLayerFilterParameterRole,
+                                    document::kLayerFilterParameterSchemaKey,
+                                    document::ParameterValue{filter_}, "filter");
+}
+
+std::string_view SetLayerSnap::typeId() const noexcept { return "bloom.layer.set-snap"; }
+
+OperationResult SetLayerSnap::apply(document::Draft& draft) const {
+    if (snap_ < document::kLayerSnapOff || snap_ > document::kLayerSnapAutomatic)
+        return OperationResult::rejected(OperationIssueCode::InvalidValue,
+                                         "A layer snap is 0 Off, 1 On or 2 Automatic");
+    return setOptionalLayerConstant(draft, composition_, layer_, document::kLayerSnapParameterRole,
+                                    document::kLayerSnapParameterSchemaKey,
+                                    document::ParameterValue{snap_}, "snap");
 }
 
 std::string_view DisableLayerTimeRemap::typeId() const noexcept {

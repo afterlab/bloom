@@ -651,6 +651,9 @@ namespace {
         keys.push_back("timecode");
     if (node.findMember("folder") != nullptr)
         keys.push_back("folder");
+    // #743: written only when pixel-art mode is on.
+    if (node.findMember("pixelArt") != nullptr)
+        keys.push_back("pixelArt");
     std::vector<const JsonValue*> members;
     // A composition is a collection element (identity: numeric CompositionId), and that identity
     // is one of its own known members (`id`) -- not yet decoded at this point -- so this closed
@@ -804,6 +807,14 @@ namespace {
         if (!decodeObjectId(*folder, state, joinPath(path, "folder"), folderId))
             return false;
         out.folder = folderId;
+    }
+    if (const auto* pixelArt = node.findMember("pixelArt"); pixelArt != nullptr) {
+        const auto enabled = pixelArt->asBoolean();
+        if (pixelArt->kind() != JsonValueKind::Boolean || !enabled.has_value()) {
+            state.fail(DocumentDecodeError::WrongValueKind, joinPath(path, "pixelArt"));
+            return false;
+        }
+        out.pixelArt = *enabled;
     }
     return true;
 }

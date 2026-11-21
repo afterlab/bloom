@@ -428,6 +428,8 @@ struct StructuredLayerIds {
     document::ParameterId blendModeParameterId;
     // #742: the new layer's resample filter, bound Automatic.
     document::ParameterId filterParameterId;
+    // #743: the new layer's pixel snap, bound Automatic.
+    document::ParameterId snapParameterId;
 };
 
 struct StructuredLayerDescriptor {
@@ -488,6 +490,9 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
     const auto filterParameterId = allocator.allocateParameter();
     if (!filterParameterId.has_value())
         return std::nullopt;
+    const auto snapParameterId = allocator.allocateParameter();
+    if (!snapParameterId.has_value())
+        return std::nullopt;
     if (!sourceNodeId.has_value() || !layerOutputNodeId.has_value() ||
         !sourceToLayerEdgeId.has_value() || !layerToStackEdgeId.has_value() ||
         !layerId.has_value() || !slotId.has_value() || !sourceParametersAllocated ||
@@ -509,7 +514,8 @@ allocateStructuredLayerIds(document::IdAllocator& allocator,
                               *rotationParameterId,
                               *opacityParameterId,
                               *blendModeParameterId,
-                              *filterParameterId};
+                              *filterParameterId,
+                              *snapParameterId};
 }
 
 [[nodiscard]] OperationResult
@@ -561,7 +567,10 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
                             document::ConstantValueSource{document::kDefaultBlendModeValue}}) ||
         !parameters.insert(
             {ids->filterParameterId, std::string(document::kLayerFilterParameterSchemaKey),
-             document::ConstantValueSource{document::kResampleFilterAutomaticValue}})) {
+             document::ConstantValueSource{document::kResampleFilterAutomaticValue}}) ||
+        !parameters.insert({ids->snapParameterId,
+                            std::string(document::kLayerSnapParameterSchemaKey),
+                            document::ConstantValueSource{document::kLayerSnapAutomatic}})) {
         return OperationResult::rejected(OperationIssueCode::InvalidValue,
                                          "Layer parameters could not be inserted");
     }
@@ -584,6 +593,7 @@ addStructuredLayer(document::Draft& draft, document::Composition& composition,
             {std::string(document::kOpacityParameterRole), ids->opacityParameterId},
             {std::string(document::kBlendModeParameterRole), ids->blendModeParameterId},
             {std::string(document::kLayerFilterParameterRole), ids->filterParameterId},
+            {std::string(document::kLayerSnapParameterRole), ids->snapParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };

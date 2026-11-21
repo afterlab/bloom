@@ -44,6 +44,8 @@ struct CompositionSettings final {
     // nullopt follows the project working colour space.
     std::optional<std::string> workingColorSpaceId{};
     document::SafeAreaSettings safeAreas{};
+    // #743 pixel-art mode: Automatic filters resolve to Nearest and Automatic layer snaps snap.
+    bool pixelArt = false;
 
     friend bool operator==(const CompositionSettings&, const CompositionSettings&) = default;
 };
@@ -109,6 +111,7 @@ struct CompositionSettingsChange final {
     std::optional<std::string> workingColorSpaceId;
     std::optional<double> actionSafe;
     std::optional<double> titleSafe;
+    std::optional<bool> pixelArt;
 };
 
 class UpdateCompositionSettings final : public Operation {

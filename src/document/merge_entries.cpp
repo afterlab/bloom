@@ -22,6 +22,8 @@ constexpr std::array kEntryLayerRoles{
     EntryLayerRole{kTimeRemapParameterRole, kTimeRemapParameterSchemaKey},
     // #742: optional like Time Remap; absent is Bilinear.
     EntryLayerRole{kLayerFilterParameterRole, kLayerFilterParameterSchemaKey},
+    // #743: optional like the filter; absent does not snap.
+    EntryLayerRole{kLayerSnapParameterRole, kLayerSnapParameterSchemaKey},
 };
 
 [[nodiscard]] const EdgeRecord* edgeInto(const CanonicalGraph& graph, const NodeId node,
@@ -218,7 +220,8 @@ std::optional<NodeId> mergeEntryAdjustment(const CanonicalGraph& graph, const No
 std::span<const EntryLayerRole> entryLayerRoles() noexcept { return kEntryLayerRoles; }
 
 bool isOptionalEntryLayerRole(const std::string_view role) noexcept {
-    return role == kTimeRemapParameterRole || role == kLayerFilterParameterRole;
+    return role == kTimeRemapParameterRole || role == kLayerFilterParameterRole ||
+           role == kLayerSnapParameterRole;
 }
 
 ValidationResult validateEntryLayers(const CanonicalGraph& graph,

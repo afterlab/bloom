@@ -30,9 +30,9 @@ namespace bloom::document {
 //    frame. Today: a layer's name, label color, lock, shy flag and name-follows-source flag, a
 //    mask's name; an asset's name, folder, tags and Assets order; a keyframe's handle mode (the
 //    stored handle values are the evaluation inputs, the mode is presentation).
-// 4. Composition settings are listed in sameEvaluationInputs(Composition): duration, format and
-//    working color space are evaluation inputs; name, folder, work area, safe areas, timecode
-//    display and the viewer background color are presentation. A new Composition member must be
+// 4. Composition settings are listed in sameEvaluationInputs(Composition): duration, format,
+//    working color space and pixel-art mode (#743) are evaluation inputs; name, folder, work
+//    area, safe areas, timecode display and the viewer background color are presentation. A new Composition member must be
 //    classified there as well as in Composition::sameShell().
 //
 // A name is presentation only while nothing evaluated refers to it. Every evaluation reference in

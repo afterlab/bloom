@@ -117,6 +117,23 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
                     filterParameterId, std::string(document::kLayerFilterParameterSchemaKey),
                     ConstantValueSource{std::int64_t{document::kResampleFilterAutomaticValue}}},
         "a new solid layer's filter is bound Automatic (#742)");
+    const auto snapBinding =
+        createdLayerNode == nullptr
+            ? createdLayerNode->parameters.end()
+            : std::ranges::find(createdLayerNode->parameters,
+                                std::string(document::kLayerSnapParameterRole),
+                                &document::ParameterBinding::role);
+    const auto snapParameterId =
+        createdLayerNode != nullptr && snapBinding != createdLayerNode->parameters.end()
+            ? snapBinding->parameterId
+            : ParameterId{};
+    const auto* snapParameter = value.parameters().find(snapParameterId);
+    test.expect(snapParameter != nullptr &&
+                    *snapParameter ==
+                        ParameterRecord{snapParameterId,
+                                        std::string(document::kLayerSnapParameterSchemaKey),
+                                        ConstantValueSource{std::int64_t{document::kLayerSnapAutomatic}}},
+                "a new solid layer's snap is bound Automatic (#743)");
     const NodeRecord expectedLayerOutputNode{
         ids.layerOutputNodeId,
         std::string(document::kLayerOutputNodeType),
@@ -128,6 +145,7 @@ void expectSolidState(TestContext& test, const document::Snapshot& snapshot,
             {std::string(document::kOpacityParameterRole), ids.opacityParameterId},
             {std::string(document::kBlendModeParameterRole), ids.blendModeParameterId},
             {std::string(document::kLayerFilterParameterRole), filterParameterId},
+            {std::string(document::kLayerSnapParameterRole), snapParameterId},
         },
         document::kLayerOutputNodeSchemaVersion,
     };

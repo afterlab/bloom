@@ -53,9 +53,16 @@ inline constexpr std::string_view kWarpMapPort = "map";
 
 // The filter, in the field raster's order, and the edge rule in the order the node offers (the
 // lowering maps it to the raster's).
+// #742: Trilinear and Anisotropic prefilter a shrinking read through the picture's mip pyramid;
+// Automatic, the default of a new node, is a document value only: the compiler resolves it to
+// Trilinear (Bilinear wherever the map does not shrink the picture), or to Nearest in a pixel-art
+// composition (#743). Stored 0, 1 and 2 keep their meaning.
 inline constexpr std::int64_t kWarpFilterBilinear = 0;
 inline constexpr std::int64_t kWarpFilterNearest = 1;
 inline constexpr std::int64_t kWarpFilterBicubic = 2;
+inline constexpr std::int64_t kWarpFilterTrilinear = 3;
+inline constexpr std::int64_t kWarpFilterAnisotropic = 4;
+inline constexpr std::int64_t kWarpFilterAutomatic = 5;
 inline constexpr std::int64_t kWarpEdgeTransparent = 0;
 inline constexpr std::int64_t kWarpEdgeExtend = 1;
 inline constexpr std::int64_t kWarpEdgeRepeat = 2;
@@ -147,7 +154,8 @@ namespace warp_parameters {
 
 using Kind = WarpParameterKind;
 
-inline constexpr std::array<std::string_view, 3> kFilters{"Bilinear", "Nearest", "Bicubic"};
+inline constexpr std::array<std::string_view, 6> kFilters{"Bilinear",  "Nearest",     "Bicubic",
+                                                          "Trilinear", "Anisotropic", "Automatic"};
 inline constexpr std::array<std::string_view, 4> kEdges{"Transparent", "Extend", "Repeat", "Mirror"};
 inline constexpr std::array<std::string_view, 4> kChannels{"Red", "Green", "Blue", "Alpha"};
 inline constexpr std::array<std::string_view, 5> kOptionalChannels{"None", "Red", "Green", "Blue",
@@ -160,7 +168,7 @@ inline constexpr std::array kStabilize{
     WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, 1.0, kStabilizeModes, "Mode"},
     WarpParameterSpec{"pattern", Kind::Choice, 1.0, 0.0, 2.0, kPatternSizes, "Pattern"},
     WarpParameterSpec{"search", Kind::Choice, 1.0, 0.0, 2.0, kSearchSizes, "Search"},
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
 };
 inline constexpr std::array<std::string_view, 4> kTileMirrorModes{"Tile", "Wrap Offset",
@@ -170,7 +178,7 @@ inline constexpr std::array<std::string_view, 2> kMirrorSides{"Left or Below", "
 // percentage of the composition frame; a phase and an angle are degrees.
 inline constexpr std::array kTileMirror{
     WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, 3.0, kTileMirrorModes, "Mode"},
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
     WarpParameterSpec{"tileWidth", Kind::Scalar, 100.0, kMinimumTilePercent, kMaximumTilePercent,
                       {}, "Tile Width", 1.0, 400.0, 1.0, 1, "%"},
@@ -226,7 +234,7 @@ inline constexpr std::array<std::string_view, 3> kMagnifyLinks{"Nothing", "Size"
 inline constexpr std::array kProceduralWarp{
     WarpParameterSpec{"mode", Kind::Choice, 0.0, 0.0, static_cast<double>(kProceduralWarpLastMode),
                       kProceduralWarpModes, "Mode"},
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
     WarpParameterSpec{"radius", Kind::Scalar, 300.0, 0.0, kMaximumWarpLength, {}, "Radius", 0.0,
                       1500.0, 1.0, 1, "px"},
@@ -313,12 +321,12 @@ inline constexpr std::array<std::string_view, 6> kProceduralWarpPointLabels{
 inline constexpr std::array<std::array<double, 2>, 6> kProceduralWarpPointDefaults{
     {{0.0, 0.0}, {200.0, 0.0}, {0.0, 200.0}, {0.0, -200.0}, {100.0, 100.0}, {0.0, 0.0}}};
 inline constexpr std::array kCornerPin{
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
 };
 inline constexpr std::array kStMap{
     WarpParameterSpec{"uChannel", Kind::Choice, 0.0, 0.0, 3.0, kChannels, "U Channel"},
     WarpParameterSpec{"vChannel", Kind::Choice, 1.0, 0.0, 3.0, kChannels, "V Channel"},
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
 };
 inline constexpr std::array kDisplace{
@@ -330,7 +338,7 @@ inline constexpr std::array kDisplace{
                       kMaximumDisplaceAmount, {}, "Y Amount", -200.0, 200.0, 1.0, 1, "px"},
     WarpParameterSpec{"midpoint", Kind::Scalar, 0.5, -kMaximumDisplaceMidpoint,
                       kMaximumDisplaceMidpoint, {}, "Midpoint", -1.0, 1.0, 0.01, 3},
-    WarpParameterSpec{"filter", Kind::Choice, 0.0, 0.0, 2.0, kFilters, "Filter"},
+    WarpParameterSpec{"filter", Kind::Choice, 5.0, 0.0, 5.0, kFilters, "Filter"},
     WarpParameterSpec{"edges", Kind::Choice, 0.0, 0.0, 3.0, kEdges, "Edges"},
 };
 
