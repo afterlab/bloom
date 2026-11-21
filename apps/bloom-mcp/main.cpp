@@ -342,8 +342,9 @@ int main(int argc, char** argv) {
         FinishCrashReporter& operator=(const FinishCrashReporter&) = delete;
         ~FinishCrashReporter() { bloom::crash::finishCrashReporter(); }
     } const finishCrashReporter;
-    // An export that needs a Google font waits for the download (docs/architecture/fonts.md).
-    bloom::runtime::fonts::installHeadlessFontTransport();
+    // An export that needs a Google font waits for the download (docs/architecture/fonts.md). The
+    // downloads end when main() does, before the exit handlers tear down the HTTP client (#750).
+    const bloom::runtime::fonts::HeadlessFontDownloads fontDownloads;
     try {
         if (argc != 1 && !(argc == 3 && std::string_view(argv[1]) == "--project")) {
             std::cerr << "usage: bloom-mcp [--version] [--project <file>]\n";

@@ -17,6 +17,13 @@ bloom_enable_warnings(bloom_runtime_font_resolver_test)
 bloom_add_test(NAME bloom.runtime.font_resolver COMMAND bloom_runtime_font_resolver_test
     LABELS runtime unit text TIMEOUT 60)
 
+# #750: a program that ends during a font download ends it before its exit handlers run.
+add_executable(bloom_runtime_font_downloads_exit_test font_downloads_exit_tests.cpp)
+target_link_libraries(bloom_runtime_font_downloads_exit_test PRIVATE bloom_runtime_fonts)
+bloom_enable_warnings(bloom_runtime_font_downloads_exit_test)
+bloom_add_test(NAME bloom.runtime.font_downloads_exit COMMAND bloom_runtime_font_downloads_exit_test
+    LABELS runtime unit text TIMEOUT 60)
+
 add_executable(bloom_runtime_variable_font_test variable_font_instance_tests.cpp)
 target_compile_definitions(
     bloom_runtime_variable_font_test

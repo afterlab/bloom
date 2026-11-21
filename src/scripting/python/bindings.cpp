@@ -20,6 +20,14 @@ namespace bloom::scripting::python {
 void bindHost(nb::module_& module) {
     // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
     runtime::fonts::installHeadlessFontTransport();
+    // #750: the downloads end in the interpreter's own exit, before the C runtime's exit handlers
+    // tear down the HTTP client under a running transfer. Registered before _finish_owned_roots
+    // below, so it runs after the roots have finished.
+    module.def("_end_font_downloads", [] {
+        const nb::gil_scoped_release release;
+        static_cast<void>(runtime::fonts::endHeadlessFontDownloads());
+    });
+    nb::module_::import_("atexit").attr("register")(module.attr("_end_font_downloads"));
     auto roots = PythonRootRetirements::create();
     // Constructor failure leaves ownership with this scope; successful construction transfers
     // the exact holder to the capsule, including if later module attribute assignment fails.

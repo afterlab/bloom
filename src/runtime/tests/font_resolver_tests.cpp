@@ -2,19 +2,24 @@
 // Google stylesheet and index, offline and missing-font behavior, the version-changed notice, and a
 // shared project opening on a machine that has the font nowhere.
 
+#include "await.hpp"
 #include "unique_temp_dir.hpp"
+#include <bloom/platform/loopback_listener.hpp>
 #include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/google_catalogue.hpp>
 #include <bloom/runtime/google_fonts.hpp>
 #include <bloom/runtime/headless_font_transport.hpp>
 #include <bloom/runtime/variable_font_instance.hpp>
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -406,6 +411,39 @@ void previewSubsetIsFetchedOnlyOnRequest() {
         expect(text, "the subset request carries only the family name");
     }
 }
+// #750: ending the downloads before a program ends. The running transfer is cancelled and waited
+// for, a queued download is settled as cancelled for whoever waits on it, no transport is left,
+// and a transport installed afterwards downloads again.
+void stopDownloadsEndsRunningAndQueuedDownloads() {
+    Fixture fixture;
+    auto resolver = fixture.make();
+    fixture.transport->block = true;
+    resolver->prefetch(googleId("Test Family", 700, "v7"));
+    expect(bloom::test_support::awaitCondition(
+               "the first download's transfer runs",
+               [&] { return fixture.transport->requests.load() == 1; }),
+           "the first download starts");
+    FontResolution waited;
+    std::thread waiter(
+        [&] { waited = resolver->resolve(googleId("Test Family", 400, "v7"), FontFetch::Wait); });
+    expect(bloom::test_support::awaitCondition("the second download is queued behind the first",
+                                               [&] { return resolver->downloads().size() == 2; }),
+           "the waiter's download is queued");
+    expect(resolver->stopDownloads(5s), "the running transfer returns once it is cancelled");
+    waiter.join();
+    expect(waited.missing() && waited.reason == FontMissingReason::Cancelled,
+           "a caller waiting for a queued download is told it was cancelled");
+    expect(resolver->downloads().empty(), "no download is left");
+    expect(fixture.transport->requests.load() == 1, "the queued download never started");
+    expect(!resolver->hasTransport(), "no transport is left to start another transfer");
+
+    fixture.transport->block = false;
+    resolver->setTransport(fixture.transport);
+    const auto again = resolver->resolve(googleId("Test Family", 700, "v7"), FontFetch::Wait);
+    expect(again.kind == FontResolutionKind::Cache && again.bytes != nullptr,
+           "a transport installed afterwards downloads again");
+}
+
 // The command-line tools, MCP and Python download through the same resolver and cache. Nothing
 // here reaches the network: the address refuses connections.
 void headlessTransportFailsOfflineAndCancels() {
@@ -436,6 +474,58 @@ void headlessTransportFailsOfflineAndCancels() {
            "nothing is cached for a failed download");
     std::filesystem::remove_all(root);
 }
+
+#if !defined(_WIN32)
+// #750: ending the downloads stops a real transfer stalled in its TLS handshake. The server takes
+// the connection and the client's first handshake record and never answers, the way a busy or
+// vanished server leaves a transfer; the transfer must see the cancellation there, not only once
+// data flows. Linux and macOS only: on Windows WinHTTP sees a cancellation between the stages of a
+// transfer, so a stalled stage runs to its stage timeout and ending the downloads leaves it to end
+// with the program after the deadline (docs/architecture/fonts.md "Ending downloads").
+void endingDownloadsStopsAStalledHandshake() {
+    const auto transport = makeHeadlessFontTransport();
+    if (!transport) {
+        std::cerr << "SKIP: the system HTTP client is not installed here\n";
+        return;
+    }
+    // A port this test may bind, found by binding (never by guessing that one is free).
+    std::unique_ptr<platform::LoopbackListener> listener;
+    for (std::uint16_t port = 41000; port < 42000 && !listener; ++port)
+        if (auto bound = platform::LoopbackListener::listen(port); bound.bind.bound())
+            listener = std::move(bound.listener);
+    expect(listener != nullptr, "a loopback port is free for the stalled server");
+    if (!listener)
+        return;
+    FontResolver::Options options;
+    options.cacheDirectory =
+        bloom::test_support::processTempDirectory() / "bloom-font-stalled-test";
+    options.stylesheetEndpoint = "https://127.0.0.1:" + std::to_string(listener->port()) + "/css2";
+    FontResolver resolver(std::move(options));
+    std::optional<platform::LoopbackConnection> held;
+    {
+        const HeadlessFontDownloads downloads(resolver, transport);
+        resolver.prefetch(googleId("Test Family", 700, "v7"));
+        auto accepted = listener->accept(30s, {});
+        expect(accepted.status == platform::LoopbackAcceptStatus::Accepted && accepted.connection,
+               "the download connects to the stalled server");
+        if (!accepted.connection)
+            return;
+        std::array<std::byte, 512> hello{};
+        const auto read = accepted.connection->read(hello, 30s, {});
+        // A TLS record of type 22 (handshake): the client hello. The server never answers it.
+        expect(read.status == platform::LoopbackIoStatus::Ok && read.bytes > 0 &&
+                   hello[0] == std::byte{22},
+               "the transfer waits in its TLS handshake");
+        held = std::move(accepted.connection);
+        // The owner ends here, while the transfer waits for the server's answer.
+    }
+    expect(resolver.downloads().empty(),
+           "ending the downloads stopped the transfer stalled in its handshake");
+    expect(!resolver.hasTransport(), "no transport is left to start another transfer");
+    std::filesystem::remove_all(bloom::test_support::processTempDirectory() /
+                                "bloom-font-stalled-test");
+}
+#endif
 
 // An installed variable font: the named instance in the face index and the font ID's recorded axis
 // values both take effect, so the resolved file is the instance, and its digest is its identity.
@@ -501,7 +591,11 @@ int main() {
     systemFontMissingButOnGoogleIsFetched();
     cancellationStopsTheWait();
     previewSubsetIsFetchedOnlyOnRequest();
+    stopDownloadsEndsRunningAndQueuedDownloads();
     headlessTransportFailsOfflineAndCancels();
+#if !defined(_WIN32)
+    endingDownloadsStopsAStalledHandshake();
+#endif
     systemVariableFontAppliesInstanceAndAxes();
-    return failures == 0 ? 0 : 1;
+    return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

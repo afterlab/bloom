@@ -548,8 +548,9 @@ int main(int argc, char** argv) {
         FinishCrashReporter& operator=(const FinishCrashReporter&) = delete;
         ~FinishCrashReporter() { bloom::crash::finishCrashReporter(); }
     } const finishCrashReporter;
-    // A render that needs a Google font waits for the download (docs/architecture/fonts.md).
-    runtime::fonts::installHeadlessFontTransport();
+    // A render that needs a Google font waits for the download (docs/architecture/fonts.md). The
+    // downloads end when main() does, before the exit handlers tear down the HTTP client (#750).
+    const runtime::fonts::HeadlessFontDownloads fontDownloads;
 #if defined(BLOOM_BUILD_PYTHON)
     if ((argc == 2 && std::string_view(argv[1]) == "python") ||
         (argc == 3 && std::string_view(argv[1]) == "run" &&

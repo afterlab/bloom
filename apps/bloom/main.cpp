@@ -22,6 +22,7 @@
 #include <bloom/platform/user_data_directory.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/font_resolver.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/gpu_preview_display_service.hpp>
 #include <bloom/runtime/gpu_process_frame.hpp>
@@ -764,6 +765,12 @@ int main(int argc, char* argv[]) try {
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
                      &compositionThumbnails, &bloom::ui::CompositionThumbnailController::cancel);
+    // #750: font downloads are cancelled with the rest of the work; main() waits for the
+    // running transfer after the event loop (below).
+    QObject::connect(&shutdownCoordinator,
+                     &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted,
+                     &shutdownCoordinator,
+                     [] { bloom::runtime::fonts::processFontResolver().cancelDownloads(); });
     QObject::connect(&shutdownCoordinator,
                      &bloom::ui::ApplicationShutdownCoordinator::shutdownStarted, &imagePreviews,
                      &bloom::ui::ImagePreviewController::cancel);
@@ -1436,6 +1443,11 @@ int main(int argc, char* argv[]) try {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     while (!sequenceExportRetirement->collect())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    // #750: no font download is running when main() returns. The Qt transport's network stack
+    // ends with the application object, and the exit handlers tear down the libraries under it.
+    if (!bloom::runtime::fonts::processFontResolver().stopDownloads(
+            bloom::runtime::fonts::kEndFontDownloadsDeadline))
+        std::cerr << "A font download did not stop when it was cancelled; it ends with Bloom.\n";
     if (previewTrace) {
         // Recording has stopped with the event loop. The worker owns formatting and file I/O;
         // joining here cannot stall an active viewer or hold up an event-loop publication.

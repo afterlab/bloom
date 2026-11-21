@@ -113,6 +113,36 @@ installed or cached. Offline still ends in the fallback face with the usual diag
 fake transport, and one test asks each platform's real transport for an address that refuses
 connections.
 
+### Ending downloads
+
+Every program ends its downloads before it ends (`FontResolver::stopDownloads`). Stopping removes
+the transport, settles every queued download as cancelled (a caller waiting on one is told so),
+cancels the running transfer and waits up to 5 seconds for it to return. The worker stays, idle, and
+a transport installed later downloads again. It must happen while the program still runs: a
+program's exit handlers tear down the libraries a transport uses. OpenSSL's handler is registered
+when libcurl is first loaded, after the process resolver was made, so it runs first. A transfer
+still running then works on a library that is gone. The MCP server once spun forever on a destroyed
+OpenSSL lock in a TLS handshake, and the resolver's exit-time destructor waited for it (#750).
+
+- `bloom-mcp` and `bloom-cli` hold a `HeadlessFontDownloads` in `main()`. It installs the headless
+  transport and ends the downloads when `main()` returns.
+- The Python module ends them from the interpreter's own exit (`atexit`), after its roots have
+  finished.
+- The desktop application cancels them when shutdown starts and waits for the running transfer after
+  the event loop, while the application object (and with it Qt Network) still exists.
+
+The transports see a cancellation within a fraction of a second. The libcurl transport drives the
+transfer itself through libcurl's multi interface and checks after every wait of at most 50 ms. It
+does not use `curl_easy_perform`, whose own wait sleeps until libcurl's next timer, which during a
+TLS handshake is the 20-second connect timeout, before it calls the progress callback. The Qt
+transport checks every 40 ms. On Windows, WinHTTP sees a cancellation between the stages of a
+transfer, so a stage that stalls runs to its 20-second stage timeout. A transfer that has not returned by the deadline is reported on standard error and left to
+end with the process. The process resolver is never destroyed, so no exit handler joins its worker.
+Tests: `bloom.runtime.font_downloads_exit` is a program whose transport's library is torn down by an
+exit handler, as OpenSSL is, and it fails if a transfer is still running then. `bloom.runtime.font_resolver`
+covers stopping with a running and a queued download, and on Linux and macOS a real libcurl
+transfer stalled in its TLS handshake.
+
 ## Fallback table
 
 The fallback is chosen by category. The table (sans, serif and monospace lists) is documented once, in

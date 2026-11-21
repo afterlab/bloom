@@ -11,6 +11,7 @@
 #include <bloom/runtime/variable_font_instance.hpp>
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
@@ -156,6 +157,13 @@ class FontResolver final {
     [[nodiscard]] std::vector<FontDownloadState> downloads() const;
     // Cancels every queued and running download.
     void cancelDownloads();
+    // Ends downloading before the program ends (docs/architecture/fonts.md "Ending downloads"):
+    // removes the transport, settles every queued download as cancelled, cancels the running one
+    // and waits up to `deadline` for its transfer to return. True when no transfer is running any
+    // more. The worker stays, idle, and a later setTransport() downloads again. The owner of a
+    // program's transport calls it while the program still runs, so no transfer is running when
+    // the process's exit handlers tear down the libraries a transport uses.
+    [[nodiscard]] bool stopDownloads(std::chrono::milliseconds deadline);
 
     [[nodiscard]] SystemFontIndex& systemFonts() noexcept { return system_; }
     [[nodiscard]] const std::filesystem::path& cacheDirectory() const noexcept { return root_; }
@@ -221,15 +229,25 @@ class FontResolver final {
     std::map<std::string, LoadedFace> instances_;
     std::vector<std::string> announced_;
     bloom::core::WorkerThread worker_;
+    // The job whose transfer the worker is running, if any.
+    const Job* running_ = nullptr;
     bool stopping_ = false;
     std::atomic<std::uint64_t> epoch_{0};
     std::atomic<std::uint64_t> previewEpoch_{0};
 };
 
+// How long a program's end waits for a running transfer to see its cancellation (stopDownloads).
+// The transports check it within a fraction of a second, except a stalled WinHTTP stage
+// (docs/architecture/fonts.md "Ending downloads").
+inline constexpr std::chrono::milliseconds kEndFontDownloadsDeadline{5000};
+
 // The font resolver of this process. The desktop application, the command-line tools and tests
 // share it so the per-user cache and its downloads are one thing; it has no network transport
 // until the application installs one, and a test passes its own resolver through
-// SnapshotCompileRequest instead.
+// SnapshotCompileRequest instead. It lives as long as the process and is never destroyed: the
+// program's owner of its transport ends the downloads with stopDownloads() before the program
+// ends, and a transfer that ignored that cancellation is left to end with the process instead of
+// being joined by the process's exit handlers.
 [[nodiscard]] FontResolver& processFontResolver();
 
 } // namespace bloom::runtime::fonts

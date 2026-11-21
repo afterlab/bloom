@@ -262,8 +262,13 @@ void FontResolver::workerLoop() {
                 continue;
             }
             job->state = Job::State::Running;
+            running_ = job.get();
         }
         runJob(*job);
+        {
+            const std::lock_guard lock(mutex_);
+            running_ = nullptr;
+        }
         wake_.notify_all();
     }
 }
@@ -728,14 +733,35 @@ void FontResolver::cancelDownloads() {
     wake_.notify_all();
 }
 
+bool FontResolver::stopDownloads(const std::chrono::milliseconds deadline) {
+    std::unique_lock lock(mutex_);
+    // No new transfer starts: a job queued from now on fails as unavailable without one.
+    transport_.reset();
+    for (auto& [key, job] : jobs_)
+        job->cancel = true;
+    // A queued download never reaches the worker now, so it is settled here; a caller waiting for
+    // it (FontFetch::Wait) sees it cancelled.
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto& job : queue_) {
+        job->state = Job::State::Failed;
+        job->failure = FontMissingReason::Cancelled;
+        job->finished = now;
+    }
+    queue_.clear();
+    wake_.notify_all();
+    // The running transfer sees the cancellation through the transport's own check.
+    return wake_.wait_for(lock, deadline, [this] { return running_ == nullptr; });
+}
+
 FontResolver& processFontResolver() {
-    static FontResolver resolver([] {
+    // Never destroyed (see the declaration): no exit handler joins its worker.
+    static auto* const resolver = new FontResolver([] {
         FontResolver::Options options;
         if (const auto root = platform::userCacheDirectory())
             options.cacheDirectory = *root;
         return options;
     }());
-    return resolver;
+    return *resolver;
 }
 
 } // namespace bloom::runtime::fonts
