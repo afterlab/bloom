@@ -136,12 +136,20 @@ transfer itself through libcurl's multi interface and checks after every wait of
 does not use `curl_easy_perform`, whose own wait sleeps until libcurl's next timer, which during a
 TLS handshake is the 20-second connect timeout, before it calls the progress callback. The Qt
 transport checks every 40 ms. On Windows, WinHTTP sees a cancellation between the stages of a
-transfer, so a stage that stalls runs to its 20-second stage timeout. A transfer that has not returned by the deadline is reported on standard error and left to
-end with the process. The process resolver is never destroyed, so no exit handler joins its worker.
-Tests: `bloom.runtime.font_downloads_exit` is a program whose transport's library is torn down by an
-exit handler, as OpenSSL is, and it fails if a transfer is still running then. `bloom.runtime.font_resolver`
-covers stopping with a running and a queued download, and on Linux and macOS a real libcurl
-transfer stalled in its TLS handshake.
+transfer, so a stage that stalls runs to its 20-second stage timeout.
+
+A transfer that has not returned by the deadline is reported on standard error and left to end with
+the process. The process resolver is never destroyed, so no exit handler joins its worker.
+
+Tests:
+
+- `bloom.runtime.font_downloads_exit` is a program whose transport's library is torn down by an exit
+  handler, as OpenSSL is. It fails if a transfer is still running then.
+- `bloom.runtime.font_resolver` covers stopping with a running and a queued download, and, on Linux
+  and macOS, a real libcurl transfer stalled in its TLS handshake.
+- `bloom.mcp.protocol` holds `bloom-mcp`'s download in its TLS handshake through a loopback proxy
+  that never answers, closes the server's input and expects it to exit (Linux and macOS: WinHTTP
+  takes the system proxy settings).
 
 ## Fallback table
 
