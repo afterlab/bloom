@@ -173,30 +173,10 @@ class ParentedLayerTransform {
                                     (y + static_cast<double>(window_.originY()) + 0.5) / sy_});
         return {p.x * sx_ - 0.5, p.y * sy_ - 0.5};
     }
-    [[nodiscard]] std::optional<render::ImageWindow> supportBounds(render::ImageWindow clip) const {
-        const double w = window_.extent().width(), h = window_.extent().height();
-        const std::array points{forwardMap(-1, -1), forwardMap(w, -1), forwardMap(w, h),
-                                forwardMap(-1, h)};
-        double left = points[0].x, right = left, top = points[0].y, bottom = top;
-        for (const auto p : points) {
-            left = std::min(left, p.x);
-            right = std::max(right, p.x);
-            top = std::min(top, p.y);
-            bottom = std::max(bottom, p.y);
-        }
-        const auto x0 = std::max(clip.originX(), static_cast<std::int64_t>(std::floor(left)));
-        const auto y0 = std::max(clip.originY(), static_cast<std::int64_t>(std::floor(top)));
-        const auto x1 =
-            std::min(clip.maxXExclusive() - 1, static_cast<std::int64_t>(std::ceil(right)));
-        const auto y1 =
-            std::min(clip.maxYExclusive() - 1, static_cast<std::int64_t>(std::ceil(bottom)));
-        if (x1 < x0 || y1 < y0)
-            return std::nullopt;
-        const auto result =
-            render::ImageWindow::create(x0, y0, static_cast<std::uint32_t>(x1 - x0 + 1),
-                                        static_cast<std::uint32_t>(y1 - y0 + 1));
-        return result ? std::optional{*result.value()} : std::nullopt;
-    }
+    // The output pixels the resample can write, clipped to `clip`: the forward image of the
+    // support box [-m, extent - 1 + m] source pixels, m the plan's filterSupportMargin() (1 for
+    // Bilinear and Nearest, wider for a filtered plan reading a mip level, #742).
+    [[nodiscard]] std::optional<render::ImageWindow> supportBounds(render::ImageWindow clip) const;
     // The device-space composed matrix AffineBilinearV1 receives for this placement.
     [[nodiscard]] render::GpuAffineMatrix deviceMatrix() const {
         return toGpuAffineMatrix(matrix_, window_, sx_, sy_);
@@ -240,6 +220,52 @@ class ParentedLayerTransform {
     double determinant_;
     render::GpuAffineFilterPlan plan_{};
 };
+
+// #742: how far beyond a source window's edge, in level-0 source pixels, a resample through `plan`
+// reads a non-zero texel: 1 for Bilinear and Nearest (the box [-1, extent]); for a filtered plan,
+// level n's bilinear support reaches 1.5 * 2^n + 0.5 level-0 pixels past the edge (its texels
+// cover 2^n pixels, its extent rounds up), bounded by 2^(n + 1) for the deepest level read, plus
+// the farthest Anisotropic tap. Every route sizes a filtered layer's window by it, so the
+// filtered fringe of an edge is never clipped.
+struct FilterSupportMargin final {
+    double x = 1.0;
+    double y = 1.0;
+};
+[[nodiscard]] inline FilterSupportMargin
+filterSupportMargin(const render::GpuAffineFilterPlan& plan) noexcept {
+    if (!plan.filtered())
+        return {};
+    const double level = std::ldexp(1.0, static_cast<int>(plan.upperLevel) + 1);
+    return {level + std::abs(plan.tapStartX), level + std::abs(plan.tapStartY)};
+}
+
+inline std::optional<render::ImageWindow>
+ParentedLayerTransform::supportBounds(const render::ImageWindow clip) const {
+    const auto margin = filterSupportMargin(plan_);
+    const double w = static_cast<double>(window_.extent().width()) - 1.0 + margin.x;
+    const double h = static_cast<double>(window_.extent().height()) - 1.0 + margin.y;
+    const std::array points{forwardMap(-margin.x, -margin.y), forwardMap(w, -margin.y),
+                            forwardMap(w, h), forwardMap(-margin.x, h)};
+    double left = points[0].x, right = left, top = points[0].y, bottom = top;
+    for (const auto p : points) {
+        left = std::min(left, p.x);
+        right = std::max(right, p.x);
+        top = std::min(top, p.y);
+        bottom = std::max(bottom, p.y);
+    }
+    const auto x0 = std::max(clip.originX(), static_cast<std::int64_t>(std::floor(left)));
+    const auto y0 = std::max(clip.originY(), static_cast<std::int64_t>(std::floor(top)));
+    const auto x1 =
+        std::min(clip.maxXExclusive() - 1, static_cast<std::int64_t>(std::ceil(right)));
+    const auto y1 =
+        std::min(clip.maxYExclusive() - 1, static_cast<std::int64_t>(std::ceil(bottom)));
+    if (x1 < x0 || y1 < y0)
+        return std::nullopt;
+    const auto result =
+        render::ImageWindow::create(x0, y0, static_cast<std::uint32_t>(x1 - x0 + 1),
+                                    static_cast<std::uint32_t>(y1 - y0 + 1));
+    return result ? std::optional{*result.value()} : std::nullopt;
+}
 
 // #742: the compiled resample filter (kResampleFilter*) as the affine command's filter.
 [[nodiscard]] inline render::GpuAffineFilter gpuAffineFilterOf(const std::int64_t filter) noexcept {

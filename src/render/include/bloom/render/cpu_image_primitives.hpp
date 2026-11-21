@@ -192,6 +192,11 @@ class LayerTransform final {
     // bilinear support box, which can include a pixel the resample then writes as transparent, but
     // can never exclude one it would write as opaque.
     [[nodiscard]] std::optional<ImageWindow> supportBounds(ImageWindow clip) const noexcept;
+    // #742: the same with the support box grown to [-marginX, width - 1 + marginX] (and likewise
+    // in y) source pixels: a filtered resample reading a mip level reaches that far. Margin 1 is
+    // the bilinear box above.
+    [[nodiscard]] std::optional<ImageWindow> supportBounds(ImageWindow clip, double marginX,
+                                                           double marginY) const noexcept;
 
   private:
     // Everything the per-pixel path needs, resolved once. Grouped into one aggregate because

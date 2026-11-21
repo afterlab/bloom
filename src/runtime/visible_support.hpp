@@ -343,7 +343,8 @@ class UnclippedPictures final {
         }
         std::optional<ParentedLayerTransform> parented;
         if (layer.parent || scaledContent) {
-            parented.emplace(content, sourceWindow, h, v, static_cast<float>(opacity->value));
+            parented.emplace(content, sourceWindow, h, v, static_cast<float>(opacity->value),
+                             gpuAffineFilterOf(layer.filter));
             if (!parented->finite()) {
                 out.supported = false;
                 return;
@@ -360,7 +361,8 @@ class UnclippedPictures final {
             }
             if (source.window) {
                 concatenated.emplace(content.times(input.chain->second), *source.window, h, v,
-                                     static_cast<float>(opacity->value));
+                                     static_cast<float>(opacity->value),
+                                     gpuAffineFilterOf(layer.filter));
                 if (!concatenated->finite()) {
                     out.supported = false;
                     return;
@@ -399,9 +401,17 @@ class UnclippedPictures final {
                 return;
             }
         const auto working = render::ImageWindow::create(-16777216, -16777216, 33554432, 33554432);
+        // #742: a filtered layer's window as the evaluator sizes it (filterSupportMargin).
+        const auto margin =
+            concatenated || parented
+                ? FilterSupportMargin{}
+                : filterSupportMargin(ParentedLayerTransform(content, sourceWindow, h, v, 1.0F,
+                                                             gpuAffineFilterOf(layer.filter))
+                                          .filterPlan());
         out.window = concatenated ? concatenated->supportBounds(*working.value())
                      : parented   ? parented->supportBounds(*working.value())
-                                  : transform.value()->supportBounds(*working.value());
+                                  : transform.value()->supportBounds(*working.value(), margin.x,
+                                                                     margin.y);
     }
 
     void effectPicture(const CompiledImageEffect& effect, const std::size_t index,

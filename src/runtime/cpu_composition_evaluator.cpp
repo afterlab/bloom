@@ -5299,11 +5299,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
 
                             const auto workingWindow = render::ImageWindow::create(
                                 -16777216, -16777216, 33554432, 33554432);
+                            // #742: a filtered layer's window reaches as far as its mip levels
+                            // do (filterSupportMargin), on every route.
+                            const auto unparentedMargin =
+                                unparentedAffine
+                                    ? detail::filterSupportMargin(unparentedAffine->filterPlan())
+                                    : detail::FilterSupportMargin{};
                             auto layerWindow =
                                 concatenated ? concatenated->supportBounds(*workingWindow.value())
                                 : parented
                                     ? parented->supportBounds(*workingWindow.value())
-                                    : transform.value()->supportBounds(*workingWindow.value());
+                                    : transform.value()->supportBounds(*workingWindow.value(),
+                                                                       unparentedMargin.x,
+                                                                       unparentedMargin.y);
                             // #343: only what the frame can show (and its track matte lets
                             // through) is drawn; that is the lattice the GPU command covers too. A
                             // region-of-interest clip resamples part of that same lattice.

@@ -1114,7 +1114,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             std::optional<detail::ParentedLayerTransform> parented;
             if (layer->parent || scaledContent) {
                 parented.emplace(contentComposed, sourceWindow, hScale, vScale,
-                                 static_cast<float>(opacity->value));
+                                 static_cast<float>(opacity->value),
+                                 detail::gpuAffineFilterOf(layer->filter));
                 if (!parented->finite()) {
                     return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                                 "Parented transform exceeds the supported numeric range");
@@ -1126,9 +1127,19 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             }
             const auto workingWindow =
                 render::ImageWindow::create(-16777216, -16777216, 33554432, 33554432);
+            // #742: a filtered layer's window reaches as far as its mip levels do, exactly as the
+            // CPU reference sizes it (filterSupportMargin of the same composed-matrix plan).
+            const auto unparentedMargin =
+                parented ? detail::FilterSupportMargin{}
+                         : detail::filterSupportMargin(
+                               detail::ParentedLayerTransform(
+                                   contentComposed, sourceWindow, hScale, vScale, 1.0F,
+                                   detail::gpuAffineFilterOf(layer->filter))
+                                   .filterPlan());
             const auto supportWindow =
                 parented ? parented->supportBounds(*workingWindow.value())
-                         : transform.value()->supportBounds(*workingWindow.value());
+                         : transform.value()->supportBounds(*workingWindow.value(),
+                                                            unparentedMargin.x, unparentedMargin.y);
             if (!supportWindow) {
                 accountForInvisibleLeaf();
                 continue;
@@ -1261,7 +1272,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 const auto concatenatedOpacity = opacity->value * chain->opacity;
                 const detail::ParentedLayerTransform concatenated(
                     concatenatedMatrix, chainWindow, hScale, vScale,
-                    static_cast<float>(concatenatedOpacity));
+                    static_cast<float>(concatenatedOpacity),
+                    detail::gpuAffineFilterOf(layer->filter));
                 if (!concatenated.finite()) {
                     return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                                 "Concatenated transform exceeds the supported numeric range");

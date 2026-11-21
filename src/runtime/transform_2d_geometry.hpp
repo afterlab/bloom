@@ -151,7 +151,13 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
                       : prepared.extent == Transform2DExtent::Display ? source.displayWindow()
                                                                       : *working.value();
     geometry.transform = resolved;
-    geometry.window = resolved.supportBounds(clip);
+    // #742: a filtered read reaches as far as its mip levels do (filterSupportMargin of the plan
+    // both routes resample through).
+    const auto margin = filterSupportMargin(
+        ParentedLayerTransform(geometry.matrix, data, proxyX, proxyY, 1.0F,
+                               gpuAffineFilterOf(prepared.filter))
+            .filterPlan());
+    geometry.window = resolved.supportBounds(clip, margin.x, margin.y);
     return geometry;
 }
 

@@ -715,10 +715,15 @@ std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip)
     // Bilinear support, in source-local coordinates: a tap is fetched whenever the sample
     // coordinate is strictly inside (-1, extent), so the closed box [-1, extent] bounds every
     // output pixel the resample can write a non-transparent value to.
-    const auto lowX = -1.0;
-    const auto lowY = -1.0;
-    const auto highX = static_cast<double>(state_.sourceWindow.extent().width());
-    const auto highY = static_cast<double>(state_.sourceWindow.extent().height());
+    return supportBounds(clip, 1.0, 1.0);
+}
+
+std::optional<ImageWindow> LayerTransform::supportBounds(const ImageWindow clip, const double marginX,
+                                                         const double marginY) const noexcept {
+    const auto lowX = -marginX;
+    const auto lowY = -marginY;
+    const auto highX = static_cast<double>(state_.sourceWindow.extent().width()) - 1.0 + marginX;
+    const auto highY = static_cast<double>(state_.sourceWindow.extent().height()) - 1.0 + marginY;
 
     const std::array corners{forwardMap(lowX, lowY), forwardMap(highX, lowY),
                              forwardMap(lowX, highY), forwardMap(highX, highY)};
