@@ -162,6 +162,30 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
                                            {ParameterId::fromRaw(idBase + 6), 0.0}}};
 }
 
+// #757: a styled Text Source on the 16 x 12 base frame: markup with a bold, an italic (the
+// synthesized oblique) and an accent run, and the outline width and background the fixture asks
+// for.
+[[nodiscard]] inline CompiledText styledText(const std::uint64_t idBase, const bool markup,
+                                             const double outline, const std::int64_t background) {
+    auto value = text(idBase);
+    value.content = markup ? "<b>g</b><i>p</i> <c.accent2>u</c>" : "gpu";
+    value.size = {ParameterId::fromRaw(idBase + 2), 7.0};
+    bloom::runtime::CompiledTextStyle style;
+    style.markup = markup;
+    for (std::size_t index = 0; index < style.accents.size(); ++index)
+        style.accents[index] = {ParameterId::fromRaw(idBase + 10 + index),
+                                Color4d{0.2 * static_cast<double>(index), 0.9, 0.3, 1.0}};
+    style.outlineColor = {ParameterId::fromRaw(idBase + 15), Color4d{0.0, 0.1, 0.4, 1.0}};
+    style.outlineWidth = {ParameterId::fromRaw(idBase + 16), outline};
+    style.outlineJoin = 1;
+    style.background = background;
+    style.backgroundColor = {ParameterId::fromRaw(idBase + 17), Color4d{0.6, 0.1, 0.1, 0.7}};
+    style.backgroundPadding = {ParameterId::fromRaw(idBase + 18), 0.2};
+    style.backgroundRadius = {ParameterId::fromRaw(idBase + 19), 1.5};
+    value.style = std::move(style);
+    return value;
+}
+
 // #752: a Subtitles source on the 16 x 12 base frame: one cue with italic and colored runs, shown
 // from 0 s to 20 s, with the box, outline width and fade-out the fixture asks for (a fade-out
 // longer than the cue keeps the fade running at the fixture's time).

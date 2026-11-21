@@ -1117,6 +1117,48 @@ displayProofRunner(const bool customView) {
     add("node.bloom.text-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render text_raster + text source tests",
         [] { return runBuilder(withSource(text(105000), 105000, nullptr, 0.6)); });
+    // #757: the Text Source's styled runs, outline and background box, each on a moved frame at
+    // full frame, an ROI and a half-scale proxy through the production builder.
+    const auto runStyledText = [](const CompiledText& source, const std::uint64_t idBase) {
+        const auto plan = withSource(source, idBase, nullptr, 0.6);
+        FixtureRun combined;
+        combined.prepared = true;
+        const auto append = [&combined](FixtureRun frame) {
+            combined.prepared = combined.prepared && frame.prepared;
+            if (!frame.prepared)
+                combined.evidence += frame.evidence + "; ";
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        };
+        const auto request = requestFor(*plan);
+        append(runBuilderWithRequest(plan, request));
+        auto regional = request;
+        const auto roiWindow = bloom::render::ImageWindow::create(3, 2, 9, 7);
+        regional.roi = *roiWindow.value();
+        append(runBuilderWithRequest(plan, regional));
+        auto proxy = request;
+        const auto proxyExtent = bloom::render::ImageExtent::create(8, 6);
+        proxy.resolution = bloom::runtime::ProxyResolution{*proxyExtent.value()};
+        append(runBuilderWithRequest(plan, proxy));
+        if (combined.prepared)
+            combined.evidence = "prepared full frame, ROI and half-scale proxy";
+        return combined;
+    };
+    add("feature.text.runs", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime styled Text Source CPU and native parity tests", [runStyledText] {
+            return runStyledText(bloom::gpu_coverage_plans::styledText(105100, true, 0.0, 0),
+                                 105100);
+        });
+    add("feature.text.outline", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime styled Text Source CPU and native parity tests", [runStyledText] {
+            return runStyledText(bloom::gpu_coverage_plans::styledText(105200, false, 0.75, 0),
+                                 105200);
+        });
+    add("feature.text.box", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime styled Text Source CPU and native parity tests", [runStyledText] {
+            return runStyledText(bloom::gpu_coverage_plans::styledText(105300, true, 0.5, 1),
+                                 105300);
+        });
     add("node.bloom.shape-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render PathRaster + shape source tests",
         [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000, true), 106000)); });

@@ -3186,3 +3186,23 @@ bloom_add_test(
     TIMEOUT 300
 )
 set_tests_properties(bloom.runtime.subtitles_render_native PROPERTIES SKIP_RETURN_CODE 77)
+
+# #757: a Text Source's styled runs, outline and background box through real documents: pixels,
+# bounds, animation, cache identity, the budget and cancellation on the CPU, then GPU parity full
+# frame, ROI, proxy and on a transformed layer with warm zero dispatch. The CPU half always runs;
+# skips (exit 77) only the GPU half.
+add_executable(bloom_runtime_text_styled_render_native_test
+    ${PROJECT_SOURCE_DIR}/tests/integration/text_styled_render_native_tests.cpp)
+target_include_directories(bloom_runtime_text_styled_render_native_test
+    PRIVATE "${PROJECT_SOURCE_DIR}/src/render/tests" "${PROJECT_SOURCE_DIR}/src/runtime")
+target_link_libraries(bloom_runtime_text_styled_render_native_test
+    PRIVATE bloom_runtime_compiler bloom_runtime_evaluator bloom_render bloom_commands)
+bloom_enable_warnings(bloom_runtime_text_styled_render_native_test)
+bloom_enable_strict_floating_point(bloom_runtime_text_styled_render_native_test)
+bloom_add_test(
+    NAME bloom.runtime.text_styled_render_native
+    COMMAND bloom_runtime_text_styled_render_native_test
+    LABELS runtime native gpu render text
+    TIMEOUT 300
+)
+set_tests_properties(bloom.runtime.text_styled_render_native PROPERTIES SKIP_RETURN_CODE 77)

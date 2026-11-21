@@ -331,6 +331,17 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{"feature.subtitles.fade", "subtitles fade axis",
                                           GpuCoverageDisposition::Required,
                                           "src/runtime Subtitles CPU and native parity tests"});
+    // #757: a Text Source's styled runs (markup faces, oblique, underline, accent and literal
+    // colors), its outline and its background box, each drawn by native coverage.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.text.runs", "text styled runs axis", GpuCoverageDisposition::Required,
+        "src/runtime styled Text Source CPU and native parity tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.text.outline", "text outline axis", GpuCoverageDisposition::Required,
+        "src/runtime styled Text Source CPU and native parity tests"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.text.box", "text background box axis", GpuCoverageDisposition::Required,
+        "src/runtime styled Text Source CPU and native parity tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
         GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor native coverage tests"});
