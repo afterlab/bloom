@@ -85,6 +85,13 @@ void chargeValue(std::size_t& total, const ParameterValue& value) {
                 chargeRecords<GradientStop>(total, item.stops.size());
             else if constexpr (std::is_same_v<Value, NumberListValue>)
                 chargeRecords<double>(total, item.values.size());
+            else if constexpr (std::is_same_v<Value, CueListValue>) {
+                // #752: every cue and style record and the text each owns.
+                chargeRecords<Cue>(total, item.cues.size());
+                chargeRecords<CueStyle>(total, item.styles.size());
+                for (const auto& cue : item.cues)
+                    charge(total, cue->text.size() + cue->speaker.size() + cue->style.size());
+            }
         },
         value);
 }

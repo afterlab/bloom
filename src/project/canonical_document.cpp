@@ -801,6 +801,101 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
     return state.ok(writer.endArray());
 }
 
+// #752: a cue list's members after its "kind" (docs/architecture/project-format.md, "Cue Lists"):
+// language, the next id, the provenance, the styles by name and the cues in (start, end, id)
+// order. Optional members are written only when set, in the order below.
+[[nodiscard]] bool emitCueListMembers(EmitState& state,
+                                      const bloom::document::CueListValue& list) noexcept {
+    using namespace bloom::document;
+    auto& writer = state.writer;
+    const auto text = [&](const std::string_view name, const std::string_view value) {
+        return state.ok(writer.memberName(name)) && state.ok(writer.stringValue(value));
+    };
+    const auto boolean = [&](const std::string_view name, const bool value) {
+        return state.ok(writer.memberName(name)) && state.ok(writer.booleanValue(value));
+    };
+    const auto color = [&](const std::string_view name, const bloom::core::Color4d& value) {
+        const PathScope scope(state, name);
+        return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
+               emitFloat64Member(state, "red", value.red) &&
+               emitFloat64Member(state, "green", value.green) &&
+               emitFloat64Member(state, "blue", value.blue) &&
+               emitFloat64Member(state, "alpha", value.alpha) && state.ok(writer.endObject());
+    };
+    const auto time = [&](const std::string_view name, const bloom::core::RationalTime value) {
+        return state.ok(writer.memberName(name)) && state.ok(writer.beginObject()) &&
+               emitNamedSigned(state, "numerator", value.numerator()) &&
+               emitNamedSigned(state, "denominator", value.denominator()) &&
+               state.ok(writer.endObject());
+    };
+    if (!text("language", list.language) || !emitNamedId(state, "nextCueId", list.nextCueId) ||
+        !state.ok(writer.memberName("provenance")) || !state.ok(writer.beginObject()))
+        return false;
+    if (const auto* file = std::get_if<CueFileProvenance>(&list.provenance)) {
+        if (!text("kind", "file") || !text("portability", file->portability) ||
+            !text("path", file->path) || !text("format", file->format) ||
+            !text("encoding", file->encoding) || !text("digest", file->digest) ||
+            !emitNamedSigned(state, "size", static_cast<std::int64_t>(file->size)) ||
+            !emitNamedSigned(state, "modified", file->modifiedNanoseconds))
+            return false;
+    } else if (const auto* producer = std::get_if<CueProducerProvenance>(&list.provenance)) {
+        if (!text("kind", "producer") || !text("name", producer->name) ||
+            (!producer->version.empty() && !text("version", producer->version)) ||
+            (!producer->parametersDigest.empty() &&
+             !text("parametersDigest", producer->parametersDigest)))
+            return false;
+    } else if (!text("kind", "authored")) {
+        return false;
+    }
+    if (!state.ok(writer.endObject()) || !state.ok(writer.memberName("styles")) ||
+        !state.ok(writer.beginArray()))
+        return false;
+    for (const auto& style : list.styles) {
+        if (!state.ok(writer.beginObject()) || !text("name", style.name) ||
+            (style.color && !color("color", *style.color)) ||
+            (style.backgroundColor && !color("backgroundColor", *style.backgroundColor)) ||
+            (style.outlineColor && !color("outlineColor", *style.outlineColor)) ||
+            (style.outlineWidth && !emitFloat64Member(state, "outlineWidth", *style.outlineWidth)) ||
+            (style.bold && !boolean("bold", *style.bold)) ||
+            (style.italic && !boolean("italic", *style.italic)) ||
+            (style.underline && !boolean("underline", *style.underline)) ||
+            (style.fontFamily && !text("fontFamily", *style.fontFamily)) ||
+            (style.fontSize && !emitFloat64Member(state, "fontSize", *style.fontSize)) ||
+            !state.ok(writer.endObject()))
+            return false;
+    }
+    if (!state.ok(writer.endArray()) || !state.ok(writer.memberName("cues")) ||
+        !state.ok(writer.beginArray()))
+        return false;
+    for (const auto& handle : list.cues) {
+        const auto& cue = *handle;
+        const auto& placement = cue.placement;
+        if (!state.ok(writer.beginObject()) || !emitNamedId(state, "id", cue.id) ||
+            !time("start", cue.start) || !time("end", cue.end) || !text("text", cue.text) ||
+            (!cue.speaker.empty() && !text("speaker", cue.speaker)) ||
+            (!cue.style.empty() && !text("style", cue.style)))
+            return false;
+        if (!placement.empty()) {
+            if (!state.ok(writer.memberName("placement")) || !state.ok(writer.beginObject()) ||
+                (placement.anchor && !text("anchor", cueAnchorName(*placement.anchor))) ||
+                (placement.positionX &&
+                 !emitFloat64Member(state, "positionX", *placement.positionX)) ||
+                (placement.positionY &&
+                 !emitFloat64Member(state, "positionY", *placement.positionY)) ||
+                (placement.lineOffset &&
+                 !emitNamedSigned(state, "lineOffset", *placement.lineOffset)) ||
+                (placement.width && !emitFloat64Member(state, "width", *placement.width)) ||
+                (placement.textAlign &&
+                 !text("textAlign", cueTextAlignName(*placement.textAlign))) ||
+                !state.ok(writer.endObject()))
+                return false;
+        }
+        if (!state.ok(writer.endObject()))
+            return false;
+    }
+    return state.ok(writer.endArray());
+}
+
 [[nodiscard]] bool emitConstantValue(EmitState& state,
                                      const bloom::document::ParameterValue& value) noexcept {
     using namespace bloom::document;
@@ -941,6 +1036,12 @@ extensionTargetValue(const bloom::document::ExtensionTarget& target) noexcept {
                     bloom::document::gradientInterpolationName(modes.interpolation))))
             return false;
         return emitRetainedTrailing(state) && state.ok(writer.endObject());
+    }
+    // #752: a cue list.
+    if (const auto* list = std::get_if<bloom::document::CueListValue>(&value)) {
+        return list->isValid() && state.ok(writer.memberName("kind")) &&
+               state.ok(writer.stringValue("cueList")) && emitCueListMembers(state, *list) &&
+               emitRetainedTrailing(state) && state.ok(writer.endObject());
     }
     if (const auto* rational = std::get_if<bloom::core::RationalTime>(&value)) {
         return state.ok(writer.memberName("kind")) && state.ok(writer.stringValue("rational")) &&

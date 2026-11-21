@@ -806,6 +806,9 @@
                 },
                 {
                     "$ref": "#/$defs/numberListValue-1.44"
+                },
+                {
+                    "$ref": "#/$defs/cueListValue-1.45"
                 }
             ]
         },
@@ -3318,6 +3321,317 @@
                 }
             },
             "unevaluatedProperties": true
+        },
+        "cueListValue-1.45": {
+            "$comment":
+                "Timed subtitle cues (docs/architecture/subtitles.md): styles in name order, cues in (start, end, id) order. Every object inside the list is closed. Only a constant carries one.",
+            "type": "object",
+            "required": [
+                "kind",
+                "language",
+                "nextCueId",
+                "provenance",
+                "styles",
+                "cues"
+            ],
+            "properties": {
+                "kind": {
+                    "const": "cueList"
+                },
+                "language": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 64
+                },
+                "nextCueId": {
+                    "$ref": "#/$defs/objectId"
+                },
+                "provenance": {
+                    "$ref": "#/$defs/cueProvenance-1.45"
+                },
+                "styles": {
+                    "type": "array",
+                    "maxItems": 256,
+                    "items": {
+                        "$ref": "#/$defs/cueStyle-1.45"
+                    }
+                },
+                "cues": {
+                    "type": "array",
+                    "maxItems": 50000,
+                    "items": {
+                        "$ref": "#/$defs/cue-1.45"
+                    }
+                }
+            },
+            "unevaluatedProperties": true
+        },
+        "cueProvenance-1.45": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": [
+                        "kind"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "authored"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
+                {
+                    "type": "object",
+                    "required": [
+                        "kind",
+                        "portability",
+                        "path",
+                        "format",
+                        "encoding",
+                        "digest",
+                        "size",
+                        "modified"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "file"
+                        },
+                        "portability": {
+                            "enum": [
+                                "project-relative",
+                                "absolute"
+                            ]
+                        },
+                        "path": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "format": {
+                            "enum": [
+                                "srt",
+                                "vtt",
+                                "ttml",
+                                "ass"
+                            ]
+                        },
+                        "encoding": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 64
+                        },
+                        "digest": {
+                            "type": "string",
+                            "pattern": "^sha256:[0-9a-f]{64}$"
+                        },
+                        "size": {
+                            "$ref": "#/$defs/signed64Decimal"
+                        },
+                        "modified": {
+                            "$ref": "#/$defs/signed64Decimal"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
+                {
+                    "type": "object",
+                    "required": [
+                        "kind",
+                        "name"
+                    ],
+                    "properties": {
+                        "kind": {
+                            "const": "producer"
+                        },
+                        "name": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "version": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "parametersDigest": {
+                            "type": "string",
+                            "minLength": 1
+                        }
+                    },
+                    "unevaluatedProperties": false
+                }
+            ]
+        },
+        "cueStyle-1.45": {
+            "type": "object",
+            "required": [
+                "name"
+            ],
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "color": {
+                    "type": "object",
+                    "required": [
+                        "red",
+                        "green",
+                        "blue",
+                        "alpha"
+                    ],
+                    "properties": {
+                        "red": {
+                            "type": "number"
+                        },
+                        "green": {
+                            "type": "number"
+                        },
+                        "blue": {
+                            "type": "number"
+                        },
+                        "alpha": {
+                            "type": "number"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
+                "backgroundColor": {
+                    "type": "object",
+                    "required": [
+                        "red",
+                        "green",
+                        "blue",
+                        "alpha"
+                    ],
+                    "properties": {
+                        "red": {
+                            "type": "number"
+                        },
+                        "green": {
+                            "type": "number"
+                        },
+                        "blue": {
+                            "type": "number"
+                        },
+                        "alpha": {
+                            "type": "number"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
+                "outlineColor": {
+                    "type": "object",
+                    "required": [
+                        "red",
+                        "green",
+                        "blue",
+                        "alpha"
+                    ],
+                    "properties": {
+                        "red": {
+                            "type": "number"
+                        },
+                        "green": {
+                            "type": "number"
+                        },
+                        "blue": {
+                            "type": "number"
+                        },
+                        "alpha": {
+                            "type": "number"
+                        }
+                    },
+                    "unevaluatedProperties": false
+                },
+                "outlineWidth": {
+                    "type": "number"
+                },
+                "bold": {
+                    "type": "boolean"
+                },
+                "italic": {
+                    "type": "boolean"
+                },
+                "underline": {
+                    "type": "boolean"
+                },
+                "fontFamily": {
+                    "type": "string"
+                },
+                "fontSize": {
+                    "type": "number"
+                }
+            },
+            "unevaluatedProperties": false
+        },
+        "cue-1.45": {
+            "type": "object",
+            "required": [
+                "id",
+                "start",
+                "end",
+                "text"
+            ],
+            "properties": {
+                "id": {
+                    "$ref": "#/$defs/objectId"
+                },
+                "start": {
+                    "$ref": "#/$defs/rationalTime"
+                },
+                "end": {
+                    "$ref": "#/$defs/rationalTime"
+                },
+                "text": {
+                    "type": "string"
+                },
+                "speaker": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "style": {
+                    "type": "string",
+                    "minLength": 1
+                },
+                "placement": {
+                    "type": "object",
+                    "minProperties": 1,
+                    "properties": {
+                        "anchor": {
+                            "enum": [
+                                "top-left",
+                                "top",
+                                "top-right",
+                                "left",
+                                "center",
+                                "right",
+                                "bottom-left",
+                                "bottom",
+                                "bottom-right"
+                            ]
+                        },
+                        "positionX": {
+                            "type": "number"
+                        },
+                        "positionY": {
+                            "type": "number"
+                        },
+                        "lineOffset": {
+                            "$ref": "#/$defs/signed64Decimal"
+                        },
+                        "width": {
+                            "type": "number"
+                        },
+                        "textAlign": {
+                            "enum": [
+                                "left",
+                                "center",
+                                "right"
+                            ]
+                        }
+                    },
+                    "unevaluatedProperties": false
+                }
+            },
+            "unevaluatedProperties": false
         },
         "gradientValue-1.38": {
             "type": "object",

@@ -34,6 +34,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <optional>
+#include <span>
+#include <initializer_list>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -134,6 +138,336 @@ using document::Vec3d;
 // ------------------------------------------------------------------------------------------
 // Parameters (docs/architecture/project-format.md, "Parameters")
 // ------------------------------------------------------------------------------------------
+
+// ------------------------------------------------------------------------------------------
+// Cue lists (#752, docs/architecture/project-format.md, "Cue Lists")
+// ------------------------------------------------------------------------------------------
+
+// An object of exactly `keys`, in that order: every object inside a cue list is closed, in every
+// minor (a newer minor may add members to the cue list value itself, never inside it).
+[[nodiscard]] bool matchClosedMembers(const JsonValue& node,
+                                      const std::span<const std::string_view> keys,
+                                      DecodeState& state, const std::string& path,
+                                      std::vector<const JsonValue*>& members) {
+    if (node.kind() == JsonValueKind::Object && node.objectMembers().size() > keys.size()) {
+        state.fail(DocumentDecodeError::UnknownMember,
+                   joinPath(path, node.objectMembers()[keys.size()].key()));
+        return false;
+    }
+    return matchOrderedMembers(node, keys, false, state, path, members);
+}
+
+// The required keys, then each optional key the object holds, in the order given.
+[[nodiscard]] std::vector<std::string_view>
+presentKeys(const JsonValue& node, const std::initializer_list<std::string_view> required,
+            const std::initializer_list<std::string_view> optional) {
+    std::vector<std::string_view> keys(required);
+    if (node.kind() == JsonValueKind::Object)
+        for (const auto key : optional)
+            if (node.findMember(key) != nullptr)
+                keys.push_back(key);
+    return keys;
+}
+
+[[nodiscard]] bool decodeOwnedString(const JsonValue& value, DecodeState& state,
+                                     const std::string& path, std::string& out) {
+    std::string_view text;
+    if (!decodeStringMember(value, state, path, text))
+        return false;
+    out = std::string(text);
+    return true;
+}
+
+[[nodiscard]] bool decodeCueInt64(const JsonValue& value, DecodeState& state,
+                                  const std::string& path, std::int64_t& out) {
+    std::string_view text;
+    if (!decodeStringMember(value, state, path, text))
+        return false;
+    const auto parsed = parseCanonicalInt64(text);
+    if (!parsed) {
+        state.fail(DocumentDecodeError::InvalidInt64Value, path);
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+[[nodiscard]] bool decodeCueTime(const JsonValue& node, DecodeState& state, const std::string& path,
+                                 core::RationalTime& out) {
+    static constexpr std::array<std::string_view, 2> keys{"numerator", "denominator"};
+    std::vector<const JsonValue*> members;
+    if (!matchClosedMembers(node, keys, state, path, members))
+        return false;
+    std::string_view numerator;
+    std::string_view denominator;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "numerator"), numerator) ||
+        !decodeStringMember(*members[1], state, joinPath(path, "denominator"), denominator))
+        return false;
+    const auto parsed = parseCanonicalRationalTime(numerator, denominator);
+    if (!parsed) {
+        state.fail(mapRationalError(parsed.error()), fieldPath(path, parsed.field()));
+        return false;
+    }
+    out = *parsed.value();
+    return true;
+}
+
+[[nodiscard]] bool decodeCueColor(const JsonValue& node, DecodeState& state,
+                                  const std::string& path, std::optional<core::Color4d>& out) {
+    static constexpr std::array<std::string_view, 4> keys{"red", "green", "blue", "alpha"};
+    std::vector<const JsonValue*> members;
+    if (!matchClosedMembers(node, keys, state, path, members))
+        return false;
+    core::Color4d color;
+    if (!decodeFloat64Member(*members[0], state, joinPath(path, "red"), color.red) ||
+        !decodeFloat64Member(*members[1], state, joinPath(path, "green"), color.green) ||
+        !decodeFloat64Member(*members[2], state, joinPath(path, "blue"), color.blue) ||
+        !decodeFloat64Member(*members[3], state, joinPath(path, "alpha"), color.alpha))
+        return false;
+    out = color;
+    return true;
+}
+
+[[nodiscard]] bool decodeCueProvenance(const JsonValue& node, DecodeState& state,
+                                       const std::string& path, document::CueProvenance& out) {
+    std::string_view kind;
+    if (!decodeKindDiscriminator(node, state, path, kind))
+        return false;
+    std::vector<const JsonValue*> members;
+    if (kind == "authored") {
+        static constexpr std::array<std::string_view, 1> keys{"kind"};
+        if (!matchClosedMembers(node, keys, state, path, members))
+            return false;
+        out = document::CueAuthoredProvenance{};
+        return true;
+    }
+    if (kind == "file") {
+        static constexpr std::array<std::string_view, 8> keys{
+            "kind", "portability", "path", "format", "encoding", "digest", "size", "modified"};
+        if (!matchClosedMembers(node, keys, state, path, members))
+            return false;
+        document::CueFileProvenance file;
+        std::int64_t size = 0;
+        if (!decodeOwnedString(*members[1], state, joinPath(path, "portability"),
+                               file.portability) ||
+            !decodeOwnedString(*members[2], state, joinPath(path, "path"), file.path) ||
+            !decodeOwnedString(*members[3], state, joinPath(path, "format"), file.format) ||
+            !decodeOwnedString(*members[4], state, joinPath(path, "encoding"), file.encoding) ||
+            !decodeOwnedString(*members[5], state, joinPath(path, "digest"), file.digest) ||
+            !decodeCueInt64(*members[6], state, joinPath(path, "size"), size) ||
+            !decodeCueInt64(*members[7], state, joinPath(path, "modified"),
+                            file.modifiedNanoseconds))
+            return false;
+        if (size < 0) {
+            state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "size"));
+            return false;
+        }
+        file.size = static_cast<std::uint64_t>(size);
+        out = std::move(file);
+        return true;
+    }
+    if (kind == "producer") {
+        const auto keys = presentKeys(node, {"kind", "name"}, {"version", "parametersDigest"});
+        if (!matchClosedMembers(node, keys, state, path, members))
+            return false;
+        document::CueProducerProvenance producer;
+        if (!decodeOwnedString(*members[1], state, joinPath(path, "name"), producer.name))
+            return false;
+        for (std::size_t index = 2; index < keys.size(); ++index) {
+            auto& target = keys[index] == "version" ? producer.version : producer.parametersDigest;
+            if (!decodeOwnedString(*members[index], state, joinPath(path, keys[index]), target))
+                return false;
+            if (target.empty()) { // an empty optional is omitted, never written
+                state.fail(DocumentDecodeError::DomainViolation, joinPath(path, keys[index]));
+                return false;
+            }
+        }
+        out = std::move(producer);
+        return true;
+    }
+    state.fail(DocumentDecodeError::DomainViolation, joinPath(path, "kind"));
+    return false;
+}
+
+[[nodiscard]] bool decodeCueStyle(const JsonValue& node, DecodeState& state,
+                                  const std::string& path, document::CueStyle& out) {
+    const auto keys = presentKeys(node, {"name"},
+                                  {"color", "backgroundColor", "outlineColor", "outlineWidth",
+                                   "bold", "italic", "underline", "fontFamily", "fontSize"});
+    std::vector<const JsonValue*> members;
+    if (!matchClosedMembers(node, keys, state, path, members) ||
+        !decodeOwnedString(*members[0], state, joinPath(path, "name"), out.name))
+        return false;
+    for (std::size_t index = 1; index < keys.size(); ++index) {
+        const auto key = keys[index];
+        const auto where = joinPath(path, key);
+        const auto& value = *members[index];
+        bool ok = true;
+        if (key == "color") {
+            ok = decodeCueColor(value, state, where, out.color);
+        } else if (key == "backgroundColor") {
+            ok = decodeCueColor(value, state, where, out.backgroundColor);
+        } else if (key == "outlineColor") {
+            ok = decodeCueColor(value, state, where, out.outlineColor);
+        } else if (key == "outlineWidth" || key == "fontSize") {
+            double number = 0.0;
+            ok = decodeFloat64Member(value, state, where, number);
+            (key == "fontSize" ? out.fontSize : out.outlineWidth) = number;
+        } else if (key == "fontFamily") {
+            std::string family;
+            ok = decodeOwnedString(value, state, where, family);
+            out.fontFamily = std::move(family);
+        } else {
+            bool flag = false;
+            ok = decodeBooleanMember(value, state, where, flag);
+            (key == "bold" ? out.bold : key == "italic" ? out.italic : out.underline) = flag;
+        }
+        if (!ok)
+            return false;
+    }
+    return true;
+}
+
+[[nodiscard]] bool decodeCuePlacement(const JsonValue& node, DecodeState& state,
+                                      const std::string& path, document::CuePlacement& out) {
+    const auto keys = presentKeys(
+        node, {}, {"anchor", "positionX", "positionY", "lineOffset", "width", "textAlign"});
+    std::vector<const JsonValue*> members;
+    if (keys.empty()) { // an empty placement is omitted, never written
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    if (!matchClosedMembers(node, keys, state, path, members))
+        return false;
+    for (std::size_t index = 0; index < keys.size(); ++index) {
+        const auto key = keys[index];
+        const auto where = joinPath(path, key);
+        const auto& value = *members[index];
+        if (key == "anchor" || key == "textAlign") {
+            std::string_view text;
+            if (!decodeStringMember(value, state, where, text))
+                return false;
+            bool known = false;
+            if (key == "anchor") {
+                out.anchor = document::cueAnchorFromName(text);
+                known = out.anchor.has_value();
+            } else {
+                out.textAlign = document::cueTextAlignFromName(text);
+                known = out.textAlign.has_value();
+            }
+            if (!known) {
+                state.fail(DocumentDecodeError::DomainViolation, where);
+                return false;
+            }
+        } else if (key == "lineOffset") {
+            std::int64_t offset = 0;
+            if (!decodeCueInt64(value, state, where, offset))
+                return false;
+            out.lineOffset = offset;
+        } else {
+            double number = 0.0;
+            if (!decodeFloat64Member(value, state, where, number))
+                return false;
+            (key == "positionX"   ? out.positionX
+             : key == "positionY" ? out.positionY
+                                  : out.width) = number;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] bool decodeCue(const JsonValue& node, DecodeState& state, const std::string& path,
+                             document::Cue& out) {
+    const auto keys =
+        presentKeys(node, {"id", "start", "end", "text"}, {"speaker", "style", "placement"});
+    std::vector<const JsonValue*> members;
+    if (!matchClosedMembers(node, keys, state, path, members))
+        return false;
+    std::string_view idText;
+    if (!decodeStringMember(*members[0], state, joinPath(path, "id"), idText))
+        return false;
+    const auto id = parseCanonicalObjectId(idText);
+    if (!id) {
+        state.fail(DocumentDecodeError::InvalidId, joinPath(path, "id"));
+        return false;
+    }
+    out.id = *id.value();
+    if (!decodeCueTime(*members[1], state, joinPath(path, "start"), out.start) ||
+        !decodeCueTime(*members[2], state, joinPath(path, "end"), out.end) ||
+        !decodeOwnedString(*members[3], state, joinPath(path, "text"), out.text))
+        return false;
+    for (std::size_t index = 4; index < keys.size(); ++index) {
+        const auto key = keys[index];
+        const auto where = joinPath(path, key);
+        if (key == "placement") {
+            if (!decodeCuePlacement(*members[index], state, where, out.placement))
+                return false;
+            continue;
+        }
+        auto& target = key == "speaker" ? out.speaker : out.style;
+        if (!decodeOwnedString(*members[index], state, where, target))
+            return false;
+        if (target.empty()) { // an empty optional is omitted, never written
+            state.fail(DocumentDecodeError::DomainViolation, where);
+            return false;
+        }
+    }
+    return true;
+}
+
+// The members after "kind"; `node` is the cue list constant.
+[[nodiscard]] bool decodeCueList(const JsonValue& node, DecodeState& state,
+                                 const std::string& path, document::CueListValue& out) {
+    static constexpr std::array<std::string_view, 6> keys{"kind",       "language", "nextCueId",
+                                                          "provenance", "styles",   "cues"};
+    std::vector<const JsonValue*> members;
+    if (!matchOrderedMembers(node, keys, true, state, path, members))
+        return false;
+    std::string_view nextText;
+    if (!decodeOwnedString(*members[1], state, joinPath(path, "language"), out.language) ||
+        !decodeStringMember(*members[2], state, joinPath(path, "nextCueId"), nextText))
+        return false;
+    const auto next = parseCanonicalObjectId(nextText);
+    if (!next) {
+        state.fail(DocumentDecodeError::InvalidId, joinPath(path, "nextCueId"));
+        return false;
+    }
+    out.nextCueId = *next.value();
+    if (!decodeCueProvenance(*members[3], state, joinPath(path, "provenance"), out.provenance))
+        return false;
+    const auto stylesPath = joinPath(path, "styles");
+    if (members[4]->kind() != JsonValueKind::Array ||
+        members[4]->arrayElements().size() > document::kMaximumCueStyles) {
+        state.fail(DocumentDecodeError::DomainViolation, stylesPath);
+        return false;
+    }
+    for (const auto& entry : members[4]->arrayElements()) {
+        document::CueStyle style;
+        if (!decodeCueStyle(entry, state, joinPathIndex(stylesPath, out.styles.size()), style))
+            return false;
+        out.styles.push_back(std::move(style));
+    }
+    const auto cuesPath = joinPath(path, "cues");
+    if (members[5]->kind() != JsonValueKind::Array ||
+        members[5]->arrayElements().size() > document::kMaximumCues) {
+        state.fail(DocumentDecodeError::DomainViolation, cuesPath);
+        return false;
+    }
+    out.cues.reserve(members[5]->arrayElements().size());
+    for (const auto& entry : members[5]->arrayElements()) {
+        auto cue = std::make_shared<document::Cue>();
+        if (!decodeCue(entry, state, joinPathIndex(cuesPath, out.cues.size()), *cue))
+            return false;
+        out.cues.push_back(std::move(cue));
+    }
+    // The stored order is the canonical one: a list out of order, or breaking any other rule, is
+    // refused rather than repaired.
+    if (!out.isValid()) {
+        state.fail(DocumentDecodeError::DomainViolation, path);
+        return false;
+    }
+    return true;
+}
 
 [[nodiscard]] bool decodeConstantValue(const JsonValue& node, DecodeState& state,
                                        const std::string& path, ParameterValue& out) {
@@ -520,6 +854,15 @@ using document::Vec3d;
             return false;
         }
         out = *parsed.value();
+        return true;
+    }
+
+    // #752: a cue list.
+    if (kindText == "cueList") {
+        document::CueListValue value;
+        if (!decodeCueList(node, state, path, value))
+            return false;
+        out = std::move(value);
         return true;
     }
 

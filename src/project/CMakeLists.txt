@@ -469,6 +469,17 @@ if(BUILD_TESTING)
         LABELS unit persistence
     )
 
+    # #752: a cue list saved, reopened and re-encoded byte for byte, and what its decoder refuses.
+    add_executable(bloom_project_cue_list_test tests/cue_list_persistence_tests.cpp)
+    target_include_directories(bloom_project_cue_list_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    target_link_libraries(bloom_project_cue_list_test PRIVATE bloom_project ZLIB::ZLIB)
+    bloom_enable_warnings(bloom_project_cue_list_test)
+    bloom_add_test(
+        NAME bloom.project.cue-list
+        COMMAND bloom_project_cue_list_test
+        LABELS unit persistence
+    )
+
     add_executable(bloom_project_open_archive_test tests/open_archive_tests.cpp)
     target_include_directories(
         bloom_project_open_archive_test

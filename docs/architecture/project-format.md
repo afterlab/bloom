@@ -1635,6 +1635,53 @@ holding one as preserved read-only, under the rule for unknown core discriminato
 holds the value as the `numberListValue-1.44` arm of `parameterValue-1.4`;
 `bloom.project.value-graph` saves, reopens and re-encodes one byte for byte.
 
+## Cue Lists
+
+A cue list constant (issue #752, `docs/architecture/subtitles.md`) is the cues of a Subtitles node.
+It is written with its members in this order:
+
+```json
+{
+  "kind": "cueList",
+  "language": "en-US",
+  "nextCueId": "9",
+  "provenance": { "kind": "authored" },
+  "styles": [ { "name": "loud", "color": { "red": 1, "green": 1, "blue": 0, "alpha": 1 }, "bold": true } ],
+  "cues": [
+    { "id": "4", "start": { "numerator": "0", "denominator": "1" },
+      "end": { "numerator": "1001", "denominator": "625" }, "text": "Hello <i>there</i>" }
+  ]
+}
+```
+
+- `language` is a BCP 47 tag (`und` when undetermined); `nextCueId` the id the next new cue takes,
+  an object-id decimal string, greater than every cue's id.
+- `provenance` is `{"kind": "authored"}`, a linked file
+  `{"kind": "file", "portability", "path", "format", "encoding", "digest", "size", "modified"}`
+  (`portability` and `path` as an asset locator's; `format` one of `srt`, `vtt`, `ttml`, `ass`;
+  `digest` `sha256:` and 64 lower-case hex digits; `size` and `modified` signed decimal strings,
+  the stamp opaque), or a producer `{"kind": "producer", "name"}` with optional `version` and
+  `parametersDigest`.
+- `styles` are in UTF-8 name order, at most 256, none named after a built-in WebVTT class. Each
+  has `name`, then only the members it sets, in this order: `color`, `backgroundColor`,
+  `outlineColor` (each `{red, green, blue, alpha}`, straight sRGB-encoded values), `outlineWidth`,
+  `bold`, `italic`, `underline`, `fontFamily`, `fontSize`.
+- `cues` are in (start, end, id) order, at most 50000. Each has `id`, `start` and `end` (exact
+  rational seconds, the end exclusive), `text` (WebVTT cue markup), then only what it sets:
+  `speaker`, `style` and `placement`. A placement holds at least one of `anchor` (one of the nine
+  anchor names), `positionX`, `positionY`, `lineOffset` (a signed decimal string), `width` and
+  `textAlign` (`left`, `center`, `right`), in that order.
+
+Every object inside a list is closed in every minor: an unknown member inside a style, cue,
+placement, color, time or provenance is refused, and so is an empty optional string (it is omitted,
+never written empty). A newer minor may add members after `cues` on the list itself, which are
+retained. A list breaking any rule of `docs/architecture/subtitles.md` (order, unique ids, text
+limits, a cue naming a missing style, more than 16 cues on screen at once) is refused, not
+repaired. A build that predates the kind opens a project holding one as preserved read-only, under
+the rule for unknown core discriminators. The schema holds the value as the `cueListValue-1.45` arm
+of `parameterValue-1.4`; `bloom.project.cue-list` saves, reopens and re-encodes one byte for byte
+and checks each refusal.
+
 ## Matte Sources
 
 A layer mask may follow its `opacity` with `matte`, an output port reference (`{"node", "port"}`)
