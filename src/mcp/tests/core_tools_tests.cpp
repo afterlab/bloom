@@ -1503,6 +1503,147 @@ void svgFootageWarningQuery() {
     std::filesystem::remove(path);
 }
 
+// #591: query kind=outputs reads a node's outputs as typed values: a Space Readout's origin, axes,
+// scale, rotation, range, matrix and name equal the map of the space it reads; a Coordinate Space's
+// own output is the space with its 4x4 map; To Space answers units; every value follows an edit;
+// errors keep the other queries' rules (unknown ids and a stale revision are refused).
+void nodeOutputsQuery() {
+    Headless server;
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    const auto add = [&](const std::string& type) {
+        return std::to_string(outputId(
+            transact(R"({"op":"bloom.node.add","args":{"composition":1,"nodeType":")" + type +
+                     R"("}})"),
+            "node"));
+    };
+    const auto set = [&](const std::string& node, const std::string& role,
+                         const std::string& value) {
+        const auto result =
+            transact(R"({"op":"bloom.node.set-parameter-value","args":{"composition":1,"node":)" +
+                     node + R"(,"role":")" + role + R"(",)" + value + "}}");
+        expect(contains(result, R"("isError":false)"), "set " + role + ": " + result);
+    };
+    const auto space = add("bloom.coordinate-space");
+    const auto readout = add("bloom.space-readout");
+    const auto toSpace = add("bloom.to-space");
+    set(space, "origin", R"("vector":[256,200])");
+    set(space, "pixelsPerUnit", R"("vector":[40,30])");
+    set(space, "rotation", R"("number":90)");
+    set(toSpace, "pixels", R"("vector":[316,280])");
+    for (const auto& consumer : {readout, toSpace})
+        expect(contains(transact(R"({"op":"bloom.node.connect","args":{"composition":1,)"
+                                 R"("sourceNode":)" +
+                                 space + R"(,"sourcePort":"space","targetNode":)" + consumer +
+                                 R"(,"port":"space"}})"),
+                        R"("isError":false)"),
+               "the space is connected");
+    const auto outputs = [&](const std::string& node, const std::string& more = {}) {
+        return server.call("query",
+                           R"({"kind":"outputs","composition":1,"node":)" + node + more + "}");
+    };
+    // One output's value as numbers (a number, a vector, a list's values or a matrix's rows).
+    const auto numbers = [](const std::string& response, const std::string& name) {
+        std::vector<double> found;
+        const JsonResponse parsed(response);
+        auto* list = parsed.content() ? yyjson_obj_get(parsed.content(), "outputs") : nullptr;
+        yyjson_arr_iter iter = yyjson_arr_iter_with(list);
+        const std::function<void(yyjson_val*)> collect = [&](yyjson_val* value) {
+            if (yyjson_is_num(value))
+                found.push_back(yyjson_get_num(value));
+            else if (yyjson_is_arr(value)) {
+                yyjson_arr_iter items = yyjson_arr_iter_with(value);
+                while (auto* item = yyjson_arr_iter_next(&items))
+                    collect(item);
+            } else if (yyjson_is_obj(value)) {
+                collect(yyjson_obj_get(value, "values"));
+                collect(yyjson_obj_get(value, "matrix"));
+            }
+        };
+        while (auto* output = yyjson_arr_iter_next(&iter))
+            if (text(output, "name") == name)
+                collect(yyjson_obj_get(output, "value"));
+        return found;
+    };
+    const auto same = [](const std::vector<double>& found, const std::vector<double>& expected) {
+        if (found.size() != expected.size())
+            return false;
+        for (std::size_t index = 0; index < found.size(); ++index)
+            if (std::abs(found[index] - expected[index]) > 1e-9 * std::max(1.0, std::abs(expected[index])))
+                return false;
+        return true;
+    };
+    const auto refused = [](const std::string& response) {
+        return contains(response, R"("isError":true)") || contains(response, R"("error":{)");
+    };
+    // A quarter turn is exact: x units go down the screen, y units (Y up) go right.
+    auto read = outputs(readout, R"(,"time":0)");
+    expect(contains(read, R"("type":"bloom.space-readout")") &&
+               contains(read, R"("status":"evaluated")") &&
+               contains(read, R"("time":{"frames":0,"seconds":[0,1]})"),
+           "outputs names the node, its type and the time: " + read);
+    const std::vector<std::pair<std::string, std::vector<double>>> readouts{
+        {"origin", {256.0, 200.0}},
+        {"xAxis", {0.0, 40.0}},
+        {"yAxis", {30.0, 0.0}},
+        {"scale", {40.0, 30.0}},
+        {"rotation", {90.0}},
+        {"rangeMin", {-5.0, -5.0}},
+        {"rangeMax", {5.0, 5.0}},
+        {"matrix", {0.0, 30.0, 256.0, 40.0, 0.0, 200.0, 0.0, 0.0, 1.0}}};
+    for (const auto& [name, expected] : readouts)
+        expect(same(numbers(read, name), expected), "the readout answers its " + name + ": " + read);
+    for (const auto* part :
+         {R"({"name":"xAxis","kind":"vector2","value":[)", R"({"name":"rotation","kind":"scalar","value":)",
+          R"({"name":"matrix","kind":"number-list","value":{"values":[)",
+          R"({"name":"name","kind":"string","value":"graph"})",
+          R"({"name":"parentName","kind":"string","value":""})",
+          R"({"name":"projective","kind":"boolean","value":false})",
+          R"({"name":"valid","kind":"boolean","value":true})"})
+        expect(contains(read, part), std::string("the readout is typed as ") + part + ": " + read);
+    read = outputs(space);
+    expect(contains(read, R"({"name":"space","kind":"space","value":{"name":"graph","dimensions":2,)"
+                          R"("matrix":[[)") &&
+               contains(read, R"("affine":true,"range":{"min":[-5.0,-5.0],"max":[5.0,5.0]},)"
+                              R"("parent":null}})"),
+           "a Coordinate Space's output is the space as values: " + read);
+    expect(same(numbers(read, "space"), {0.0, 30.0, 0.0, 256.0, 40.0, 0.0, 0.0, 200.0, 0.0, 0.0,
+                                          1.0, 0.0, 0.0, 0.0, 0.0, 1.0}),
+           "the space's matrix is its 4x4 map, row by row: " + read);
+    read = outputs(toSpace);
+    expect(same(numbers(read, "result"), {2.0, 2.0}), "To Space answers the units of a pixel: " + read);
+    // The values follow the space.
+    set(space, "origin", R"("vector":[100,50])");
+    read = outputs(readout);
+    expect(same(numbers(read, "origin"), {100.0, 50.0}) &&
+               contains(read, std::string(R"("revision":)") + revisionOf(server)),
+           "the readout follows the moved space at the new revision: " + read);
+    read = outputs(toSpace);
+    expect(same(numbers(read, "result"), {5.75, 7.2}), "To Space follows the moved space: " + read);
+    // A picture output has no value and says so.
+    read = outputs(add("bloom.solid-source"));
+    expect(contains(read, R"("kind":"image","value":null,"note":)"),
+           "a picture output is no value: " + read);
+    // The other queries' rules.
+    read = outputs("9999");
+    expect(refused(read) && contains(read, "query kind=nodes"),
+           "an unknown node is refused, naming the nodes query: " + read);
+    read = server.call("query", R"({"kind":"outputs","composition":99,"node":)" + readout + "}");
+    expect(refused(read) && contains(read, "query kind=compositions"),
+           "an unknown composition is refused: " + read);
+    read = outputs(readout, R"(,"expectedRevision":1)");
+    expect(refused(read) && contains(read, "Stale revision"), "a stale revision is refused: " + read);
+    read = outputs(readout, R"(,"expectedRevision":)" + revisionOf(server));
+    expect(contains(read, R"("status":"evaluated")"), "the current revision reads: " + read);
+    read = outputs(readout, R"(,"layer":1)");
+    expect(refused(read), "an argument the kind does not take is refused: " + read);
+    const auto help = server.call("help", R"({"name":"query:outputs"})");
+    expect(contains(help, R"("found":true)") && contains(help, "four rows"),
+           "help describes query:outputs and the space's matrix: " + help.substr(0, 400));
+}
+
 void mergeEntryReadBack() {
     Headless server;
     const auto transact = [&](const std::string& operations) {
@@ -3196,6 +3337,7 @@ int main() {
         fileSessionsBesideALiveProject();
         mergeEntryReadBack();
         svgFootageWarningQuery();
+        nodeOutputsQuery();
         fieldTestArguments();
         gradientReadBack();
         keyEqualToDefault();

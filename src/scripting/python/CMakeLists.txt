@@ -117,6 +117,12 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_parity_ops.py"
             "${CMAKE_BINARY_DIR}/python"
         LABELS scripting python integration)
+    # #591: bloom.data.outputs reads a node's outputs as values, following a keyed space.
+    bloom_add_test(NAME bloom.scripting.python-node-outputs
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/python_node_outputs.py"
+            "${CMAKE_BINARY_DIR}/python"
+        LABELS scripting python integration TIMEOUT 180)
     # #724: bloom.scopes reads tables, a summary and a picture of the Scopes panel's measure.
     bloom_add_test(NAME bloom.scripting.python-scopes
         COMMAND "${Python3_EXECUTABLE}" -I

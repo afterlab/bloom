@@ -1,8 +1,10 @@
 // Review captures of the coordinate space nodes (#591): the Properties of a Coordinate Space in each
-// mode, and the cards of the five space nodes wired into a plot. A tool, not a test: it writes
+// mode, of Space Readout, To Space, From Space and Place in Space, of Function Plot, Axes and Axis
+// Tick with a space connected (no Origin or Pixels Per Unit rows) and without one, and the cards of
+// the space nodes wired into a plot beside an Axis Tick with no space. A tool, not a test: it writes
 // 591-<surface>-dpr<d>.png to the directory given as the first argument. The device pixel ratio
-// follows QT_SCALE_FACTOR (run it at 1 and 1.5). It fails when a surface is missing or when a
-// Properties label is cut short.
+// follows QT_SCALE_FACTOR (run it at 1, 1.5 and 2). It fails when a surface is missing, when a
+// Properties label is cut short, or when a placement row shows while a space is connected.
 #include "isolated_qt_settings.hpp"
 
 #include "node_editor_items.hpp"
@@ -11,6 +13,7 @@
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/document/document.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grading_controls.hpp>
@@ -60,6 +63,20 @@ bool connect(ui::CompositionSession& session, const document::NodeId from, const
 }
 
 // A label whose text is wider than the room it was given is cut short.
+// Whether Properties shows the row of `node`'s `role` (a registry row names its parameter; the
+// panel also lists the nodes upstream, such as the space with its own Origin).
+bool showsRow(const QWidget& root, ui::CompositionSession& session, const document::NodeId node,
+              const char* role) {
+    const auto parameter = ui::nodeRoleParameter(session, node, role);
+    if (!parameter)
+        return false;
+    for (const auto* child : root.findChildren<QWidget*>())
+        if (child->property("parameterId").toULongLong() == parameter->value() &&
+            child->isVisibleTo(&root))
+            return true;
+    return false;
+}
+
 int truncatedLabels(const QWidget& root) {
     int cut = 0;
     for (const auto* label : root.findChildren<QLabel*>()) {
@@ -98,8 +115,11 @@ int main(int argc, char** argv) {
     const auto fromSpace = add(session, document::kFromSpaceNodeType, {320, 300});
     const auto place = add(session, document::kPlaceInSpaceNodeType, {320, 480});
     const auto axes = add(session, document::kAxesNodeType, {640, 0});
+    const auto tick = add(session, document::kAxisTickNodeType, {640, 520});
+    const auto plot = add(session, document::kFunctionPlotNodeType, {960, 0});
+    const auto loose = add(session, document::kAxisTickNodeType, {960, 520});
     int failures = 0;
-    for (const auto consumer : {readout, toSpace, fromSpace, place, axes})
+    for (const auto consumer : {readout, toSpace, fromSpace, place, axes, tick, plot})
         if (!connect(session, space, "space", consumer, "space"))
             ++failures;
     settle();
@@ -123,21 +143,46 @@ int main(int argc, char** argv) {
         session.selectNode(space);
         settle();
         ui::PropertiesEditor properties(session);
-        properties.resize(380, 760);
+        properties.resize(380, 1300);
         properties.show();
         settle();
         failures += truncatedLabels(properties);
         save(properties.grab().toImage(), surface);
     }
-    {
-        session.selectNode(place);
+    // The other space nodes, and the three that draw in a space: with one connected, their own
+    // Origin and Pixels Per Unit rows are not shown (an Axis Tick with no space keeps them).
+    struct Surface final {
+        document::NodeId node;
+        const char* name;
+        bool spaced;
+    };
+    for (const auto& surface : std::vector<Surface>{{readout, "properties-space-readout", false},
+                                                    {toSpace, "properties-to-space", false},
+                                                    {fromSpace, "properties-from-space", false},
+                                                    {place, "properties-place-in-space", false},
+                                                    {plot, "properties-function-plot-in-space", true},
+                                                    {axes, "properties-axes-in-space", true},
+                                                    {tick, "properties-axis-tick-in-space", true},
+                                                    {loose, "properties-axis-tick-own-origin", false}}) {
+        session.selectNode(surface.node);
         settle();
         ui::PropertiesEditor properties(session);
-        properties.resize(380, 520);
+        properties.resize(380, 1300);
         properties.show();
         settle();
         failures += truncatedLabels(properties);
-        save(properties.grab().toImage(), QStringLiteral("properties-place-in-space"));
+        if (surface.spaced && (showsRow(properties, session, surface.node, "origin") ||
+                                showsRow(properties, session, surface.node, "pixelsPerUnit"))) {
+            ++failures;
+            std::cout << surface.name << ": a placement row shows while a space is connected\n";
+        }
+        if (surface.node == loose &&
+            (!showsRow(properties, session, surface.node, "origin") ||
+             !showsRow(properties, session, surface.node, "pixelsPerUnit"))) {
+            ++failures;
+            std::cout << surface.name << ": the placement rows are missing with no space\n";
+        }
+        save(properties.grab().toImage(), QString::fromLatin1(surface.name));
     }
     {
         ui::NodeGraphEditor nodes(session);
@@ -155,7 +200,7 @@ int main(int argc, char** argv) {
                     bounds = bounds.united(card->sceneBoundingRect());
                     ++cards;
                 }
-            if (cards < 6)
+            if (cards < 9)
                 ++failures;
             const auto source = bounds.adjusted(-16, -16, 16, 16);
             const qreal ratio = nodes.devicePixelRatioF();

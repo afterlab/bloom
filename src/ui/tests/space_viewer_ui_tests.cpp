@@ -6,6 +6,7 @@
 // writes each Viewer to <dir>/<name>-viewer.png.
 
 #include "await_qt.hpp"
+#include "node_editor_items.hpp"
 #include <QApplication>
 #include <QDir>
 #include <QImage>
@@ -16,6 +17,7 @@
 #include <bloom/commands/operations.hpp>
 #include <bloom/document/graph.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
@@ -26,6 +28,8 @@
 #include <bloom/ui/composition_preview_pipeline.hpp>
 #include <bloom/ui/composition_session.hpp>
 #include <bloom/ui/grading_controls.hpp>
+#include <bloom/ui/node_editor.hpp>
+#include <bloom/ui/properties_editor.hpp>
 #include <bloom/ui/task_ui_bridge.hpp>
 #include <bloom/ui/viewer_editor.hpp>
 
@@ -294,6 +298,100 @@ void testParented() {
     expect(scene.stack.size() == before, "the press edits nothing");
 }
 
+void settle() {
+    for (int pass = 0; pass < 3; ++pass) {
+        QCoreApplication::sendPostedEvents();
+        QApplication::processEvents();
+    }
+}
+
+// Whether Properties shows the row of `node`'s `role` (a registry row names its parameter; the
+// panel also lists the nodes upstream, such as the space with its own Origin).
+bool propertiesShows(const QWidget& properties, ui::CompositionSession& session,
+                     const document::NodeId node, const char* role) {
+    const auto parameter = ui::nodeRoleParameter(session, node, role);
+    if (!parameter)
+        return false;
+    for (const auto* child : properties.findChildren<QWidget*>())
+        if (child->property("parameterId").toULongLong() == parameter->value() &&
+            child->isVisibleTo(&properties))
+            return true;
+    return false;
+}
+
+// Whether the node's card in the graph shows a row for `role`.
+bool cardShows(ui::NodeGraphEditor& nodes, const document::NodeId id, const char* role) {
+    nodes.graphScene()->refreshValues();
+    settle();
+    auto* card = dynamic_cast<ui::node_editor::NodeItem*>(nodes.graphScene()->findNodeItem(id));
+    if (card == nullptr)
+        return false;
+    for (const auto* control : card->controlsForRole(QString::fromLatin1(role))) {
+        const QWidget* host = control;
+        while (host->parentWidget() != nullptr)
+            host = host->parentWidget();
+        if (host->graphicsProxyWidget() != nullptr && host->graphicsProxyWidget()->isVisible())
+            return true;
+    }
+    return false;
+}
+
+void testPlacementRowsFollowTheSpace() {
+    Scene scene(document::SpaceMode::Scale);
+    const auto plot = scene.add(document::kFunctionPlotNodeType);
+    const auto axes = scene.add(document::kAxesNodeType);
+    const auto tick = scene.add(document::kAxisTickNodeType);
+    ui::NodeGraphEditor nodes(scene.session);
+    nodes.resize(1200, 900);
+    nodes.show();
+    QApplication::processEvents();
+    const auto check = [&](const document::NodeId node, const bool spaced, const std::string& when) {
+        scene.session.selectNode(node);
+        settle();
+        ui::PropertiesEditor properties(scene.session);
+        properties.resize(380, 760);
+        properties.show();
+        settle();
+        for (const auto* role : {"origin", "pixelsPerUnit"}) {
+            expect(propertiesShows(properties, scene.session, node, role) == !spaced,
+                   when + ": Properties " + (spaced ? "hides " : "shows ") + role);
+            expect(cardShows(nodes, node, role) == !spaced,
+                   when + ": the card " + (spaced ? "hides " : "shows ") + role);
+        }
+        if (node == tick)
+            expect(propertiesShows(properties, scene.session, node, "labelOffset") &&
+                       cardShows(nodes, node, "labelOffset"),
+                   when + ": Label Offset, the same kind of value, keeps its row");
+    };
+    for (const auto node : {plot, axes, tick})
+        check(node, false, "no space");
+    for (const auto node : {plot, axes, tick})
+        scene.run<commands::ConnectPorts>(scene.session.compositionId(),
+                                          document::OutputPortRef{scene.space, "space"},
+                                          document::NodeInputRef{node, "space"});
+    for (const auto node : {plot, axes, tick})
+        check(node, true, "space connected");
+    // One step back and forth: the tick's link is the last edit.
+    expect(scene.session.undo(), "the last link undoes");
+    check(tick, false, "undone");
+    check(axes, true, "undone, the axes keep their space");
+    expect(scene.session.redo(), "the link redoes");
+    check(tick, true, "redone");
+    // A wired value keeps its row (and its socket), so the link never dangles.
+    const auto readout = scene.add(document::kSpaceReadoutNodeType);
+    scene.run<commands::ConnectPorts>(scene.session.compositionId(),
+                                      document::OutputPortRef{scene.space, "space"},
+                                      document::NodeInputRef{readout, "space"});
+    scene.run<commands::ConnectPorts>(scene.session.compositionId(),
+                                      document::OutputPortRef{readout, "scale"},
+                                      document::NodeInputRef{tick, "pixelsPerUnit"});
+    expect(cardShows(nodes, tick, "pixelsPerUnit") && !cardShows(nodes, tick, "origin"),
+           "a wired Pixels Per Unit keeps its card row while the unwired Origin stays hidden");
+    scene.run<commands::DisconnectInput>(scene.session.compositionId(),
+                                         document::NodeInputRef{tick, "space"});
+    check(tick, false, "disconnected");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -302,6 +400,7 @@ int main(int argc, char** argv) {
     testRectangle();
     testCorners();
     testParented();
+    testPlacementRowsFollowTheSpace();
     if (failures + bloom::test_support::awaitFailureCount() != 0) {
         std::cerr << failures << " coordinate space handle expectation(s) failed\n";
         return 1;

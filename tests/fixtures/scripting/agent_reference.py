@@ -29,7 +29,7 @@ else:
 
 SAMPLES = ['bloom.layer.add-solid', 'bloom.animation.set-keyframe-at-time-for-parameter',
            'query', 'transact', 'capture', 'query:layers', 'query:keyframes', 'concept:time',
-           'bloom-cli render', 'bloom.help']
+           'bloom-cli render', 'bloom.help', 'query:outputs', 'bloom.data.outputs']
 
 
 def request(id, method, params=None):
@@ -250,6 +250,52 @@ class ReadBack(unittest.TestCase):
     def composition_record(self):
         records = self.server.query(kind='compositions')['records']
         return next(record for record in records if record['id'] == self.composition)
+
+    def test_node_outputs_read_alike_in_mcp_and_python(self):
+        # #591: query kind=outputs and bloom.data.outputs evaluate the same node of the same project
+        # to the same values, member for member (Python spells vectors as tuples).
+        made = self.server.transact(
+            ('bloom.node.add', {'composition': self.composition,
+                                'nodeType': 'bloom.coordinate-space'}),
+            ('bloom.node.add', {'composition': self.composition, 'nodeType': 'bloom.space-readout'}),
+            ('bloom.node.add', {'composition': self.composition, 'nodeType': 'bloom.to-space'}),
+            ('bloom.node.add', {'composition': self.composition, 'nodeType': 'bloom.from-space'}),
+            ('bloom.node.add', {'composition': self.composition, 'nodeType': 'bloom.axis-tick'}),
+            ('bloom.node.add', {'composition': self.composition, 'nodeType': 'bloom.solid-source'}))
+        space, readout, to_space, from_space, tick, solid = (made[(index, 'node')]
+                                                             for index in range(6))
+        values = (('origin', 'vector', [301.25, 177.5]), ('pixelsPerUnit', 'vector', [37.5, 22.0]),
+                  ('rotation', 'number', 30.0), ('name', 'text', 'chart'))
+        self.server.transact(*[('bloom.node.set-parameter-value', {
+            'composition': self.composition, 'node': space, 'role': role, kind: value})
+            for role, kind, value in values])
+        self.server.transact(
+            ('bloom.node.set-parameter-value', {'composition': self.composition, 'node': to_space,
+                                                'role': 'pixels', 'vector': [410.0, 95.5]}),
+            ('bloom.node.set-parameter-value', {'composition': self.composition,
+                                                'node': from_space, 'role': 'units',
+                                                'vector': [1.25, -2.0]}),
+            ('bloom.node.set-parameter-value', {'composition': self.composition, 'node': tick,
+                                                'role': 'decimals', 'integer': 2}),
+            *[('bloom.node.connect', {'composition': self.composition, 'sourceNode': space,
+                                      'sourcePort': 'space', 'targetNode': consumer,
+                                      'port': 'space'})
+              for consumer in (readout, to_space, from_space, tick)])
+        with tempfile.TemporaryDirectory(prefix='bloom-outputs-') as directory:
+            path = pathlib.Path(directory) / 'outputs.bloom'
+            self.server.tool('project.save-as', {'path': str(path), 'replace': True})
+            host = _bloom.Host(str(path)) if _bloom is not None else None
+            for node in (space, readout, to_space, from_space, tick, solid):
+                mcp = self.server.query(kind='outputs', composition=self.composition, node=node,
+                                        time=[1, 2])
+                self.assertEqual(mcp['status'], 'evaluated', mcp)
+                self.assertEqual(mcp['time']['seconds'], [1, 2])
+                if host is None:
+                    continue
+                python = json.loads(json.dumps(host.outputs(self.composition, node, 1, 2)))
+                for member in ('composition', 'node', 'type', 'status', 'outputs', 'diagnostics'):
+                    self.assertEqual(python[member], mcp[member], f'{node} {member}')
+            del host
 
     def test_composition_timing_round_trips(self):
         record = self.composition_record()

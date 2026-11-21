@@ -135,6 +135,16 @@ if(BUILD_TESTING)
         COMMAND bloom_scripting_evaluated_operations_test
         LABELS unit scripting commands document media TIMEOUT 120
     )
+    # #591: query kind=outputs and bloom.data.outputs read a node's outputs as values; a space
+    # connected to Axes and Axis Tick makes their own placement inactive.
+    add_executable(bloom_scripting_node_outputs_test tests/node_outputs_tests.cpp)
+    target_link_libraries(bloom_scripting_node_outputs_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_node_outputs_test)
+    bloom_add_test(
+        NAME bloom.scripting.node-outputs
+        COMMAND bloom_scripting_node_outputs_test
+        LABELS unit scripting document runtime TIMEOUT 120
+    )
     add_executable(bloom_scripting_parity_operations_test tests/parity_operations_tests.cpp)
     target_link_libraries(bloom_scripting_parity_operations_test PRIVATE bloom_scripting)
     bloom_enable_warnings(bloom_scripting_parity_operations_test)
