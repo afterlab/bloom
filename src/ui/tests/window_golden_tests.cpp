@@ -1,7 +1,9 @@
+#include "node_editor_items.hpp"
 #include "window_fixture.hpp"
 #include <QDir>
 #include <QImage>
 #include <bloom/ui/kit/theme.hpp>
+#include <bloom/ui/node_editor.hpp>
 #include <iostream>
 
 namespace {
@@ -33,6 +35,32 @@ int run(int argc, char** argv) {
             }
         }
     }
+    // A golden never approves a broken layout: every node card in the Nodes panel has room for
+    // its real height, and no two cards overlap (the card itself, not its socket overhang).
+    auto* nodeScene = fixture.window->findChild<bloom::ui::NodeGraphicsScene*>();
+    if (nodeScene == nullptr) {
+        std::cerr << "The window has no Nodes panel\n";
+        return 1;
+    }
+    const auto cards = nodeScene->nodeItems();
+    if (cards.size() < 2) {
+        std::cerr << "The Nodes panel shows " << cards.size() << " cards\n";
+        return 1;
+    }
+    int overlaps = 0;
+    for (std::size_t a = 0; a < cards.size(); ++a)
+        for (std::size_t b = a + 1; b < cards.size(); ++b) {
+            const QRectF first = cards[a]->mapRectToScene(cards[a]->cardRect());
+            const QRectF second = cards[b]->mapRectToScene(cards[b]->cardRect());
+            if (first.intersects(second)) {
+                ++overlaps;
+                std::cerr << "Node card '" << cards[a]->title().toStdString() << "' overlaps '"
+                          << cards[b]->title().toStdString() << "'\n";
+            }
+        }
+    std::cout << cards.size() << " node cards, " << overlaps << " overlapping pairs\n";
+    if (overlaps != 0)
+        return 1;
     fixture.clearInteraction();
     const auto actual = fixture.window->grab().toImage().convertToFormat(QImage::Format_RGB32);
     const QString suffix = ratio == 1.0 ? "dpr1" : "dpr15";

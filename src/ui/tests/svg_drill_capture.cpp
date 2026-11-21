@@ -145,7 +145,7 @@ int main(int argc, char** argv) {
         });
         auto& session = fixture.session;
         auto& window = *fixture.window;
-        if (session.undoLabel() == QStringLiteral("Arrange sample graph"))
+        if (session.undoLabel() == QStringLiteral("Arrange Nodes"))
             static_cast<void>(session.undo());
         window.resize(1700, 1000);
         settle();

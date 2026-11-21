@@ -1683,6 +1683,7 @@ foreach(scale IN ITEMS 1 1.5 2)
 endforeach()
 
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
+target_include_directories(bloom_window_golden_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
 target_link_libraries(bloom_window_golden_test PRIVATE bloom_ui bloom_runtime_compiler Qt6::Test)
 target_compile_definitions(bloom_window_golden_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build"

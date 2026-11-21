@@ -1,5 +1,6 @@
 #pragma once
 #include "await_qt.hpp"
+#include <QAction>
 #include <QApplication>
 #include <QEvent>
 #include <QSettings>
@@ -127,17 +128,6 @@ struct WindowFixture {
                     throw std::runtime_error("Fixture component keys failed");
             }
         }
-        // Author the sample graph through the same command as a user arrangement. Production
-        // preserves saved positions, including the compact legacy defaults from layer creation.
-        std::map<document::NodeId, document::Vec2d> positions;
-        for (const auto& [id, layout] :
-             document::defaultNodeLayout(session.composition()->graph().nodes()))
-            positions.emplace(id,
-                              document::Vec2d{layout.position.x * 1.5, layout.position.y * 2.2});
-        commands::Transaction arrange("Arrange sample graph", session.snapshot().revision());
-        arrange.emplace<commands::MoveNodes>(session.compositionId(), std::move(positions));
-        if (!session.executeTransaction(std::move(arrange)).succeeded())
-            throw std::runtime_error("Fixture arrangement failed");
         // A pinned budget: the status bar prints it, and the production default follows the
         // machine's memory, which would make every whole-window golden machine-dependent.
         evaluator.operationCache()->setByteBudget(kMinimumPreviewFrameCacheByteBudget);
@@ -189,6 +179,17 @@ struct WindowFixture {
                 return preview->state().activity == PreviewActivity::Ready;
             }))
             throw std::runtime_error("Fixture preview did not become ready");
+        // Lay the sample graph out the way an artist does: the Node editor's Arrange All, which
+        // places every card by the extent the scene measured for it (one MoveNodes step, labelled
+        // "Arrange Nodes"). A fixed spread of the default columns cannot know how many rows a
+        // card shows, so a taller card ran under the one below it.
+        auto* arrangeAll = window->findChild<QAction*>(QStringLiteral("nodeArrangeAllAction"));
+        if (arrangeAll == nullptr)
+            throw std::runtime_error("Fixture has no Arrange All in its Nodes panel");
+        const auto revisionBeforeArrange = session.snapshot().revision();
+        arrangeAll->trigger();
+        if (session.snapshot().revision() == revisionBeforeArrange)
+            throw std::runtime_error("Fixture arrangement failed");
         // Colour swatches show display colour once the converter is up; capture only after it
         // is, or the same window renders two different Properties panels from run to run.
         if (!test_support::awaitQtCondition("fixture color converter ready", [&] {

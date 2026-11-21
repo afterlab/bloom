@@ -44,7 +44,7 @@ int main(int argc, char** argv) {
         auto& window = *fixture.window;
         // The fixture re-arranges every graph it builds; undo that, so the nodes stay where the
         // import laid them (a grid per group).
-        if (fixture.session.undoLabel() == QStringLiteral("Arrange sample graph"))
+        if (fixture.session.undoLabel() == QStringLiteral("Arrange Nodes"))
             static_cast<void>(fixture.session.undo());
         window.resize(2000, 1200);
         for (int pass = 0; pass < 8; ++pass) {
