@@ -32,6 +32,7 @@ target_sources(
         operation_reference.cpp
         operation_registry.cpp
         operation_registry_alignment.cpp
+        operation_registry_outline.cpp
         operation_registry_evaluated.cpp
         operation_registry_export.cpp
         operation_registry_subtitles.cpp

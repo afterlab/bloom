@@ -396,6 +396,22 @@ std::string nodeReferenceMarkdown() {
                     "the node and, optionally, behind the node editor's graph. It has no output "
                     "and never changes the composition's output, RAM Preview, exports or "
                     "renders.\n\n";
+        if (definition->lowering == document::NodeLoweringKind::Text)
+            text +=
+                "With `markup` on, the text reads inline markup as Subtitles does: `<b>`, "
+                "`<i>`, `<u>` and color spans. `<c.accent1>` .. `<c.accent4>` draw in the four "
+                "animatable accent colors and `<c.#RRGGBB>` in a literal one; a tag it cannot "
+                "read draws as text with a warning. A missing bold or italic face draws the "
+                "regular one (italic as a synthesized oblique) with the font-missing warning. "
+                "`outlineWidth` draws an `outlineColor` outline outside the glyphs with "
+                "`outlineJoin` corners; `background` draws a box per line or around the block, "
+                "with `backgroundColor`, `backgroundPadding` (em) and `backgroundRadius`. Paint "
+                "order is box, outline, fill, and the layer bounds include them. An outline in "
+                "image space is Alpha Contour downstream (Under, Offset = Width/2); "
+                "bloom.layer.stroke-outline strokes the letters as a path layer. Driven by a "
+                "String input, the text becomes a counter (an animated value through Scalar To "
+                "String, with `decimals` and `padWidth`, into `text`) or a "
+                "type-on (Substring with an animated length).\n\n";
         if (definition->layerSlotInput)
             text += "Layer stack slots: role `" + definition->layerSlotInput->role + "`" +
                     (definition->audioLayerSlotInput

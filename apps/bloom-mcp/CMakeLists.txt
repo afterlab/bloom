@@ -118,6 +118,15 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #757: a styled Text Source and bloom.layer.stroke-outline through MCP, Python and bloom-cli
+    # run: one transact builds an accent-word outlined caption, and every surface strokes the
+    # letters into the node menu's graph.
+    bloom_add_test(NAME bloom.scripting.text-styling-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/text_styling_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp

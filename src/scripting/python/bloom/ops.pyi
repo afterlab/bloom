@@ -5157,11 +5157,17 @@ class LayerOps:
         Related: query:layers, bloom.layer.break-apart-svg, bloom.node.set-parameter-value, transact
         """
         ...
-    def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., markup: bool = ..., accent1: tuple[float, float, float, float] = ..., accent2: tuple[float, float, float, float] = ..., accent3: tuple[float, float, float, float] = ..., accent4: tuple[float, float, float, float] = ..., outlineColor: tuple[float, float, float, float] = ..., outlineWidth: float = ..., outlineJoin: str = ..., background: str = ..., backgroundColor: tuple[float, float, float, float] = ..., backgroundPadding: float = ..., backgroundRadius: float = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-text  (operation, layer)
         Adds a text layer on top of the layer stack. Font, alignment, box and the other text parameters
         are edited afterwards with bloom.parameter.set-source; their ids are in the outputs and in
         query:layers. The font is a font ID string (family, style, weight and source), never an asset.
+        The styling may be set here: with `markup` true the text reads <b>, <i>, <u> and color spans
+        (<c.accent1> .. <c.accent4> name the four accent colors, <c.#RRGGBB> a literal one, as in
+        Subtitles); `outlineWidth` draws an outline of `outlineColor` outside the glyphs with the
+        `outlineJoin` corners; `background` draws a box behind each line or the whole block. Paint order
+        is box, outline, fill. An outline in image space, such as a glow edge, is Alpha Contour
+        downstream (Under, Offset = Width/2).
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -5187,6 +5193,52 @@ class LayerOps:
               Fill color. Defaults to opaque white.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1
+          markup  bool  optional
+              Reads inline markup in the text: <b>, <i>, <u>, <c.accent1> .. <c.accent4> and <c.#RRGGBB>
+              spans. Defaults to false (the text draws as written).
+          accent1  color4  optional
+              The color <c.accent1> spans draw in. Defaults to orange.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          accent2  color4  optional
+              The color <c.accent2> spans draw in. Defaults to blue.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          accent3  color4  optional
+              The color <c.accent3> spans draw in. Defaults to pink.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          accent4  color4  optional
+              The color <c.accent4> spans draw in. Defaults to green.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          outlineColor  color4  optional
+              The outline color. Defaults to opaque black.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          outlineWidth  float  optional
+              The outline width in pixels, drawn outside the glyphs (0..256). Defaults to 0, no outline.
+          outlineJoin  str  optional, default round
+              How the outline turns at corners. Defaults to "round".
+              Values:
+                "round"  Round
+                "miter"  Miter
+                "bevel"  Bevel
+          background  str  optional, default off
+              A box behind the text: "off", "per-line" (one box per line) or "block" (one box around
+              every line). Defaults to "off".
+              Values:
+                "off"  Off
+                "per-line"  Per line
+                "block"  Block
+          backgroundColor  color4  optional
+              The background box color. Defaults to black at 60% opacity.
+              Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
+              green and blue are finite and may exceed 1, alpha is 0..1
+          backgroundPadding  float  optional
+              The space around the text inside the box, in em (0..4). Defaults to 0.25.
+          backgroundRadius  float  optional
+              The box's corner radius in pixels (0..4096). Defaults to 0.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 
@@ -5203,6 +5255,18 @@ class LayerOps:
           wrapParameter parameter
           anchorModeParameter parameter
           overflowParameter parameter
+          accent1Parameter parameter
+          accent2Parameter parameter
+          accent3Parameter parameter
+          accent4Parameter parameter
+          outlineColorParameter parameter
+          outlineWidthParameter parameter
+          backgroundColorParameter parameter
+          backgroundPaddingParameter parameter
+          backgroundRadiusParameter parameter
+          markupParameter parameter
+          outlineJoinParameter parameter
+          backgroundParameter parameter
           positionParameter parameter
           anchorParameter parameter
           scaleParameter parameter
@@ -5216,9 +5280,12 @@ class LayerOps:
         Result:
           The transact result {succeeded, revision, diagnostics, outputs}. outputs names: layer, slot,
           textNode, layerOutputNode, textParameter, sizeParameter, colorParameter, fontParameter,
-          boxParameter, wrapParameter, anchorModeParameter, overflowParameter, positionParameter,
-          anchorParameter, scaleParameter, rotationParameter, opacityParameter, blendModeParameter (each
-          {operationIndex, name, id}).
+          boxParameter, wrapParameter, anchorModeParameter, overflowParameter, accent1Parameter,
+          accent2Parameter, accent3Parameter, accent4Parameter, outlineColorParameter,
+          outlineWidthParameter, backgroundColorParameter, backgroundPaddingParameter,
+          backgroundRadiusParameter, markupParameter, outlineJoinParameter, backgroundParameter,
+          positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter,
+          blendModeParameter (each {operationIndex, name, id}).
 
         Errors:
           bloom.scripting.invalid-argument
@@ -5239,7 +5306,7 @@ class LayerOps:
           CLI:
             bloom-cli run edits.json   # [{"op":"bloom.layer.add-text","args":{"name":"Title","text":"Hello, Bloom!"}}]
 
-        Related: query:layers, bloom.parameter.set-source, transact
+        Related: query:layers, bloom.parameter.set-source, bloom.layer.stroke-outline, transact
         """
         ...
     def align_layers(self, edge: str, target: str = ..., key: int | Proxy = ..., *, composition: int | Proxy = ..., layers: tuple = ..., time: Time = ...) -> Mapping[str, Any] | None:
@@ -7560,6 +7627,82 @@ class LayerOps:
             bloom-cli run edits.json   # [{"op":"bloom.layer.stop-animating-mask-path","args":{"mask":1,"path":{"closed":true,"anchors":[{"point":[0,0],"inHandle":null,"outHandle":null},{"point":[100,0],"inHandle":null,"outHandle":null},{"point":[100,100],"inHandle":null,"outHandle":null},{"point":[0,100],"inHandle":null,"outHandle":null}]}}}]
 
         Related: bloom.layer.animate-mask-path, transact
+        """
+        ...
+    def stroke_outline(self, source: str = ..., merge: int | Proxy = ..., slot: int | Proxy = ..., *, composition: int | Proxy = ..., layer: int | Proxy = ...) -> Mapping[str, Any] | None:
+        """bloom.layer.stroke-outline  (operation, layer)
+        Strokes a layer's letters or masks in place (the node menu's Stroke Text and Stroke Masks): Text
+        Outline (or Mask Path) -> Path Stroke -> Shape Source on a new layer directly above it, parented
+        to it at the identity, so the stroke follows the layer's transform and keys. One undo step. For
+        an outline drawn by the text itself, set the Text Source's outlineWidth instead.
+
+        Arguments:
+          composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
+              The composition to edit. Defaults to the current composition.
+              Unit: composition id (query:compositions)
+              Range: >= 1
+          layer  id  optional, defaults to the first selected layer (context layer)
+              The layer whose letters or masks are stroked: a layer showing a Text Source, or one with
+              path masks. Defaults to the selected layer. Or give merge and slot instead to edit a Merge
+              entry's layer.
+              Unit: layer id (query:layers .id)
+              Range: >= 1
+          source  str  optional, default text
+              What is stroked: "text" (the letters of the Text Source the layer shows, as Text Outline
+              reads them) or "masks" (the layer's path masks, as Mask Path reads them). Defaults to
+              "text".
+              Values:
+                "text"  Text
+                "masks"  Masks
+          merge  id  optional
+              Id. Instead of layer: the Merge node of the entry to edit (with slot). When the entry has
+              no layer yet its own layer is created at its defaults in the same undo step; the result
+              then also outputs "layer" and "parameter.<role>".
+              Unit: Merge node id (query:layers .entries[].merge)
+              Range: >= 1
+          slot  id  optional
+              Id. With merge: the entry's stack slot.
+              Unit: layer-stack slot id (query:layers .entries[].slot)
+              Range: >= 1
+
+        Effects: undoable: one undo step per transact call; marks the project unsaved.
+
+        Outputs (ids the result carries):
+          reader reader
+          stroke stroke
+          shape shape
+          layer layer
+
+        Prerequisites:
+          - The current revision, from any query result, as transact's expectedRevision.
+
+        Result:
+          The transact result {succeeded, revision, diagnostics, outputs}. outputs names: reader,
+          stroke, shape, layer (each {operationIndex, name, id}).
+
+        Errors:
+          bloom.scripting.command-rejected
+              When: The layer shows no Text Source (source "text") or has no path mask (source "masks")
+              Do: pick a layer from query {kind:"layers"}.
+          bloom.scripting.invalid-argument
+              When: an argument is missing, of the wrong kind or out of range
+              Do: the message names the argument and a working example call
+          bloom.scripting.command-rejected
+              When: the document refused the edit (a stale id, a locked layer, an impossible value)
+              Do: re-read the ids with the related query and fix the value
+          bloom.scripting.stale-revision  (retry)
+              When: the project moved on since expectedRevision
+              Do: re-query and retry with the current revision
+
+        Examples:
+          MCP:
+            {"name":"transact","arguments":{"expectedRevision":0,"operations":[{"op":"bloom.layer.stroke-outline","args":{"source":"text"}}]}}
+          Python:
+            bloom.ops.layer.stroke_outline(source="text")
+          CLI:
+            bloom-cli run edits.json   # [{"op":"bloom.layer.stroke-outline","args":{"source":"text"}}]
+
+        Related: bloom.node.set-parameter-value, bloom.layer.add-text, query:layers, transact
         """
         ...
 

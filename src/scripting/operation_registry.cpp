@@ -3,6 +3,7 @@
 #include <bloom/commands/layer_time_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/commands/svg_import_operations.hpp>
+#include <bloom/document/text_styling.hpp>
 #include <bloom/scripting/operation_registry.hpp>
 
 #include "operation_registry_parity.hpp"
@@ -849,6 +850,18 @@ locator(const Arguments& arguments, const std::string& operationId, OperationCre
             .context = ContextSource::None,
             .example = std::move(example),
             .summary = std::move(summary)};
+}
+
+// An optional string argument with a closed list of choices ({value, label}).
+[[nodiscard]] ArgumentSchema
+maybeChoice(std::string name, std::string example, std::string summary,
+            std::initializer_list<std::pair<std::string_view, std::string_view>> choices,
+            std::string defaultText) {
+    auto schema = maybe(std::move(name), ValueKind::String, std::move(example), std::move(summary));
+    for (const auto& [value, label] : choices)
+        schema.choices.push_back({std::string(value), std::string(label)});
+    schema.defaultText = std::move(defaultText);
+    return schema;
 }
 
 // Optional, but the operation still needs it unless one of its alternatives is given, so the
@@ -3099,7 +3112,37 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("opacity", ValueKind::Double, 1.0, "Layer opacity in 0..1. Defaults to 1."),
          maybe("size", ValueKind::Double, 72.0, "Em size in pixels."),
          maybe("color", ValueKind::Color4, core::Color4d{1.0, 1.0, 1.0, 1.0},
-               "Fill color. Defaults to opaque white.")},
+               "Fill color. Defaults to opaque white."),
+         // #757: the styling, set at creation so a styled caption is one transaction.
+         maybe("markup", ValueKind::Boolean, true,
+               "Reads inline markup in the text: <b>, <i>, <u>, <c.accent1> .. <c.accent4> and "
+               "<c.#RRGGBB> spans. Defaults to false (the text draws as written)."),
+         maybe("accent1", ValueKind::Color4, core::Color4d{1.0, 0.55, 0.0, 1.0},
+               "The color <c.accent1> spans draw in. Defaults to orange."),
+         maybe("accent2", ValueKind::Color4, core::Color4d{0.0, 0.55, 1.0, 1.0},
+               "The color <c.accent2> spans draw in. Defaults to blue."),
+         maybe("accent3", ValueKind::Color4, core::Color4d{1.0, 0.08, 0.35, 1.0},
+               "The color <c.accent3> spans draw in. Defaults to pink."),
+         maybe("accent4", ValueKind::Color4, core::Color4d{0.15, 0.85, 0.25, 1.0},
+               "The color <c.accent4> spans draw in. Defaults to green."),
+         maybe("outlineColor", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 1.0},
+               "The outline color. Defaults to opaque black."),
+         maybe("outlineWidth", ValueKind::Double, 4.0,
+               "The outline width in pixels, drawn outside the glyphs (0..256). Defaults to 0, "
+               "no outline."),
+         maybeChoice("outlineJoin", "miter",
+                     "How the outline turns at corners. Defaults to \"round\".",
+                     {{"round", "Round"}, {"miter", "Miter"}, {"bevel", "Bevel"}}, "round"),
+         maybeChoice("background", "per-line",
+                     "A box behind the text: \"off\", \"per-line\" (one box per line) or "
+                     "\"block\" (one box around every line). Defaults to \"off\".",
+                     {{"off", "Off"}, {"per-line", "Per line"}, {"block", "Block"}}, "off"),
+         maybe("backgroundColor", ValueKind::Color4, core::Color4d{0.0, 0.0, 0.0, 0.6},
+               "The background box color. Defaults to black at 60% opacity."),
+         maybe("backgroundPadding", ValueKind::Double, 0.25,
+               "The space around the text inside the box, in em (0..4). Defaults to 0.25."),
+         maybe("backgroundRadius", ValueKind::Double, 8.0,
+               "The box's corner radius in pixels (0..4096). Defaults to 0.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3109,18 +3152,44 @@ OperationRegistry OperationRegistry::builtIn() {
             const auto opacity = number(args, op, "opacity", error, false);
             const auto size = number(args, op, "size", error, false);
             const auto color = color4(args, op, "color", error, false);
-            if (!composition || !name || !content || error) {
+            commands::TextLayerStyle style;
+            if (const auto markup = boolean(args, op, "markup", error, false))
+                style.styling.emplace_back("markup", *markup);
+            for (const std::string role :
+                 {"accent1", "accent2", "accent3", "accent4", "outlineColor", "backgroundColor"})
+                if (const auto value = color4(args, op, role, error, false))
+                    style.styling.emplace_back(role, *value);
+            for (const std::string role : {"outlineWidth", "backgroundPadding", "backgroundRadius"})
+                if (const auto value = number(args, op, role, error, false))
+                    style.styling.emplace_back(role, *value);
+            const auto choice = [&](const std::string& role,
+                                    std::initializer_list<std::string_view> names) {
+                const auto value = text(args, op, role, error, false);
+                if (!value)
+                    return;
+                const auto found = std::ranges::find(names, *value);
+                if (found == names.end()) {
+                    if (error.diagnostic() == nullptr)
+                        error = failure(op, role, "expects one of the listed choices");
+                    return;
+                }
+                style.styling.emplace_back(role, static_cast<std::int64_t>(found - names.begin()));
+            };
+            choice("outlineJoin", {"round", "miter", "bevel"});
+            choice("background", {"off", "per-line", "block"});
+            // A styling argument of the wrong kind or choice refuses the operation.
+            if (!composition || !name || !content || error.diagnostic() != nullptr) {
                 return error;
             }
             const auto compositionId = document::CompositionId::fromRaw(*composition);
             if (position.has_value() || opacity.has_value() || size.has_value() ||
-                color.has_value()) {
-                return OperationCreateResult(std::make_unique<commands::AddTextLayer>(
-                                                 compositionId, *name, *content, position,
-                                                 opacity.value_or(1.0),
-                                                 size.value_or(document::kDefaultTextSizePixels),
-                                                 color.value_or(core::Color4d{1.0, 1.0, 1.0, 1.0})),
-                                             std::nullopt);
+                color.has_value() || !style.styling.empty()) {
+                return OperationCreateResult(
+                    std::make_unique<commands::AddTextLayer>(
+                        compositionId, *name, *content, position, opacity.value_or(1.0),
+                        size.value_or(document::kDefaultTextSizePixels),
+                        color.value_or(core::Color4d{1.0, 1.0, 1.0, 1.0}), std::move(style)),
+                    std::nullopt);
             }
             return OperationCreateResult(
                 std::make_unique<commands::AddTextLayer>(compositionId, *name, *content),
@@ -4224,6 +4293,7 @@ OperationRegistry OperationRegistry::builtIn() {
         });
 
     detail::addLayerAlignmentOperations(all);
+    detail::addLayerOutlineStrokeOperations(all);
     detail::addExportOperations(all);
     detail::addSubtitlesOperations(all);
     detail::parity::addLayerAndNodeOperations(all);

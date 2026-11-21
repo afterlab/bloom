@@ -391,12 +391,22 @@ constexpr std::array kNotes{
         "Adds a text layer on top of the layer stack. Font, alignment, box and the other text "
         "parameters are edited afterwards with bloom.parameter.set-source; their ids are in the "
         "outputs and in query:layers. The font is a font ID string (family, style, weight and "
-        "source), never an asset.",
+        "source), never an asset. The styling may be set here: with `markup` true the text reads "
+        "<b>, <i>, <u> and color spans (<c.accent1> .. <c.accent4> name the four accent colors, "
+        "<c.#RRGGBB> a literal one, as in Subtitles); `outlineWidth` draws an outline of "
+        "`outlineColor` outside the glyphs with the `outlineJoin` corners; `background` draws a "
+        "box behind each line or the whole block. Paint order is box, outline, fill. An outline "
+        "in image space, such as a glow edge, is Alpha Contour downstream (Under, Offset = "
+        "Width/2).",
         "layer, slot, textNode, layerOutputNode, textParameter, sizeParameter, colorParameter, "
         "fontParameter, boxParameter, wrapParameter, anchorModeParameter, overflowParameter, "
+        "accent1Parameter, accent2Parameter, accent3Parameter, accent4Parameter, "
+        "outlineColorParameter, outlineWidthParameter, "
+        "backgroundColorParameter, backgroundPaddingParameter, backgroundRadiusParameter, "
+        "markupParameter, outlineJoinParameter, backgroundParameter, "
         "positionParameter, anchorParameter, scaleParameter, rotationParameter, opacityParameter, "
         "blendModeParameter",
-        "query:layers bloom.parameter.set-source", ""},
+        "query:layers bloom.parameter.set-source bloom.layer.stroke-outline", ""},
     OperationNotes{"bloom.layer.add-svg",
         "Imports an SVG file in one of two modes (`mode`, default \"layer\"). As one layer: a "
         "single Vector Artwork layer that keeps the file's bytes in the project and draws its "
@@ -548,6 +558,16 @@ constexpr std::array kNotes{
         "Splits a layer at `time` into two layers (Ctrl+K): the original ends at `time` and a copy "
         "starts there.",
         "layer (the new layer)", "query:layers", ""},
+    OperationNotes{"bloom.layer.stroke-outline",
+        "Strokes a layer's letters or masks in place (the node menu's Stroke Text and Stroke "
+        "Masks): Text Outline (or Mask Path) -> Path Stroke -> Shape Source on a new layer "
+        "directly above it, parented to it at the identity, so the stroke follows the layer's "
+        "transform and keys. One undo step. For an outline drawn by the text itself, set the Text "
+        "Source's outlineWidth instead.",
+        "reader, stroke, shape, layer",
+        "bloom.node.set-parameter-value bloom.layer.add-text query:layers",
+        "The layer shows no Text Source (source \"text\") or has no path mask (source \"masks\") => "
+        "pick a layer from query {kind:\"layers\"}."},
     OperationNotes{"bloom.layer.align-layers",
         "Lines up layers' evaluated bounds at `time` (Composition > Align). The bounds are "
         "measured on the server before the transaction runs; skipped layers are warnings.",

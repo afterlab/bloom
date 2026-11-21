@@ -112,6 +112,20 @@ output is a cue's stable id. Read the cues back, then edit one by its id:
   {"op":"bloom.subtitles.edit-cue","args":{"composition":1,"node":5,"cue":1,"text":"Hello there"}}]}}
 ```
 
+### Accent word and outlined caption
+
+A Text Source with `markup` on reads `<b>`, `<i>`, `<u>` and color spans; `<c.accent1>` draws a
+word in the first of four animatable accent colors. One operation adds the caption with its
+accent, outline and background box:
+
+```json
+{"name":"transact","arguments":{"expectedRevision":4,"label":"Caption","operations":[
+  {"op":"bloom.layer.add-text","args":{"composition":1,"name":"Caption","text":"Bloom <c.accent1>now</c> live","size":96,"position":[960,900],"markup":true,"accent1":[1,0.55,0,1],"outlineWidth":6,"outlineColor":[0,0,0,1],"outlineJoin":"round","background":"per-line","backgroundColor":[0,0,0,0.5]}}]}}
+```
+
+`accent1Parameter` and `outlineWidthParameter` in `outputs` are the ids to key, as in step 3.
+`help {"name":"concept:text"}` names every tag and parameter.
+
 ## 5. Save
 
 The in-app server edits the artist's open project; the artist saves it (File > Save), and the

@@ -23,8 +23,9 @@ int main() {
     // bloom.node.delete-unused; #627 bloom.node.write-to-number-list; #636
     // bloom.node.bake-to-keyframes; #747 bloom.animation.set-key-tracks; #742
     // bloom.layer.set-filter; #743 bloom.layer.set-snap; #752 bloom.layer.add-subtitles and the
-    // ten bloom.subtitles.* operations.
-    if (registry.descriptors().size() != 170U ||
+    // ten bloom.subtitles.* operations; #757 bloom.layer.stroke-outline.
+    if (registry.descriptors().size() != 171U ||
+        registry.find("bloom.layer.stroke-outline") == nullptr ||
         registry.find("bloom.layer.add-subtitles") == nullptr ||
         registry.find("bloom.subtitles.write-file") == nullptr ||
         registry.find("bloom.layer.set-filter") == nullptr ||

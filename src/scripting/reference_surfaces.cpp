@@ -135,6 +135,30 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
     errors.errors = commonToolErrors();
     addRelated(errors, {"transact", "help"});
     out.push_back(std::move(errors));
+
+    auto text = makeEntry(
+        ReferenceKind::Concept, "concept:text", "concepts",
+        "A Text Source's markup, accent colors, outline and background box.",
+        "With the Text Source's `markup` on, its text reads the cue-text markup Subtitles reads: "
+        "<b>, <i>, <u> and color spans. <c.accent1> .. <c.accent4> draw in the node's four accent "
+        "colors (animatable parameters, so a word's color keys through its accent) and "
+        "<c.#RRGGBB> in a literal color; a tag it cannot read draws as text and the compile "
+        "warning bloom.runtime.compile.text-markup names it. A missing bold or italic face draws "
+        "the regular one, italic as a synthesized oblique, with the font-missing warning. "
+        "`outlineWidth` (pixels) draws an `outlineColor` outline outside the glyphs with Round, "
+        "Miter or Bevel `outlineJoin`; `background` (Off, Per line, Block) draws a "
+        "`backgroundColor` box with `backgroundPadding` (em) and `backgroundRadius` (pixels). "
+        "Paint "
+        "order is box, outline, fill; the layer bounds, Layer Bounds and align-layers include the "
+        "outline and box, and Text Outline reads the glyphs. bloom.layer.add-text sets all of it "
+        "in one operation. Other "
+        "outlines: Alpha Contour after the layer (Under, Offset = Width/2) traces the drawn image, "
+        "and bloom.layer.stroke-outline strokes the letters as a path layer above it. Recipes "
+        "through the String input: a counter is an animated value through Scalar To String "
+        "(decimals, padWidth) into `text`; a type-on is Substring with an animated `length`.");
+    addRelated(text, {"bloom.layer.add-text", "bloom.layer.stroke-outline",
+                      "bloom.node.set-parameter-value"});
+    out.push_back(std::move(text));
 }
 
 // ---------------------------------------------------------------------------------------------
