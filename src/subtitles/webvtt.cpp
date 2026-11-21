@@ -1,4 +1,5 @@
 // #752: the W3C WebVTT "WebVTT file parsing" algorithm, step by step (webvtt.hpp).
+#include <bloom/core/float_chars.hpp>
 #include <bloom/subtitles/webvtt.hpp>
 
 #include <bloom/document/cue_markup.hpp>
@@ -38,7 +39,7 @@ namespace {
     const auto* last = text.data() + text.size();
     if (first != last && *first == '+')
         ++first;
-    const auto [end, error] = std::from_chars(first, last, value, std::chars_format::fixed);
+    const auto [end, error] = core::fromChars(first, last, value, std::chars_format::fixed);
     if (end != last)
         return std::nullopt;
     if (error == std::errc::result_out_of_range) {

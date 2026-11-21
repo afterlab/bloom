@@ -1,6 +1,7 @@
 // #752: what the subtitle readers share (internal.hpp).
 #include "internal.hpp"
 
+#include <bloom/core/float_chars.hpp>
 #include <bloom/core/utf8.hpp>
 #include <bloom/document/cue_markup.hpp>
 
@@ -85,7 +86,7 @@ constexpr std::array<NamedColor, 148> kNamedColors{{
     double value = 0.0;
     const auto trimmed = trim(text);
     const auto [end, error] =
-        std::from_chars(trimmed.data(), trimmed.data() + trimmed.size(), value);
+        core::fromChars(trimmed.data(), trimmed.data() + trimmed.size(), value);
     if (error != std::errc{} || end != trimmed.data() + trimmed.size() || !std::isfinite(value))
         return std::nullopt;
     return value;

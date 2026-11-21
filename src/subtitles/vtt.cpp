@@ -3,6 +3,7 @@
 // blocks onto document::Cue and reports what the mapping drops or approximates.
 #include "internal.hpp"
 
+#include <bloom/core/float_chars.hpp>
 #include <bloom/document/cue_markup.hpp>
 #include <bloom/subtitles/webvtt.hpp>
 
@@ -148,7 +149,7 @@ void readStyleSheet(const webvtt::StyleSheet& sheet, Builder& builder) {
                     style.fontFamily = std::string(family);
             } else if (property == "font-size" && valueLower.ends_with("vh")) {
                 double size = 0.0;
-                const auto [end, error] = std::from_chars(
+                const auto [end, error] = core::fromChars(
                     valueLower.data(), valueLower.data() + valueLower.size() - 2, size);
                 read = error == std::errc{} && end == valueLower.data() + valueLower.size() - 2 &&
                        size > 0.0 && size <= 100.0;

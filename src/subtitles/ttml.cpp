@@ -6,6 +6,7 @@
 // timeBase="media" only. EBU-TT-D and SMPTE-TT read as TTML profiles; their image forms are refused.
 #include "internal.hpp"
 
+#include <bloom/core/float_chars.hpp>
 #include <bloom/core/int128.hpp>
 #include <bloom/document/cue_markup.hpp>
 
@@ -365,7 +366,7 @@ struct Geometry {
     const auto* first = number.data();
     if (!number.empty() && number.front() == '+')
         ++first;
-    if (std::from_chars(first, number.data() + number.size(), value).ptr !=
+    if (core::fromChars(first, number.data() + number.size(), value).ptr !=
             number.data() + number.size() ||
         !std::isfinite(value))
         return std::nullopt;
@@ -566,8 +567,8 @@ class Reader {
                 const auto height = trim(parts.substr(space + 1));
                 double w = 0.0;
                 double h = 0.0;
-                std::from_chars(width.data(), width.data() + width.size() - 2, w);
-                std::from_chars(height.data(), height.data() + height.size() - 2, h);
+                (void)core::fromChars(width.data(), width.data() + width.size() - 2, w);
+                (void)core::fromChars(height.data(), height.data() + height.size() - 2, h);
                 geometry_.rootWidth = w;
                 geometry_.rootHeight = h;
             }
@@ -630,7 +631,7 @@ class Reader {
                     // Relative to the parent's size, which is one cell unless a parent sets it.
                     double scale = 0.0;
                     const auto number = vertical.substr(0, vertical.size() - (vertical.ends_with("%") ? 1 : 2));
-                    std::from_chars(number.data(), number.data() + number.size(), scale);
+                    (void)core::fromChars(number.data(), number.data() + number.size(), scale);
                     style.fontSize =
                         (vertical.ends_with("%") ? scale / 100.0 : scale) / geometry_.cellRows;
                 } else {

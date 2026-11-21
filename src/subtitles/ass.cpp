@@ -6,6 +6,7 @@
 // as dropped. Bloom does not write ASS.
 #include "internal.hpp"
 
+#include <bloom/core/float_chars.hpp>
 #include <bloom/core/int128.hpp>
 #include <bloom/document/cue_markup.hpp>
 
@@ -40,7 +41,7 @@ namespace {
     const auto* first = text.data();
     if (!text.empty() && text.front() == '+')
         ++first;
-    const auto [end, error] = std::from_chars(first, text.data() + text.size(), value);
+    const auto [end, error] = core::fromChars(first, text.data() + text.size(), value);
     if (error != std::errc{} || end != text.data() + text.size() || !std::isfinite(value))
         return std::nullopt;
     return value;

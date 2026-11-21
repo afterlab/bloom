@@ -144,7 +144,14 @@ void exportSubtitles(const char* container) {
     english.title = "English";
     english.cues = {{0, 12, "First line"},
                     {12, 30, "Two lines\nof text, with \\n and {\\b1} as written"},
-                    {35, 47, "\xc3\x9cn\xc3\xafc\xc3\xb6d\xc3\xa9"}};
+                    {35, 47,
+                     "\xc3\x9c"
+                     "n"
+                     "\xc3\xaf"
+                     "c"
+                     "\xc3\xb6"
+                     "d"
+                     "\xc3\xa9"}};
     provider::SubtitleTrackV1 german;
     german.language = "deu";
     german.title = "Deutsch";
