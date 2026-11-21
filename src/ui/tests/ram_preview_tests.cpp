@@ -1448,6 +1448,142 @@ void testRamPreviewLandsFramesInOrder(Expectations& expectations, const bool fra
     finishFixture(fixture, expectations);
 }
 
+// #752: a frame of the run can finish after other work covered its time. Here the Viewer's own
+// frame 1 is still preparing when the run starts (frame 0 is cached), so the run submits frame 1
+// too; the Viewer's lands first and moves the landing frontier past frame 1. The run's frame 1 then
+// lands behind the frontier. Held for in-order landing, it waited for a frontier that never comes back to it, and on
+// a serial fill (a submitter alone, width one) it also filled the width, so nothing else was ever
+// submitted and the run never ended: the RAM Preview stall of a Subtitles layer, whose large outline
+// coverage kept the Viewer's first frame in flight when the run began.
+void testRamPreviewLandsAFrameTheFrontierPassed(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM frontier passed", time(6, 25)), 2);
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the frontier fixture composition is animated across its range");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("frontier fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the frontier fixture renders its first frame");
+    // The Viewer's frame 1 prepares only once released.
+    fixture.gateAtCall = fixture.preparationCount.load();
+    expectations.expect(fixture.session.setCurrentTime(time(1, 25)),
+                        "the playhead moves to frame 1");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the Viewer's frame 1 is preparing at its gate",
+                                              [&] { return fixture.gate.entered(); }),
+        "the Viewer's frame 1 is preparing and held at its gate");
+    WorkerGate runFrameOneHeld;
+    int submitted = 0;
+    const auto preparation = fixture.countingPipeline();
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](runtime::TaskRequest request, const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            ++submitted;
+            return fixture.scheduler.submit<ui::PreviewPreparationResultHandle>(
+                std::move(request), [&runFrameOneHeld, &preparation, snapshot, identity, bytes,
+                                     overrides](runtime::TaskContext& context) {
+                    if (identity.time == time(1, 25))
+                        runFrameOneHeld.enterAndWait();
+                    return preparation(snapshot, identity, bytes, overrides, context);
+                });
+        };
+    // A submitter alone: the fill is serial, one frame in flight or held at a time.
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, preparation, nullptr, submitter);
+    ramPreview.start();
+    expectations.expect(ramPreview.fillWidth() == 1, "the submitter's fill is serial");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the run's frame 1 is preparing at its gate",
+                                              [&] { return runFrameOneHeld.entered(); }),
+        "the run submits frame 1 while the Viewer's frame 1 is still preparing");
+    // The Viewer's frame 1 lands first: the run counts it, and its frontier passes frame 1.
+    fixture.gate.release();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the Viewer's frame 1 lands and the run counts it",
+                                              [&] { return ramPreview.cachedFrameCount() == 2; }),
+        "the Viewer's frame 1 lands first and covers the run's frame 1");
+    runFrameOneHeld.release();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the run finishes after its frame 1 lands behind",
+                                              [&] { return !ramPreview.isCaching(); }),
+        "the run's frame 1 lands behind the frontier and the fill goes on to the end");
+    expectations.expect(ramPreview.cachedFrameCount() == 6 &&
+                            ramPreview.lastCompletion() ==
+                                ui::RamPreviewController::Completion::Complete,
+                        "every frame of the range is cached and the run is complete");
+    expectations.expect(submitted == 5, "the run filled each of frames 1 to 5 once");
+    runFrameOneHeld.release();
+    fixture.gate.release();
+    finishFixture(fixture, expectations);
+}
+
+// #752: the frame held frames wait for is always submitted again. Frames 1 and 2 prepare side by
+// side at width two; frame 2 finishes first and is held for in-order landing. The width then
+// shrinks to one (other programs took memory) and frame 1 fails once. Held frame 2 alone filled the
+// width, so the retry of frame 1 was never submitted and frame 2 waited for it for ever.
+void testRamPreviewResubmitsTheFrontierWhenTheWidthShrinks(Expectations& expectations) {
+    SessionFixture fixture(makeTestProject("RAM width shrinks", time(6, 25)), 2);
+    expectations.expect(animateSolidLayer(fixture.session),
+                        "the shrinking-width fixture composition is animated across its range");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("shrinking-width fixture renders its first frame",
+                                              [&] { return isReady(fixture.controller); }),
+        "the shrinking-width fixture renders its first frame");
+    WorkerGate frameOneHeld;
+    std::atomic<int> frameOneAttempts = 0;
+    int submitted = 0;
+    const auto preparation = fixture.countingPipeline();
+    const ui::PreviewPreparationSubmitter submitter =
+        [&](runtime::TaskRequest request, const document::Snapshot& snapshot,
+            const runtime::PreviewRequestIdentity& identity, const std::size_t bytes,
+            const std::vector<runtime::SnapshotParameterOverride>& overrides) {
+            ++submitted;
+            return fixture.scheduler.submit<ui::PreviewPreparationResultHandle>(
+                std::move(request),
+                [&frameOneHeld, &frameOneAttempts, &preparation, snapshot, identity, bytes,
+                 overrides](runtime::TaskContext& context)
+                    -> runtime::TaskResult<ui::PreviewPreparationResultHandle> {
+                    if (identity.time == time(1, 25) && frameOneAttempts.fetch_add(1) == 0) {
+                        frameOneHeld.enterAndWait();
+                        runtime::TaskDiagnostic transient;
+                        transient.code = "test.transient-failure";
+                        transient.summary = "A transient preparation failure";
+                        return runtime::TaskResult<ui::PreviewPreparationResultHandle>::failed(
+                            std::move(transient));
+                    }
+                    return preparation(snapshot, identity, bytes, overrides, context);
+                });
+        };
+    ui::RamPreviewController ramPreview(fixture.session, fixture.controller, fixture.scheduler,
+                                        fixture.bridge, preparation, nullptr, submitter,
+                                        ui::RamPreviewPipeline::kMaxInFlight);
+    std::size_t width = 2;
+    ramPreview.setFillWidthProvider([&width](std::uint64_t) { return width; });
+    ramPreview.start();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("frame 1 is preparing and held at its gate",
+                                              [&] { return frameOneHeld.entered(); }),
+        "frame 1 is preparing and held at its gate");
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("frame 2 finishes and is held for frame 1",
+                                              [&] { return ramPreview.preparedFrameCount() == 1; }),
+        "frame 2 finishes beside frame 1 and is held for it");
+    width = 1;
+    frameOneHeld.release();
+    expectations.expect(
+        bloom::test_support::awaitQtCondition("the run finishes once frame 1 is filled again",
+                                              [&] { return !ramPreview.isCaching(); }),
+        "frame 1 is filled again at width one and the run goes on to the end");
+    expectations.expect(ramPreview.cachedFrameCount() == 6 &&
+                            ramPreview.lastCompletion() ==
+                                ui::RamPreviewController::Completion::Complete,
+                        "every frame of the shrinking-width range is cached and the run is complete");
+    expectations.expect(frameOneAttempts.load() == 2 && submitted == 6,
+                        "frame 1 was filled twice and every other frame once");
+    frameOneHeld.release();
+    finishFixture(fixture, expectations);
+}
+
 // A transient frame failure is retried, not a reason to end the run on its own.
 void testRamPreviewRetriesATransientFrameFailure(Expectations& expectations) {
     SessionFixture fixture(makeTestProject("RAM transient failure", time(6, 25)));
@@ -2277,6 +2413,8 @@ int main(int argc, char** argv) {
         testRamPreviewRetriesATransientFrameFailure(expectations);
         testRamPreviewLandsFramesInOrder(expectations, false);
         testRamPreviewLandsFramesInOrder(expectations, true);
+        testRamPreviewLandsAFrameTheFrontierPassed(expectations);
+        testRamPreviewResubmitsTheFrontierWhenTheWidthShrinks(expectations);
         testRamPreviewIgnoresSessionOnlyActivity(expectations);
         testCompositionSwitchEndsTheRunAndKeepsItsFrames(expectations);
         testCompiledPlanCacheCompilesOncePerRevision(expectations);

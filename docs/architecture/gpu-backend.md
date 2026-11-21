@@ -893,7 +893,11 @@ while later ones run), but they land in the preview cache in frame order (#544):
 ahead of an unfinished earlier one is held until the earlier one lands, is never submitted again,
 and counts against the fill width meanwhile, so the cached range is always one run from the start
 of the work area. A rescan or the end of the run lands whatever is held; a frame that is skipped
-after its retries no longer holds the frames after it.
+after its retries no longer holds the frames after it. Two rules keep a frame from waiting for ever
+(#752). A frame that finishes behind the frontier lands at once: other work (the Viewer's own frame
+of the same time) covered its time while it prepared, so the frontier has passed it. And with
+nothing in flight and frames held, the frame they wait for is submitted again however narrow the
+re-measured width has become, so held frames never fill the width the frontier frame needs.
 
 Honest outcome: the production application source wires the resident display route end to end, and a
 main-linked vertical acceptance now passes over a genuine OpenEXR document (a real `AddImageLayer`

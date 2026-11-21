@@ -358,9 +358,14 @@ void RamPreviewController::requestFrames() {
         }
     }
     // Frames held for in-order landing count against the width (#544), so a frame that keeps
-    // preparing or waiting cannot let the fill run arbitrarily far ahead of the cached run.
+    // preparing or waiting cannot let the fill run arbitrarily far ahead of the cached run. With
+    // nothing in flight and frames held, the frame they wait for is always submitted, however
+    // narrow the width became meanwhile (#752): a frame at the frontier that failed or waited for
+    // capacity while the width shrank to what is held would otherwise never be submitted again,
+    // and the held frames would wait for it for ever.
     while (caching_ && serial == runSerial_ &&
-           pipeline_.inFlightCount() + heldFrames_.size() < pipeline_.width()) {
+           (pipeline_.inFlightCount() + heldFrames_.size() < pipeline_.width() ||
+            (pipeline_.empty() && !heldFrames_.empty()))) {
         const auto* composition = session_.composition();
         if (composition == nullptr) {
             finish(Completion::Failed);
@@ -523,8 +528,12 @@ bool RamPreviewController::drainResults() {
             continue;
         }
         // #544: frames finish in any order (several prepare at once, and one may wait for device
-        // capacity); they land in frame order, so the cache grows as one run from the start.
-        if (ready.frameIndex != landingFrontier()) {
+        // capacity); they land in frame order, so the cache grows as one run from the start. Only a
+        // frame AHEAD of the frontier waits. One behind it lands at once (#752): its time was
+        // covered meanwhile by other work (the Viewer's own frame landing in the cache), so the
+        // frontier has already passed it and would never come back to land it, and held, it would
+        // fill the width and stop the fill for good.
+        if (ready.frameIndex > landingFrontier()) {
             heldFrames_.insert_or_assign(ready.frameIndex, cacheFrame);
             continue;
         }
@@ -544,8 +553,10 @@ std::uint64_t RamPreviewController::landingFrontier() {
 }
 
 bool RamPreviewController::landHeldFrames() {
+    // A held frame the frontier passed (its time was covered by other work while it waited) lands
+    // too (#752): waiting for the frontier to come back to it would hold it for ever.
     while (!heldFrames_.empty() && !rangeDirty_ &&
-           heldFrames_.begin()->first == landingFrontier()) {
+           heldFrames_.begin()->first <= landingFrontier()) {
         auto held = heldFrames_.extract(heldFrames_.begin());
         if (!landFrame(held.key(), held.mapped()))
             return false;
