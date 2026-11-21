@@ -345,6 +345,20 @@ void markupTests(Expectations& expectations, std::vector<std::pair<std::string, 
         gpu.emplace_back("italic oblique", *italic);
         gpu.emplace_back("underline", *underline);
     }
+    // A bold run with no bold face carries the font-missing warning, as in Subtitles.
+    {
+        made->set("text", std::string("<b>Lift</b>"));
+        std::vector<runtime::CompileDiagnostic> boldDiagnostics;
+        static_cast<void>(compile(expectations, *made, "bold diagnostics", &boldDiagnostics));
+        expectations.expect(
+            std::ranges::any_of(boldDiagnostics,
+                                [](const auto& diagnostic) {
+                                    return diagnostic.code ==
+                                               runtime::CompileDiagnosticCode::FontMissing &&
+                                           diagnostic.detail.find("bold") != std::string::npos;
+                                }),
+            "a bold run with no bold face warns that the face is missing");
+    }
 
     // An unknown tag is drawn as written, with a warning on the node.
     made->set("text", std::string("a <x>tag</x>"));

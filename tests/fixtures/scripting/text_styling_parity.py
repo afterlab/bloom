@@ -126,6 +126,24 @@ class Mcp(unittest.TestCase):
         self.assertNotIn('error', capture)
         self.assertFalse(capture['result'].get('isError', False), json.dumps(capture)[:400])
 
+    def test_alignment_includes_the_outline(self):
+        """Composition > Align lines up drawn bounds: an outlined text's bounds reach past its
+        letters by the outline, so aligning left edges moves it further right."""
+        plain = self.server.transact({'op': 'bloom.layer.add-text', 'args': {
+            'composition': 1, 'name': 'Plain', 'text': 'Edge', 'size': 96,
+            'position': [400, 540]}})
+        outlined = self.server.transact({'op': 'bloom.layer.add-text', 'args': {
+            'composition': 1, 'name': 'Outlined', 'text': 'Edge', 'size': 96,
+            'position': [400, 540], 'outlineWidth': 30}})
+        layers = [outputs(plain, 'layer')[0], outputs(outlined, 'layer')[0]]
+        aligned = self.server.transact({'op': 'bloom.layer.align-layers', 'args': {
+            'composition': 1, 'edge': 'left', 'target': 'composition', 'layers': layers,
+            'time': 0}})
+        self.assertTrue(aligned['succeeded'], json.dumps(aligned))
+        x = [self.server.value(outputs(result, 'positionParameter')[0])[0]
+             for result in (plain, outlined)]
+        self.assertTrue(20 < x[1] - x[0] < 40, x)
+
     def test_add_text_refuses_an_unknown_choice(self):
         refused = self.server.transact({'op': 'bloom.layer.add-text', 'args': {
             'composition': 1, 'name': 'T', 'text': 'x', 'outlineJoin': 'square'}})
