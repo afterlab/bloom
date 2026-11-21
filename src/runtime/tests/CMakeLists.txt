@@ -588,6 +588,16 @@ bloom_enable_strict_floating_point(bloom_runtime_field_raster_test)
 bloom_add_test(NAME bloom.runtime.field_raster COMMAND bloom_runtime_field_raster_test
     LABELS unit runtime render)
 
+# #742, #743: retained mip levels, the filtered window, Corner Pin shimmer and pixel snap on the CPU
+# reference.
+add_executable(bloom_runtime_filtered_sampling_test filtered_sampling_tests.cpp)
+target_include_directories(bloom_runtime_filtered_sampling_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
+target_link_libraries(bloom_runtime_filtered_sampling_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_filtered_sampling_test)
+bloom_enable_strict_floating_point(bloom_runtime_filtered_sampling_test)
+bloom_add_test(NAME bloom.runtime.filtered_sampling COMMAND bloom_runtime_filtered_sampling_test
+    LABELS unit runtime render)
+
 add_executable(bloom_runtime_vignette_test vignette_tests.cpp)
 target_include_directories(bloom_runtime_vignette_test PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/..")
 target_link_libraries(bloom_runtime_vignette_test PRIVATE bloom_runtime_evaluator)

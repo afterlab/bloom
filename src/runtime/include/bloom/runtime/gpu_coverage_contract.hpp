@@ -460,6 +460,30 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
         "feature.resample.mip-pyramid",
         "the mip levels a shrinking filtered resample reads (premultiplied 2x box chain)",
         GpuCoverageDisposition::Required, "src/runtime production affine mip level preparation"});
+    // #742 field image reads: Trilinear and Anisotropic are pixel semantics of the field raster
+    // kernel's Image operation (its footprint and level fetches), and the levels it reads are the
+    // same affine kernel's 2x box reductions placed in the field atlas, never a CPU resample:
+    // Corner Pin, Stabilize, ST Map, Displace, Procedural Warp and Tile & Mirror reach the resident
+    // field raster with their levels when the map shrinks the picture.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.field.trilinear",
+        "Trilinear (mipmapped) field image reads for the warp nodes",
+        GpuCoverageDisposition::Required, "src/runtime warp lowering production field raster"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.field.anisotropic", "Anisotropic field image reads for the warp nodes",
+        GpuCoverageDisposition::Required, "src/runtime warp lowering production field raster"});
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.field.mip-pyramid",
+        "the mip levels a shrinking filtered field read takes from the field atlas",
+        GpuCoverageDisposition::Required,
+        "src/runtime production field atlas mip level preparation"});
+    // #743 pixel snap: a layer's and a Transform 2D's composed translation rounded to whole output
+    // pixels, which moves the resident resample's matrix and window on every route.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.layer.snap",
+        "pixel snap of a layer's and a Transform 2D's final translation",
+        GpuCoverageDisposition::Required,
+        "src/runtime layer and Transform 2D production affine preparation"});
     // #480 Composition Source `channels`: a precomp's file channel layers through the production
     // channel gather at the mapped nested time, and its composite and Image to Channel Set layers
     // as Channel Select / Channel Combine over nested Composition Source images, never a CPU frame.

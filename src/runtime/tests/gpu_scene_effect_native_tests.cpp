@@ -57,6 +57,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <optional>
@@ -5303,6 +5304,293 @@ void runSharpens(Expectations& expectations, GpuDevice& device, GpuSceneCache& c
     }
 }
 
+// #742: the warp nodes' filtered reads through the production field raster and the field atlas's
+// mip levels: Corner Pin (its map's Jacobian, shrinking a one-pixel checker about 8x), Stabilize,
+// ST Map, Displace, Procedural Warp and Kaleidoscope (finite-difference footprints), Trilinear and
+// Anisotropic, at full frame, a region of interest and a proxy, against the CPU reference (the
+// field raster gate). A warm render dispatches nothing; moved corners re-run only the raster, the
+// picture's levels staying resident.
+void runFilteredWarps(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::document::Vec2d;
+    const CpuGpuSceneBuilder builder(nullptr, {}, ocioContext());
+    const CpuCompositionEvaluator evaluator;
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 48;
+    const auto planFor = [&](const bloom::runtime::FieldProgram& program, const std::uint64_t id) {
+        std::vector<CompiledOperation> operations;
+        operations.emplace_back(bloom::runtime::CompiledChecker{
+            NodeId::fromRaw(id + 1),
+            {ParameterId::fromRaw(id + 2), Color4d{1.0, 0.75, 0.5, 1.0}},
+            {ParameterId::fromRaw(id + 3), Color4d{0.0, 0.125, 0.25, 0.5}},
+            1,
+            1,
+            kWidth,
+            kHeight});
+        CompiledImageEffect effect{NodeId::fromRaw(id + 5), OperationIndex::fromRaw(0),
+                                   bloom::runtime::FieldRasterKernel{program, 1U}, false, false};
+        int slots = 0;
+        for (const auto& instruction : program.instructions)
+            slots = std::max(slots, instruction.slot + 1);
+        effect.fieldImages.assign(static_cast<std::size_t>(slots), OperationIndex::fromRaw(0));
+        operations.emplace_back(std::move(effect));
+        operations.emplace_back(CompiledLayerOutput{
+            NodeId::fromRaw(id + 6), LayerId::fromRaw(1), OperationIndex::fromRaw(1),
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 7), Vec2d{32.0, 24.0}},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 8), Vec2d{0.0, 0.0}},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 9), Vec2d{1.0, 1.0}},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 10), 0.0},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 11), 1.0},
+            ParameterId::fromRaw(id + 12), bloom::core::kDefaultBlendMode});
+        operations.emplace_back(CompiledMerge{
+            NodeId::fromRaw(id + 13),
+            std::vector<CompiledMergeInput>{CompiledMergeInput{
+                LayerSlotId::fromRaw(id + 14), LayerId::fromRaw(1), OperationIndex::fromRaw(2)}}});
+        operations.emplace_back(
+            CompiledCompositionOutput{NodeId::fromRaw(id + 15), OperationIndex::fromRaw(3)});
+        CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                     kProject,
+                                                     CompositionId::fromRaw(id + 100),
+                                                     format(kWidth, kHeight),
+                                                     std::move(operations),
+                                                     OperationIndex::fromRaw(4)};
+        definition.duration = RationalTime::fromInteger(100);
+        return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+    };
+    // The checker's 64 x 48 window pinned to an 8 x 6 quad (each corner moved inwards, pixels with
+    // y down), and the same quad moved by a pixel and a half.
+    const auto pinned = [](const double dx) {
+        return std::array<Vec2d, 4>{Vec2d{28.0 + dx, 21.0}, Vec2d{-28.0 + dx, 21.0},
+                                    Vec2d{-28.0 + dx, -21.0}, Vec2d{28.0 + dx, -21.0}};
+    };
+    struct Program final {
+        std::string name;
+        std::function<bloom::runtime::FieldProgram(std::int64_t, std::uint64_t)> build;
+        std::function<bloom::runtime::FieldProgram(std::int64_t, std::uint64_t)> changed;
+        bool shrinks;
+    };
+    using namespace bloom::field_test_programs;
+    const std::vector<Program> programs{
+        {"corner pin", [&](auto f, auto id) { return cornerPinProgram(id, f, pinned(0.0)); },
+         [&](auto f, auto id) { return cornerPinProgram(id, f, pinned(1.5)); }, true},
+        {"stabilize", [](auto f, auto id) { return stabilizeProgram(id, f, 1, 1); }, nullptr,
+         false},
+        {"st map", [](auto f, auto id) { return stMapProgram(id, f, 1); }, nullptr, false},
+        {"displace", [](auto f, auto id) { return displaceProgram(id, f, 0); }, nullptr, false},
+        {"procedural warp", [](auto f, auto id) { return proceduralWarpProgram(id, 0, f, 1); },
+         nullptr, false},
+        {"kaleidoscope", [](auto f, auto id) { return tileMirrorProgram(id, 3, f, 1, 6); }, nullptr,
+         false}};
+    struct Run final {
+        const char* name;
+        bool proxy;
+        bool roi;
+    };
+    const std::array runs{Run{"full frame", false, false}, Run{"region of interest", false, true},
+                          Run{"proxy", true, false}};
+    std::uint64_t id = 76000;
+    std::size_t checked = 0;
+    for (const auto& program : programs)
+        for (const std::int64_t filter : {3, 4})
+            for (const auto& run : runs) {
+                cache.clear();
+                const std::string name = "filtered warp native (" + program.name + ", " +
+                                         (filter == 3 ? "Trilinear" : "Anisotropic") + ", " +
+                                         run.name + "): ";
+                const auto plan = planFor(program.build(filter, id + 200), id);
+                auto request = requestFor(*plan);
+                if (run.proxy) {
+                    const auto extent = bloom::render::ImageExtent::create(32, 24);
+                    request.resolution = bloom::runtime::ProxyResolution{*extent.value()};
+                }
+                if (run.roi) {
+                    const auto roi = ImageWindow::create(20, 14, 24, 18);
+                    request.roi = *roi.value();
+                }
+                auto oracleRequest = request;
+                oracleRequest.bypassOperationCache = true;
+                const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+                const auto prepared = builder.build(plan, request);
+                if (!prepared)
+                    std::cerr << name << prepared.diagnostic.message << '\n';
+                expectations.expect(oracle.frame() && prepared,
+                                    name + "CPU oracle and production scene prepare");
+                auto executor = GpuSceneExecutor::create(device, cache);
+                if (!oracle.frame() || !prepared || !executor)
+                    continue;
+                const auto before = executor.executor->counters();
+                const auto cold = runScene(*executor.executor, prepared.scene);
+                const auto after = executor.executor->counters();
+                std::string detail;
+                expectations.expect(
+                    cold.pollResult == GpuSceneExecutorPollResult::Ready &&
+                        fieldParity(cold.pixels, oracle.frame()->processImage().pixels(), detail),
+                    name + "CPU parity: " + detail);
+                const auto& descriptor = *oracle.frame()->processImage().descriptor();
+                expectations.expect(cold.dataWindow == descriptor.dataWindow() &&
+                                        cold.displayWindow == descriptor.displayWindow(),
+                                    name + "data and display windows match");
+                expectations.expect(after.readbacks == before.readbacks,
+                                    name + "resident evaluation performs no readback");
+                const auto levels = after.affineDispatches - before.affineDispatches;
+                if (program.shrinks)
+                    expectations.expect(levels >= 2, name + "the shrinking read dispatches its "
+                                                            "mip levels (" +
+                                                            std::to_string(levels) + ")");
+                const auto warm = runScene(*executor.executor, prepared.scene);
+                expectations.expect(warm.pollResult == GpuSceneExecutorPollResult::Ready &&
+                                        warm.pixels == cold.pixels &&
+                                        executor.executor->counters().dispatches ==
+                                            after.dispatches,
+                                    name + "an unchanged warm render dispatches nothing");
+                if (program.changed) {
+                    const auto changed = planFor(program.changed(filter, id + 200), id);
+                    const auto rebuilt = builder.build(changed, request);
+                    const auto changedOracle = evaluator.evaluate(changed, oracleRequest, {});
+                    const auto counters = executor.executor->counters();
+                    const auto moved =
+                        rebuilt ? runScene(*executor.executor, rebuilt.scene) : RunOutcome{};
+                    std::string changedDetail;
+                    expectations.expect(
+                        rebuilt && changedOracle.frame() &&
+                            moved.pollResult == GpuSceneExecutorPollResult::Ready &&
+                            executor.executor->counters().affineDispatches ==
+                                counters.affineDispatches &&
+                            executor.executor->counters().ocioEffectDispatches ==
+                                counters.ocioEffectDispatches + 1 &&
+                            fieldParity(moved.pixels,
+                                        changedOracle.frame()->processImage().pixels(),
+                                        changedDetail),
+                        name +
+                            "moved corners re-run only the raster, the levels resident, with "
+                            "CPU parity: " +
+                            changedDetail);
+                }
+                ++checked;
+                id += 400;
+            }
+    std::cout << "filtered warp native: " << checked
+              << " runs checked for CPU parity, windows, residency, level dispatches, warm reuse "
+                 "and moved corners\n";
+}
+
+// #743: a 2 px sprite moving 0.3 px a frame on a snapping layer (alone and as the child of a
+// moving parent) and on a snapping Transform 2D: the GPU frames are the CPU reference's, and the
+// frames between whole-pixel steps are identical on the device too.
+void runPixelSnap(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache) {
+    using bloom::document::Vec2d;
+    const CpuGpuSceneBuilder builder;
+    const CpuCompositionEvaluator evaluator;
+    enum class Mode : std::uint8_t { Layer, Parented, Transform };
+    const auto planFor = [&](const Mode mode, const double x, const std::uint64_t id) {
+        std::vector<CompiledOperation> operations;
+        operations.emplace_back(bloom::runtime::CompiledChecker{
+            NodeId::fromRaw(id + 1),
+            {ParameterId::fromRaw(id + 2), Color4d{1.0, 1.0, 1.0, 1.0}},
+            {ParameterId::fromRaw(id + 3), Color4d{0.0, 0.25, 0.5, 1.0}},
+            1,
+            1,
+            2,
+            2});
+        auto content = OperationIndex::fromRaw(0);
+        if (mode == Mode::Transform) {
+            bloom::runtime::Transform2DKernel kernel{
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 30), Vec2d{x - 20.0, 0.0}},
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 31), Vec2d{}},
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 32), Vec2d{1.0, 1.0}},
+                CompiledScalarParameter{ParameterId::fromRaw(id + 33), 0.0},
+                bloom::runtime::Transform2DExtent::Transformed,
+                bloom::runtime::kResampleFilterBilinear};
+            kernel.snap = true;
+            operations.emplace_back(CompiledImageEffect{NodeId::fromRaw(id + 5), content,
+                                                        std::move(kernel), false, false});
+            content = OperationIndex::fromRaw(1);
+        }
+        std::vector<CompiledMergeInput> entries;
+        std::optional<OperationIndex> parent;
+        if (mode == Mode::Parented) {
+            CompiledLayerOutput holder{
+                NodeId::fromRaw(id + 40), LayerId::fromRaw(2), content,
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 41), Vec2d{x - 6.0, 16.0}},
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 42), Vec2d{}},
+                CompiledVec2Parameter{ParameterId::fromRaw(id + 43), Vec2d{1.0, 1.0}},
+                CompiledScalarParameter{ParameterId::fromRaw(id + 44), 0.0},
+                CompiledScalarParameter{ParameterId::fromRaw(id + 45), 0.0},
+                ParameterId::fromRaw(id + 46), bloom::core::kDefaultBlendMode};
+            parent = OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(std::move(holder));
+            entries.push_back({LayerSlotId::fromRaw(id + 47), LayerId::fromRaw(2), *parent});
+        }
+        const Vec2d position = mode == Mode::Parented    ? Vec2d{6.0, 0.0}
+                               : mode == Mode::Transform ? Vec2d{20.0, 16.0}
+                                                         : Vec2d{x, 16.0};
+        CompiledLayerOutput layer{
+            NodeId::fromRaw(id + 6), LayerId::fromRaw(1), content,
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 7), position},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 8), Vec2d{}},
+            CompiledVec2Parameter{ParameterId::fromRaw(id + 9), Vec2d{1.0, 1.0}},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 10), 0.0},
+            CompiledScalarParameter{ParameterId::fromRaw(id + 11), 1.0},
+            ParameterId::fromRaw(id + 12), bloom::core::kDefaultBlendMode};
+        layer.snap = mode != Mode::Transform;
+        layer.parent = parent;
+        const auto layerIndex = OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(layer));
+        entries.push_back({LayerSlotId::fromRaw(id + 14), LayerId::fromRaw(1), layerIndex});
+        operations.emplace_back(CompiledMerge{NodeId::fromRaw(id + 13), std::move(entries)});
+        const auto merge = OperationIndex::fromRaw(operations.size() - 1);
+        operations.emplace_back(CompiledCompositionOutput{NodeId::fromRaw(id + 15), merge});
+        const auto output = OperationIndex::fromRaw(operations.size() - 1);
+        CompiledCompositionPlanDefinition definition{bloom::document::Revision::fromRaw(kRevision),
+                                                     kProject,
+                                                     CompositionId::fromRaw(id + 100),
+                                                     format(64, 32),
+                                                     std::move(operations),
+                                                     output};
+        definition.duration = RationalTime::fromInteger(100);
+        return std::make_shared<const CompiledCompositionPlan>(std::move(definition));
+    };
+    std::uint64_t id = 77000;
+    for (const auto mode : {Mode::Layer, Mode::Parented, Mode::Transform}) {
+        const std::string name = std::string("pixel snap native (") +
+                                 (mode == Mode::Layer      ? "layer"
+                                  : mode == Mode::Parented ? "parented layer"
+                                                           : "Transform 2D") +
+                                 "): ";
+        std::vector<std::vector<Rgba32f>> frames;
+        bool parityHeld = true;
+        std::string detail;
+        for (int frame = 0; frame < 10; ++frame) {
+            cache.clear();
+            const auto plan = planFor(mode, 20.0 + 0.3 * frame, id);
+            auto request = requestFor(*plan);
+            auto oracleRequest = request;
+            oracleRequest.bypassOperationCache = true;
+            const auto oracle = evaluator.evaluate(plan, oracleRequest, {});
+            const auto prepared = builder.build(plan, request);
+            auto executor = GpuSceneExecutor::create(device, cache);
+            if (!oracle.frame() || !prepared || !executor) {
+                parityHeld = false;
+                detail = "frame " + std::to_string(frame) + " did not prepare";
+                continue;
+            }
+            const auto gpu = runScene(*executor.executor, prepared.scene);
+            if (gpu.pollResult != GpuSceneExecutorPollResult::Ready ||
+                !parity(gpu.pixels, oracle.frame()->processImage().pixels(), detail))
+                parityHeld = false;
+            frames.push_back(gpu.pixels);
+        }
+        expectations.expect(parityHeld, name + "every frame matches the CPU reference: " + detail);
+        std::size_t positions = frames.empty() ? 0 : 1;
+        for (std::size_t i = 1; i < frames.size(); ++i)
+            positions += frames[i] != frames[i - 1] ? 1U : 0U;
+        std::cout << name << "10 frames at 0.3 px a frame hold " << positions
+                  << " whole positions on the device\n";
+        expectations.expect(positions == 3 || positions == 4,
+                            name + "frames between whole-pixel steps are identical on the device");
+        id += 1000;
+    }
+}
+
 #include "gpu_scene_proxy_edge_native_tests.ipp"
 
 void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cache,
@@ -5328,6 +5616,8 @@ void runNative(Expectations& expectations, GpuDevice& device, GpuSceneCache& cac
     BLOOM_TIMED_CASE(runRecipes(expectations, device, cache));
     BLOOM_TIMED_CASE(runInnerLifecycle(expectations, device, cache));
     BLOOM_TIMED_CASE(runFields(expectations, device, cache));
+    BLOOM_TIMED_CASE(runFilteredWarps(expectations, device, cache));
+    BLOOM_TIMED_CASE(runPixelSnap(expectations, device, cache));
     BLOOM_TIMED_CASE(runDepthEffects(expectations, device, cache));
     BLOOM_TIMED_CASE(runLensFlares(expectations, device, cache));
     BLOOM_TIMED_CASE(runFilmGrains(expectations, device, cache));

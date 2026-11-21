@@ -71,6 +71,38 @@ class Builder final {
     }
     FieldInstruction& last() { return program_.instructions.back(); }
     [[nodiscard]] ParameterId nextId() { return ParameterId::fromRaw(next_++); }
+    // #742: the steps from coordinate `c` to `where` that depend on `c`, emitted again at the
+    // coordinate `at` with fresh parameter ids, as the lowering's warpPositionAt does (registers
+    // are virtual until packRegisters, so the steps between are those whose output lies in
+    // (c, where]). Returns the moved `where`.
+    std::int8_t cloneAt(const int c, const int where, const int at) {
+        std::vector<int> moved(static_cast<std::size_t>(registers_), -1);
+        moved[static_cast<std::size_t>(c)] = at;
+        const auto count = program_.instructions.size();
+        for (std::size_t i = 0; i < count; ++i) {
+            auto instruction = program_.instructions[i];
+            if (instruction.output <= c || instruction.output > where)
+                continue;
+            bool depends = false;
+            for (auto& input : instruction.inputs)
+                if (input >= 0 && moved[static_cast<std::size_t>(input)] >= 0) {
+                    input = static_cast<std::int8_t>(moved[static_cast<std::size_t>(input)]);
+                    depends = true;
+                }
+            if (!depends)
+                continue;
+            for (auto& scalar : instruction.scalars)
+                scalar.id = ParameterId::fromRaw(next_++);
+            for (auto& vector : instruction.vectors)
+                vector.id = ParameterId::fromRaw(next_++);
+            moved[static_cast<std::size_t>(instruction.output)] = registers_;
+            instruction.output = static_cast<std::int8_t>(registers_++);
+            program_.instructions.push_back(std::move(instruction));
+        }
+        return static_cast<std::int8_t>(moved[static_cast<std::size_t>(where)] >= 0
+                                            ? moved[static_cast<std::size_t>(where)]
+                                            : where);
+    }
 
     FieldProgram finish(const int result, const FieldResultKind kind,
                         const FieldOutputMode mode = FieldOutputMode::Raw) {
@@ -86,6 +118,37 @@ class Builder final {
     std::uint64_t next_ = 0;
     int registers_ = 0;
 };
+
+inline void packRegisters(FieldProgram& program);
+
+// #742: whether `filter` is Trilinear or Anisotropic (a footprint read through the mip levels).
+[[nodiscard]] inline bool filteredField(const std::int64_t filter) { return filter == 3 || filter == 4; }
+
+// #742: a warp's read of slot `slot` at `where` (from coordinate `c`) as its lowering builds it:
+// a filtered filter takes the finite-difference footprint (the position one output pixel to each
+// side, forward and backward Jacobians) and the whole level chain; any other filter is the plain
+// read.
+inline std::int8_t warpRead(Builder& b, const int c, const int where, const std::int64_t filter,
+                            const std::int64_t edge, const std::int8_t slot) {
+    if (!filteredField(filter)) {
+        const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
+        b.last().slot = slot;
+        return read;
+    }
+    const auto at = [&](const std::int64_t di, const std::int64_t dj) {
+        const auto moved = b.add(FieldOp::Offset, {c}, {di, dj, 1}, {1.0});
+        return b.cloneAt(c, where, moved);
+    };
+    const auto ip = at(1, 0);
+    const auto im = at(-1, 0);
+    const auto jp = at(0, 1);
+    const auto jm = at(0, -1);
+    const auto forward = b.add(FieldOp::Derivative, {ip, where, jp, where}, {4}, {1.0, 2.0});
+    const auto backward = b.add(FieldOp::Derivative, {where, im, where, jm}, {4}, {1.0, 2.0});
+    const auto read = b.add(FieldOp::Image, {where, forward, backward}, {filter, edge, 3, 4, 0, 1, 0});
+    b.last().slot = slot;
+    return read;
+}
 
 // A Test Card program: the TestCard instruction of `card` over the Coordinate, in a `width` x `height`
 // frame centerd on the composition's center, with numbers that make every card vary across it, as the
@@ -535,21 +598,29 @@ inline void addTestCard(Builder& b, const int coordinate, const std::int64_t car
     else if (mode == 10)
         points = {Vec2d{}, Vec2d{}, Vec2d{5.0 * k, 4.0 * k}, Vec2d{1.0 * k, -2.0 * k}};
     const auto where = b.addv(FieldOp::ProceduralWarp, {c}, choices, scalars, points);
-    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
-    b.last().slot = 0;
+    const auto read = warpRead(b, c, where, filter, edge, 0);
+    // #742: a filtered program packs its registers, as the lowering does.
+    const auto finish = [&](const int result) {
+        auto program = b.finish(result, FieldResultKind::Premultiplied);
+        if (filteredField(filter))
+            packRegisters(program);
+        return program;
+    };
     if (mode == 6) {
-        const auto plain = b.add(FieldOp::Image, {c}, {filter, edge, 3, 4, 0, 1});
+        // The plain read never shrinks: a filtered filter reads it Bilinear.
+        const auto plain =
+            b.add(FieldOp::Image, {c}, {filteredField(filter) ? 0 : filter, edge, 3, 4, 0, 1});
         b.last().slot = 0;
         const auto weight = b.add(FieldOp::Swizzle, {where}, {2, 4, 4, 4}, {1.0, 1.0, 1.0, 1.0});
         const auto blended = b.add(FieldOp::Math, {plain, read, weight}, {9}, {0.1, 0.0});
-        return b.finish(blended, FieldResultKind::Premultiplied);
+        return finish(blended);
     }
     if (mode == 9) {
         const auto weight = b.add(FieldOp::Swizzle, {where}, {2, 2, 2, 2}, {1.0, 1.0, 1.0, 1.0});
         const auto held = b.add(FieldOp::Math, {read, weight}, {2}, {0.1, 0.0});
-        return b.finish(held, FieldResultKind::Premultiplied);
+        return finish(held);
     }
-    return b.finish(read, FieldResultKind::Premultiplied);
+    return finish(read);
 }
 
 // Packs the virtual registers into the sixteen physical ones by last use, as the lowering does.
@@ -660,6 +731,16 @@ cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
     const auto where = b.add(FieldOp::Homography, {c}, {0}, {},
                              {corners[0], corners[1], corners[2], corners[3]});
     b.last().slot = 0;
+    if (filteredField(filter)) {
+        // #742: the footprint is the map's own Jacobian (the same Homography, choice 2), the
+        // levels only as deep as the quad shrinks the input.
+        const auto jacobian = b.add(FieldOp::Homography, {c}, {0, 0, 1}, {},
+                                    {corners[0], corners[1], corners[2], corners[3]});
+        b.last().slot = 0;
+        const auto read = b.add(FieldOp::Image, {where, jacobian}, {filter, 1, 3, 4, 0, 1, 1});
+        b.last().slot = 0;
+        return b.finish(read, FieldResultKind::Premultiplied);
+    }
     const auto read = b.add(FieldOp::Image, {where}, {filter, 1, 3, 4, 0, 1});
     b.last().slot = 0;
     return b.finish(read, FieldResultKind::Premultiplied);
@@ -675,6 +756,14 @@ cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
     Builder b(idBase);
     const auto c = b.add(FieldOp::Coordinate);
     const auto where = b.add(FieldOp::Homography, {c}, {1, mode}, {}, {Vec2d{3.0, -2.0}, Vec2d{-4.5, 1.5}});
+    if (filteredField(filter)) {
+        // #742: the move's own Jacobian, which never shrinks the picture.
+        const auto jacobian =
+            b.add(FieldOp::Homography, {c}, {1, mode, 1}, {}, {Vec2d{3.0, -2.0}, Vec2d{-4.5, 1.5}});
+        const auto read = b.add(FieldOp::Image, {where, jacobian}, {filter, edge, 3, 4, 0, 1, 1});
+        b.last().slot = 0;
+        return b.finish(read, FieldResultKind::Premultiplied);
+    }
     const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
     b.last().slot = 0;
     return b.finish(read, FieldResultKind::Premultiplied);
@@ -692,9 +781,11 @@ cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
     const auto scaled = b.add(FieldOp::Swizzle, {uv}, {0, 1, 4, 4}, {16.0, 12.0, 1.0, 1.0});
     const auto half = b.add(FieldOp::Constant, {}, {}, {8.0, 6.0, 0.0, 0.0});
     const auto where = b.add(FieldOp::Math, {scaled, half}, {1}, {0.1, 0.0});
-    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
-    b.last().slot = 1;
-    return b.finish(read, FieldResultKind::Premultiplied);
+    const auto read = warpRead(b, c, where, filter, edge, 1);
+    auto program = b.finish(read, FieldResultKind::Premultiplied);
+    if (filteredField(filter))
+        packRegisters(program);
+    return program;
 }
 
 // The picture is slot 0 and the map slot 1.
@@ -714,9 +805,11 @@ cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
     const auto moved = b.add(FieldOp::Math, {relative, amounts}, {2}, {0.1, 0.0});
     const auto shift = b.add(FieldOp::Swizzle, {moved}, {0, 1, 4, 4}, {1.0, -1.0, 0.0, 0.0});
     const auto where = b.add(FieldOp::Math, {c, shift}, {1}, {0.1, 0.0});
-    const auto read = b.add(FieldOp::Image, {where}, {filter, edge, 3, 4, 0, 1});
-    b.last().slot = 0;
-    return b.finish(read, FieldResultKind::Premultiplied);
+    const auto read = warpRead(b, c, where, filter, edge, 0);
+    auto program = b.finish(read, FieldResultKind::Premultiplied);
+    if (filteredField(filter))
+        packRegisters(program);
+    return program;
 }
 
 // #511 Tile & Mirror: the programs its lowering builds over the 16 x 12 test composition, mirroring
@@ -800,8 +893,9 @@ cornerPinProgram(const std::uint64_t idBase, const std::int64_t filter = 0,
         break;
     }
     }
-    const auto read = b.add(FieldOp::Image, {where}, {filter, readEdge, 3, 4, 0, 1});
-    b.last().slot = 0;
+    // #742: only Kaleidoscope scales the picture; the other modes read a filtered filter Bilinear.
+    const auto readFilter = filteredField(filter) && mode != 3 ? 0 : filter;
+    const auto read = warpRead(b, c, where, readFilter, readEdge, 0);
     auto program = b.finish(read, FieldResultKind::Premultiplied);
     packRegisters(program);
     return program;

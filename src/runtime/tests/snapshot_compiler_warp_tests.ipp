@@ -279,6 +279,91 @@ void testCornerPinLowering(Expectations& expectations) {
     }
 }
 
+// #743: pixel-art mode resolves every Automatic choice and leaves an explicit one alone. A layer
+// whose filter and snap are Automatic reads Nearest and snaps once the composition is pixel art,
+// and a Corner Pin whose filter is Automatic reads Nearest instead of Trilinear; a layer bound to
+// Bilinear and Off and a Corner Pin bound to Bilinear compile, and render, the same either way.
+void testPixelArtResolvesAutomatic(Expectations& expectations) {
+    using namespace document;
+    struct Compiled final {
+        std::int64_t layerFilter = -1;
+        bool layerSnap = false;
+        std::int64_t warpFilter = -1;
+        std::vector<render::Rgba32f> pixels;
+    };
+    const auto compileWith = [&](const bool explicitChoices, const bool pixelArt) {
+        // A quad shrinking the frame 6x, so a filtered read reads levels.
+        auto fixture = warpFixture(
+            kCornerPinNodeType,
+            {{"filter", explicitChoices ? kWarpFilterBilinear : kWarpFilterAutomatic},
+             {"topLeft", Vec2d{800.0, 450.0}},
+             {"topRight", Vec2d{-800.0, 450.0}},
+             {"bottomRight", Vec2d{-800.0, -450.0}},
+             {"bottomLeft", Vec2d{800.0, -450.0}}});
+        auto* composition = fixture.recipe.project.findComposition(kCompositionId);
+        composition->setPixelArt(pixelArt);
+        // The layer's own optional filter and snap, and a fractional position.
+        const auto filterId = ParameterId::fromRaw(1990);
+        const auto snapId = ParameterId::fromRaw(1991);
+        require(composition->parameters().insert(
+                    {filterId, std::string(kLayerFilterParameterSchemaKey),
+                     ConstantValueSource{explicitChoices ? std::int64_t{0}
+                                                         : std::int64_t{kResampleFilterAutomaticValue}}}) &&
+                    composition->parameters().insert(
+                        {snapId, std::string(kLayerSnapParameterSchemaKey),
+                         ConstantValueSource{explicitChoices ? kLayerSnapOff : kLayerSnapAutomatic}}),
+                "the layer's filter and snap parameters are valid");
+        auto* layer = composition->graph().findNode(kFirstLayerNode);
+        require(layer != nullptr, "the layer node exists");
+        layer->parameters.push_back({std::string(kLayerFilterParameterRole), filterId});
+        layer->parameters.push_back({std::string(kLayerSnapParameterRole), snapId});
+        require(composition->parameters().setSource(kFirstPosition,
+                                                    ConstantValueSource{Vec2d{960.3, 540.6}}),
+                "the layer sits between pixels");
+        const auto node = fixture.recipe.node;
+        const auto result = compileRecipe(std::move(fixture.recipe.project));
+        require(result.plan != nullptr, "the pixel-art fixture compiles");
+        Compiled compiled;
+        for (const auto& operation : result.plan->operations())
+            if (const auto* output = std::get_if<runtime::CompiledLayerOutput>(&operation);
+                output != nullptr && output->sourceNodeId == kFirstLayerNode) {
+                compiled.layerFilter = output->filter;
+                compiled.layerSnap = output->snap;
+            }
+        const auto ops = recipeOperations(*result.plan, node);
+        const auto* raster = ops.size() == 1 ? lensRaster(*result.plan, ops[0]) : nullptr;
+        if (raster != nullptr)
+            for (const auto& instruction : raster->program.instructions)
+                if (instruction.op == static_cast<std::uint8_t>(core::field::FieldOp::Image))
+                    compiled.warpFilter = instruction.choices.front();
+        const auto evaluated = lensEvaluate(result.plan, 240, 135);
+        require(evaluated.frame() != nullptr, "the pixel-art fixture evaluates");
+        const auto pixels = evaluated.frame()->processImage().pixels();
+        compiled.pixels.assign(pixels.begin(), pixels.end());
+        return compiled;
+    };
+    const auto automaticOff = compileWith(false, false);
+    const auto automaticOn = compileWith(false, true);
+    expectations.expect(automaticOff.layerFilter == runtime::kResampleFilterTrilinear &&
+                            !automaticOff.layerSnap && automaticOff.warpFilter == kWarpFilterTrilinear,
+                        "outside pixel-art mode Automatic is Trilinear and does not snap");
+    expectations.expect(automaticOn.layerFilter == runtime::kResampleFilterNearest &&
+                            automaticOn.layerSnap && automaticOn.warpFilter == kWarpFilterNearest,
+                        "in pixel-art mode Automatic is Nearest and snaps");
+    expectations.expect(automaticOff.pixels != automaticOn.pixels,
+                        "toggling pixel-art mode changes the Automatic layer's pixels");
+    const auto explicitOff = compileWith(true, false);
+    const auto explicitOn = compileWith(true, true);
+    expectations.expect(explicitOff.layerFilter == runtime::kResampleFilterBilinear &&
+                            explicitOn.layerFilter == runtime::kResampleFilterBilinear &&
+                            !explicitOff.layerSnap && !explicitOn.layerSnap &&
+                            explicitOff.warpFilter == kWarpFilterBilinear &&
+                            explicitOn.warpFilter == kWarpFilterBilinear,
+                        "an explicit Bilinear filter and an Off snap ignore pixel-art mode");
+    expectations.expect(explicitOff.pixels == explicitOn.pixels,
+                        "toggling pixel-art mode leaves the explicit layer's pixels unchanged");
+}
+
 void testCornerPinPixels(Expectations& expectations) {
     using namespace document;
     constexpr double kWidth = 1920.0;

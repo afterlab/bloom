@@ -37,6 +37,7 @@
 #include <bloom/runtime/function_body.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/resample_filter.hpp>
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
@@ -2238,6 +2239,7 @@ int main(const int argc, char** argv) {
             BLOOM_TIMED_CASE(testChromaticAberrationPixels(expectations));
             BLOOM_TIMED_CASE(testCornerPinLowering(expectations));
             BLOOM_TIMED_CASE(testCornerPinPixels(expectations));
+            BLOOM_TIMED_CASE(testPixelArtResolvesAutomatic(expectations));
             BLOOM_TIMED_CASE(testStMapLowering(expectations));
             BLOOM_TIMED_CASE(testStMapPixels(expectations));
             BLOOM_TIMED_CASE(testDisplaceLowering(expectations));

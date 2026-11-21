@@ -602,6 +602,25 @@ displayProofRunner(const bool customView) {
     add("feature.layer.parent", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime layer_parent_transform tests",
         [] { return runBuilder(parentedPlan(112300)); });
+    // #743: a snapping layer over a snapping Transform 2D (a quarter-pixel move each), prepared
+    // through the production builder; native parity holds the rounded pixels to the CPU reference.
+    add("feature.layer.snap", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime layer and Transform 2D production affine preparation", [] {
+            bloom::runtime::Transform2DKernel kernel{
+                CompiledVec2Parameter{ParameterId::fromRaw(113430), Vec2d{1.25, -0.75}},
+                CompiledVec2Parameter{ParameterId::fromRaw(113431), Vec2d{}},
+                CompiledVec2Parameter{ParameterId::fromRaw(113432), Vec2d{1.0, 1.0}},
+                CompiledScalarParameter{ParameterId::fromRaw(113433), 0.0},
+                bloom::runtime::Transform2DExtent::Transformed, 0};
+            kernel.snap = true;
+            auto definition = effectPlan(kernel, 113400)->copyDefinition();
+            for (auto& operation : definition.operations)
+                if (auto* layer = std::get_if<bloom::runtime::CompiledLayerOutput>(&operation)) {
+                    layer->snap = true;
+                    layer->position.source = Vec2d{8.25, 5.75};
+                }
+            return runBuilder(publish(std::move(definition)));
+        });
     add("feature.layer.generic_input", GpuCoverageFixtureCriterion::Prepared,
         "src/runtime GpuSceneExecutor graph tests",
         [] { return runBuilder(layerOnLayerPlan(104000)); });
@@ -1999,6 +2018,81 @@ displayProofRunner(const bool customView) {
                  "production Corner Pin lowering: the data window pinned to a moved quad, "
                  "bilinear, nearest and bicubic, full frame and ROI");
         base += 1000;
+        // #742: the warp nodes' Trilinear and Anisotropic reads, each program its lowering builds
+        // (Corner Pin's map Jacobian, the finite-difference footprints of ST Map, Displace,
+        // Procedural Warp and Kaleidoscope, Stabilize's move), over a map that shrinks the
+        // picture, so the field raster reads levels from the atlas (a scene with no mip level
+        // command fails the level fixture: a read that resolved to Bilinear proves nothing).
+        {
+            using bloom::document::Vec2d;
+            const std::array<Vec2d, 4> shrunk{Vec2d{6.0, 4.5}, Vec2d{-6.0, 4.5}, Vec2d{-6.0, -4.5},
+                                              Vec2d{6.0, -4.5}};
+            const auto filteredKernels = [shrunk](const std::int64_t filter,
+                                                  const std::uint64_t at) {
+                using bloom::field_test_programs::cornerPinProgram;
+                using bloom::field_test_programs::displaceProgram;
+                using bloom::field_test_programs::proceduralWarpProgram;
+                using bloom::field_test_programs::stabilizeProgram;
+                using bloom::field_test_programs::stMapProgram;
+                using bloom::field_test_programs::tileMirrorProgram;
+                return std::vector<bloom::runtime::ImageEffectKernel>{
+                    bloom::runtime::FieldRasterKernel{cornerPinProgram(at, filter, shrunk), 1},
+                    bloom::runtime::FieldRasterKernel{stabilizeProgram(at + 100, filter, 1, 1), 1},
+                    bloom::runtime::FieldRasterKernel{stMapProgram(at + 200, filter, 1), 1},
+                    bloom::runtime::FieldRasterKernel{displaceProgram(at + 300, filter, 0), 1},
+                    bloom::runtime::FieldRasterKernel{proceduralWarpProgram(at + 400, 0, filter, 1),
+                                                      1},
+                    bloom::runtime::FieldRasterKernel{tileMirrorProgram(at + 500, 3, filter, 1, 6),
+                                                      1}};
+            };
+            const auto withLevels = [runFields](const std::vector<bloom::runtime::ImageEffectKernel>&
+                                                    kernels,
+                                                const std::uint64_t at, std::string evidence) {
+                auto run = runFields(kernels, at, std::move(evidence));
+                bool levels = false;
+                for (const auto& frame : run.frames)
+                    for (const auto& command : frame.scene->commands())
+                        if (const auto* affine =
+                                std::get_if<bloom::runtime::GpuSceneAffineCommand>(&command))
+                            levels = levels ||
+                                     affine->matrix == bloom::render::affineMipReductionMatrix();
+                if (!levels) {
+                    run.prepared = false;
+                    run.evidence += "; no field image mip level was prepared";
+                }
+                return run;
+            };
+            const auto addFiltered = [&add, withLevels](std::string id,
+                                                         std::vector<bloom::runtime::ImageEffectKernel>
+                                                             kernels,
+                                                         const std::uint64_t at,
+                                                         std::string evidence) {
+                add(
+                    std::move(id), GpuCoverageFixtureCriterion::Prepared,
+                    "src/runtime warp lowering production field raster",
+                    [withLevels, kernels = std::move(kernels), at,
+                     evidence = std::move(evidence)] { return withLevels(kernels, at, evidence); },
+                    {}, FixturePrerequisite::PackagedShaderTools);
+            };
+            addFiltered("feature.field.trilinear", filteredKernels(3, base), base + 700,
+                        "production warp reads, Trilinear: Corner Pin, Stabilize, ST Map, "
+                        "Displace, Procedural Warp and Kaleidoscope, full frame and ROI");
+            base += 1000;
+            addFiltered("feature.field.anisotropic", filteredKernels(4, base), base + 700,
+                        "production warp reads, Anisotropic: Corner Pin, Stabilize, ST Map, "
+                        "Displace, Procedural Warp and Kaleidoscope, full frame and ROI");
+            base += 1000;
+            addFiltered("feature.field.mip-pyramid",
+                        {bloom::runtime::FieldRasterKernel{
+                             bloom::field_test_programs::cornerPinProgram(base, 3, shrunk), 1},
+                         bloom::runtime::FieldRasterKernel{
+                             bloom::field_test_programs::cornerPinProgram(base + 100, 4, shrunk),
+                             1}},
+                        base + 200,
+                        "production field atlas levels: a Corner Pin shrinking the picture 4x, "
+                        "Trilinear and Anisotropic, full frame and ROI");
+            base += 1000;
+        }
         // #513 Stabilize and Match Move: the picture moved by two points, both modes, every filter
         // and edge rule, full frame and ROI.
         addField("node.bloom.stabilize",
