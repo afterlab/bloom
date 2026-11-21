@@ -12,6 +12,9 @@
 //
 // Before crashing it writes log lines to standard error, which the reporter copies into the text
 // report, naming the thread that is about to crash so the check can find it in the minidump.
+// #756: it also names, in the file BLOOM_TEST_CRASH_THREADS gives, the threads it knows are alive
+// at the crash (the main thread, a held thread that waits until the program ends, and the thread
+// that crashes), so the check asserts on those and not on a thread the runtime may be ending.
 
 #include <bloom/core/diagnostic_record.hpp>
 #include <bloom/core/worker_thread.hpp>
@@ -20,6 +23,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
+#include <future>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -64,8 +69,42 @@ std::uint64_t exhaustStack(const std::uint64_t depth) {
     return exhaustStack(depth + 1) + page[(depth * 7) % sizeof(page)];
 }
 
+// Appends "<label> <id>" to the file BLOOM_TEST_CRASH_THREADS names: a thread alive at the crash.
+void recordAlive(const std::string_view label, const std::uint64_t id) {
+    const char* file = std::getenv("BLOOM_TEST_CRASH_THREADS");
+    if (file == nullptr || *file == '\0')
+        return;
+    std::ofstream stream(file, std::ios::app);
+    stream << label << ' ' << id << std::endl;
+}
+
+// A thread that is alive at the crash: it records its id, then waits until the program ends.
+class HeldThread final {
+  public:
+    HeldThread()
+        : thread_([this] {
+              recordAlive("held thread", threadId());
+              started_.set_value();
+              release_.get_future().wait();
+          }) {
+        started_.get_future().wait();
+    }
+    HeldThread(const HeldThread&) = delete;
+    HeldThread& operator=(const HeldThread&) = delete;
+    ~HeldThread() {
+        release_.set_value();
+        thread_.join();
+    }
+
+  private:
+    std::promise<void> started_;
+    std::promise<void> release_;
+    bloom::core::WorkerThread thread_;
+};
+
 [[noreturn]] void writeThroughNull() {
     std::cerr << "crashing thread " << threadId() << std::endl;
+    recordAlive("crashing thread", threadId());
     *nowhere = 42;
     std::abort();
 }
@@ -97,6 +136,12 @@ int main(int argc, char** argv) {
     bloom::core::recordGpuDevice("Test GPU (discrete), driver test 1.0, Vulkan 1.3");
     std::cerr << "log line before the crash" << std::endl;
     std::cerr << "main thread " << threadId() << std::endl;
+    if (mode == "clean") {
+        bloom::crash::finishCrashReporter();
+        return 0;
+    }
+    recordAlive("main thread", threadId());
+    const HeldThread held;
 
     if (mode == "null-write")
         writeThroughNull();
@@ -108,6 +153,7 @@ int main(int argc, char** argv) {
     if (mode == "stack-overflow") {
         bloom::core::WorkerThread worker([] {
             std::cerr << "crashing thread " << threadId() << std::endl;
+            recordAlive("crashing thread", threadId());
             std::cerr << "depth " << exhaustStack(0) << std::endl;
         });
         worker.join();
@@ -115,11 +161,8 @@ int main(int argc, char** argv) {
     }
     if (mode == "abort") {
         std::cerr << "crashing thread " << threadId() << std::endl;
+        recordAlive("crashing thread", threadId());
         std::abort();
-    }
-    if (mode == "clean") {
-        bloom::crash::finishCrashReporter();
-        return 0;
     }
     std::cerr << "unknown mode " << mode << '\n';
     return 2;

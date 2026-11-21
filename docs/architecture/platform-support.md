@@ -182,8 +182,13 @@ out; `apps/bloom-crash-handler` is Crashpad's handler entry point built as a Blo
 first thing in `main`, before Qt, the interpreter or the GPU exist. It starts
 `bloom-crash-handler` from beside the program as a separate process; when the program crashes,
 the handler reads the crashed process from outside and writes the minidump, so nothing in the
-crashed process has to work. The minidump holds every thread's stack, the loaded modules and
-the memory around each stack. A program whose handler cannot start (no crash folder, no handler
+crashed process has to work. The minidump holds every live thread's stack, the loaded modules
+and the memory around each stack. A thread that is exiting at the moment of the crash (a pool
+worker retiring, say) is still listed but has already given back its stack, so the minidump holds
+none for it (on macOS nothing is mapped at its stack pointer any more). The summary records any
+thread but the crashed one without a stack as exited, and the text report names those threads on
+an `Exited at the crash (no stack):` line, so no part of a report depends on a thread that was
+ending (#756). A program whose handler cannot start (no crash folder, no handler
 beside it, a build without Crashpad) runs on and records nothing; it never fails to start
 because of crash reporting.
 
@@ -244,9 +249,12 @@ the crash folder. Tests: `bloom.crash.reports` (minidump streams, the text repor
 pruning to 20 and 30 days, the GitHub address, held files), `bloom.crash.child-*` (a child process
 writes through a null pointer on the main thread or on a worker thread, aborts, overflows a worker
 thread's stack, or exits cleanly; the check then collects the folder as the next start does and
-requires one minidump with every thread's stack and the right exception, the text report's lines,
+requires one minidump with the right exception and the stacks of the threads the program names as
+alive at the crash in `BLOOM_TEST_CRASH_THREADS` (its main thread, a held thread waiting for the
+program to end, and the crashing thread), every other thread with its stack or recorded as exited,
+the text report's lines,
 that the next start offers it and the start after that does not), `bloom.crash.cli-headless`
-(`bloom-cli` crashing inside a script) and `bloom.ui.crash-notice` (the notice is offered once,
+(`bloom-cli` crashing inside a script, which names its main and a held thread the same way) and `bloom.ui.crash-notice` (the notice is offered once,
 never modal, and not shown when it may not be). They run on Linux, macOS and Windows.
 
 **Symbols.** The release workflow builds with `BLOOM_DEBUG_SYMBOLS` (`cmake/BloomDebugSymbols.cmake`):

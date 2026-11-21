@@ -1,13 +1,20 @@
 // Checks what a deliberate crash left in a crash folder (issue #736), after crash_test.cmake ran
 // the crashing program:
 //
-//   bloom_crash_check <mode> <crash folder> <program>
+//   bloom_crash_check <mode> <crash folder> <program> <alive threads file>
 //
 // It collects the folder as the next start of a Bloom program does, then requires exactly one
-// crash of <program> with a minidump that holds every thread's stack and the right exception, a
-// text report with the version, build, platform, OS version, GPU line and the last log lines, and
-// that the report is offered once: offered on the first look, not on the second. Mode `clean`
-// requires that nothing was recorded and that the program removed its prepared text report.
+// crash of <program> with the right exception, a minidump that holds the stack of every thread the
+// program named as alive at the crash (the alive threads file, "<label> <id>" per line: the main
+// thread, a held thread and the crashing thread), and records every other thread without a stack
+// as exited, a text report with the version, build, platform, OS version, GPU line, the exited
+// threads and the last log lines, and that the report is offered once: offered on the first look,
+// not on the second. Mode `clean` requires that nothing was recorded and that the program removed
+// its prepared text report.
+//
+// #756: a thread the runtime is ending at the moment of the crash (a pool worker retiring, say)
+// has already given back its stack, so the check never requires a stack of a thread the program
+// did not name as alive.
 
 #include <bloom/core/version.hpp>
 #include <bloom/crash/crash_reports.hpp>
@@ -17,6 +24,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <optional>
 #include <sstream>
@@ -52,6 +60,31 @@ void expect(const bool condition, const std::string_view what) {
     return id;
 }
 
+struct AliveThread final {
+    std::string label;
+    std::uint64_t id = 0;
+};
+
+// The threads the crashing program named as alive at the crash: "<label> <id>" per line, the id
+// last.
+[[nodiscard]] std::vector<AliveThread> aliveThreads(const std::filesystem::path& file) {
+    std::vector<AliveThread> threads;
+    std::ifstream stream(file);
+    std::string line;
+    while (std::getline(stream, line)) {
+        if (!line.empty() && line.back() == '\r')
+            line.pop_back();
+        const auto space = line.rfind(' ');
+        if (space == std::string::npos)
+            continue;
+        std::istringstream id(line.substr(space + 1));
+        AliveThread thread{line.substr(0, space), 0};
+        if (id >> thread.id)
+            threads.push_back(std::move(thread));
+    }
+    return threads;
+}
+
 [[nodiscard]] std::vector<std::uint32_t> expectedCodes(const std::string_view mode,
                                                        const std::string& platform) {
     const bool abort = mode == "abort";
@@ -72,13 +105,15 @@ void expect(const bool condition, const std::string_view what) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc != 4) {
-        std::cerr << "usage: bloom_crash_check <mode> <crash folder> <program>\n";
+    if (argc != 5) {
+        std::cerr << "usage: bloom_crash_check <mode> <crash folder> <program> "
+                     "<alive threads file>\n";
         return 2;
     }
     const std::string mode = argv[1];
     const std::filesystem::path folder = argv[2];
     const std::string program = argv[3];
+    const std::filesystem::path aliveFile = argv[4];
 
     const auto collected = bloom::crash::collectReports(folder, std::chrono::system_clock::now());
     for (const auto& problem : collected.problems)
@@ -114,9 +149,49 @@ int main(int argc, char** argv) {
                   << bloom::crash::describeException(*summary) << ", platform " << summary->platform
                   << '\n';
         expect(!summary->threads.empty(), "the minidump lists the threads");
-        for (const auto& thread : summary->threads)
-            expect(thread.stackBytes > 0,
-                   "thread " + std::to_string(thread.id) + " has its stack in the minidump");
+        const auto alive = aliveThreads(aliveFile);
+        for (const std::string_view label : {"main thread", "held thread", "crashing thread"})
+            expect(std::ranges::any_of(alive, [&](const auto& thread) {
+                       return thread.label == label;
+                   }),
+                   "the program named its " + std::string(label) + " as alive at the crash");
+        for (const auto& named : alive) {
+            const auto found = std::ranges::find_if(summary->threads, [&](const auto& thread) {
+                return thread.id == static_cast<std::uint32_t>(named.id);
+            });
+            const std::string what =
+                named.label + " " + std::to_string(named.id) + ", alive at the crash,";
+            expect(found != summary->threads.end(), what + " is in the minidump");
+            if (found != summary->threads.end())
+                expect(found->stackBytes > 0 && !found->exited,
+                       what + " has its stack in the minidump");
+        }
+        // Every other thread either has its stack or was exiting at the crash and is recorded
+        // as exited, in the summary and in the text report.
+        std::string exitedLine;
+        for (const auto& thread : summary->threads) {
+            expect(thread.stackBytes > 0 || thread.exited,
+                   "thread " + std::to_string(thread.id) +
+                       " has its stack in the minidump or is recorded as exited");
+            if (thread.exited)
+                exitedLine += (exitedLine.empty() ? "" : ", ") + std::to_string(thread.id);
+        }
+        const auto exitedCount = bloom::crash::exitedThreads(*summary).size();
+        if (exitedCount > 0)
+            std::cerr << "exited at the crash: " << exitedLine << '\n';
+        expect(exitedCount == 0
+                   ? !contains(text, "\nExited at the crash")
+                   : contains(text, "\nExited at the crash (no stack): thread" +
+                                        std::string(exitedCount == 1 ? " " : "s ") + exitedLine +
+                                        "\n"),
+               "the text report names exactly the threads that exited at the crash");
+        expect(summary->crashedThreadId &&
+                   std::ranges::any_of(summary->threads,
+                                       [&](const auto& thread) {
+                                           return thread.id == *summary->crashedThreadId &&
+                                                  thread.stackBytes > 0;
+                                       }),
+               "the crashed thread has its stack in the minidump");
         const auto codes = expectedCodes(mode, summary->platform);
         expect(summary->exceptionCode &&
                    std::ranges::find(codes, *summary->exceptionCode) != codes.end(),
