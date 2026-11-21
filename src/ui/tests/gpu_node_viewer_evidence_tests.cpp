@@ -191,7 +191,7 @@ struct Scenario final {
     out["resize-trilinear"] = {
         "bloom.checker-source",
         {},
-        "bloom.resize-fit",
+        "bloom.resize",
         {{"width", std::int64_t{384}}, {"height", std::int64_t{216}}, {"filter", std::int64_t{2}}}};
     // #742: a 1920x1080 checker pinned to about a ninth of its size through Trilinear (the
     // homography's own Jacobian picks the levels), the top-left corner keyed so a RAM preview
