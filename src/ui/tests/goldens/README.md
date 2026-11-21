@@ -13,8 +13,10 @@ rasterizer differences between supported Qt versions and between a developer mac
 CI runner's FreeType (glyph-edge antialiasing measured at 1.1% there), while catching changed
 layout, palette or text, which move tens of percent. There are no excluded regions or automatic updates.
 
-To deliberately approve a change, run the executable with `--update-goldens` once with
-`QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1 BLOOM_REDUCED_MOTION=1` and once with scale 1.5.
+To deliberately approve a change, run the executable with `--update-goldens --scale 1` and
+`QT_QPA_PLATFORM=offscreen QT_SCALE_FACTOR=1 BLOOM_REDUCED_MOTION=1`, and once with scale 1.5 in
+both places. The test refuses a window whose device pixel ratio is not the `--scale` it was given,
+and refuses to compare (or record) a window whose Nodes panel has two node cards that overlap.
 Inspect both captures, commit the references, and explain the visual change in that commit.
 Normal ctest runs only compare. Every run also writes `build/ui3-window-dpr1.png` or
 `build/ui3-window-dpr15.png` for inspection.
@@ -214,3 +216,12 @@ changed fractions 0.0122405 and 0.0113312; of the DPR 1 error, Properties gave 0
 The remaining 1.05 (Viewer text placement, the top bar, Assets) was drift already present under the
 1.2 bound before this change and is absorbed here. Comparison tolerances and full-image coverage are
 unchanged; rendering identity goldens are unchanged.
+
+ARRANGE approval (2026-11-21, #763): the fixture lays its sample graph out with the Node editor's
+Arrange All (the product's placement by each card's measured extent) instead of a fixed spread of
+the default columns, which let the taller Background card run under the Bloom grammar card. The
+test now fails when any two node cards intersect. Both references were regenerated with
+`--update-goldens` at DPR 1 and a real DPR 1.5 (the 1.5 scale variant now really runs at 1.5;
+before #763 every scale variant ran at 1) and inspected. Before approval the mean channel errors
+were 0.644158 (DPR 1) and 0.62576 (DPR 1.5), with changed fractions 0.00489236 and 0.00434664, all
+in the Nodes panel. Comparison tolerances and full-image coverage are unchanged.
