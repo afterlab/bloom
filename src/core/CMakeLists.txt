@@ -13,6 +13,7 @@ target_sources(
         diagnostic_record.cpp
         dither_pattern.cpp
         camera_shake.cpp
+        coordinate_space.cpp
         light_flicker.cpp
         motion_values.cpp
         sha256.cpp
@@ -37,6 +38,7 @@ target_sources(
             include/bloom/core/film_grain_noise.hpp
             include/bloom/core/dither_pattern.hpp
             include/bloom/core/camera_shake.hpp
+            include/bloom/core/coordinate_space.hpp
             include/bloom/core/light_flicker.hpp
             include/bloom/core/motion_values.hpp
             include/bloom/core/checked_arithmetic.hpp
@@ -194,6 +196,16 @@ if(BUILD_TESTING)
     bloom_add_test(
         NAME bloom.core.light_flicker
         COMMAND bloom_core_light_flicker_test
+        LABELS unit
+    )
+
+    add_executable(bloom_core_coordinate_space_test tests/coordinate_space_tests.cpp)
+    target_link_libraries(bloom_core_coordinate_space_test PRIVATE bloom_core)
+    bloom_enable_warnings(bloom_core_coordinate_space_test)
+    bloom_enable_strict_floating_point(bloom_core_coordinate_space_test)
+    bloom_add_test(
+        NAME bloom.core.coordinate_space
+        COMMAND bloom_core_coordinate_space_test
         LABELS unit
     )
 
