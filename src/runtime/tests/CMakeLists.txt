@@ -3151,3 +3151,10 @@ if(BLOOM_RUNTIME_RENDER_VULKAN_AVAILABLE)
     set_tests_properties(bloom.runtime.scope_frame_measure_native
         PROPERTIES SKIP_RETURN_CODE 77)
 endif()
+
+# #752: the cue list value's rules, the compiled list's interval index and its digest.
+add_executable(bloom_runtime_compiled_cue_list_test compiled_cue_list_tests.cpp)
+target_link_libraries(bloom_runtime_compiled_cue_list_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_compiled_cue_list_test)
+bloom_add_test(NAME bloom.runtime.compiled-cue-list COMMAND bloom_runtime_compiled_cue_list_test
+    LABELS runtime unit TIMEOUT 60)
