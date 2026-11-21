@@ -471,6 +471,8 @@ struct KindVocabulary final {
         return ParameterValueKind::Path; // #344: a path operand's own value.
     case SocketValueKind::NumberList:
         return ParameterValueKind::NumberList; // #627.
+    case SocketValueKind::CueList:
+        return ParameterValueKind::CueList; // #752.
     }
     return ParameterValueKind::Float64;
 }
@@ -508,6 +510,8 @@ struct KindVocabulary final {
         return kPathOperandParameterSchemaKey;
     case SocketValueKind::NumberList:
         return kNumberListOperandParameterSchemaKey;
+    case SocketValueKind::CueList:
+        return kCueListValueParameterSchemaKey; // #752: no value node takes a cue operand.
     }
     return kScalarOperandParameterSchemaKey;
 }
@@ -542,6 +546,8 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
         return PathValue{};
     case SocketValueKind::NumberList:
         return NumberListValue{};
+    case SocketValueKind::CueList:
+        return CueListValue{};
     }
     return operand.number;
 }
@@ -909,6 +915,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
     case NodeLoweringKind::ValueAudioTable:
     case NodeLoweringKind::ValueImageStatistics:
     case NodeLoweringKind::VectorArtwork:
+    case NodeLoweringKind::Subtitles:
         break;
     }
     return false;

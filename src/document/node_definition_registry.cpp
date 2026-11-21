@@ -17,6 +17,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
+#include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
@@ -815,6 +816,9 @@ template <typename Definition>
     // #642 Vector Artwork: the exact generated shape.
     case NodeLoweringKind::VectorArtwork:
         return definition == vectorArtworkDefinition();
+    // #752 Subtitles: the exact generated shape.
+    case NodeLoweringKind::Subtitles:
+        return definition == subtitlesDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -1903,6 +1907,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         displaceDefinition(),
         testCardDefinition(),
         fourColorGradientDefinition(),
+        subtitlesDefinition(),
         vectorArtworkDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),

@@ -328,6 +328,7 @@ target_sources(
         view_adjust.cpp
         view_adjust_support.hpp
         value_graph_evaluation.cpp
+        compiled_cue_list.cpp
         function_body.cpp
         value_utility_support.hpp
         value_utility_kernels.cpp

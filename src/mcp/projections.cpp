@@ -79,6 +79,14 @@ yyjson_mut_val* parameterValue(Json& out, const document::ParameterValue& value)
                     out.append(values, out.real(value));
                 out.set(list, "values", values);
                 return list;
+            } else if constexpr (std::is_same_v<T, document::CueListValue>) {
+                // #752: a cue list is read with query kind=subtitles; a parameter row gives its
+                // size and language, so a large list never fills a parameter read.
+                auto* list = out.object();
+                out.set(list, "kind", out.text("cueList"));
+                out.set(list, "count", out.number(static_cast<std::uint64_t>(item.cues.size())));
+                out.set(list, "language", out.text(item.language));
+                return list;
             } else {
                 const auto contourMembers = [&](yyjson_mut_val* path,
                                                 const document::PathContour& contour) {

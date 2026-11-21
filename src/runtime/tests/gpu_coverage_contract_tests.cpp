@@ -669,6 +669,16 @@ displayProofRunner(const bool customView) {
     // explicit list cannot satisfy it, so it cannot reuse another node's fixture.
     add("node.bloom.solid-source", GpuCoverageFixtureCriterion::Prepared,
         "src/document node_definition_registry tests", [] { return runBuilder(basePlan()); });
+    // #752: Subtitles lowers to a transparent canvas Solid the size of the frame until the
+    // subtitles render replaces that lowering; the fixture prepares exactly that operation.
+    add("node.bloom.subtitles", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Subtitles lowering (transparent frame canvas)", [] {
+            const bloom::runtime::CompiledSolid canvas{NodeId::fromRaw(108900),
+                                       {ParameterId::fromRaw(108901), bloom::core::Color4d{0.0, 0.0, 0.0, 0.0}},
+                                       {ParameterId::fromRaw(108902), 16.0},
+                                       {ParameterId::fromRaw(108903), 12.0}};
+            return runBuilder(withSource(canvas, 108900));
+        });
     addImageEffectPlan("node.bloom.resize", bloom::runtime::ResizeFitKernel{10, 7}, 104000,
                        "src/runtime Resize production affine preparation");
     addImageEffectPlan("node.bloom.fit", bloom::runtime::ResizeFitKernel{10, 7, 1, 1, 0, 1}, 105000,

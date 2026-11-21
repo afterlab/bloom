@@ -1059,6 +1059,8 @@ yyjson_mut_val* parameterMetadata(Json& out, const document::Composition& compos
                     return document::ParameterValueKind::Gradient;
                 else if constexpr (std::is_same_v<T, document::NumberListValue>)
                     return document::ParameterValueKind::NumberList;
+                else if constexpr (std::is_same_v<T, document::CueListValue>)
+                    return document::ParameterValueKind::CueList;
                 else
                     return kind;
             },

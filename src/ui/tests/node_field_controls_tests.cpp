@@ -115,6 +115,7 @@ const char* kindName(const document::ParameterValueKind k) {
     case document::ParameterValueKind::Path: return "path";
     case document::ParameterValueKind::Gradient: return "gradient";
     case document::ParameterValueKind::NumberList: return "number list";
+    case document::ParameterValueKind::CueList: return "cue list";
     }
     return "?";
 }

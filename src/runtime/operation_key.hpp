@@ -76,6 +76,11 @@ class OperationKey final {
                 }
                 add(space->parent != nullptr);
             }
+        } else if constexpr (std::is_same_v<T, CompiledCueList>) {
+            // #752: the cue count, then the digest of the list's render content.
+            add(value.list->cues.size());
+            for (const auto byte : value.digest.bytes())
+                add(byte);
         } else if constexpr (std::is_same_v<T, CompiledNumberList>) {
             // #627: the item count, then every item's bits.
             add(value.values->size());

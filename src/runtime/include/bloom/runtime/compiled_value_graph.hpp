@@ -4,6 +4,7 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/coordinate_space.hpp>
 #include <bloom/core/scalar_primitives.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/ids.hpp>
 #include <bloom/document/parameter.hpp>
@@ -86,9 +87,33 @@ struct CompiledSpaceValue final {
     }
 };
 
+// #752: a cue list (docs/architecture/subtitles.md, "Evaluation"), shared and immutable, with its
+// interval index: the cues are in start order, and `runningEnd[i]` is the latest end among cues
+// 0..i, so the cues active at a time are found in O(log n + k). `digest` is the SHA-256 of the
+// list's render content (language, styles, every cue's id, times, text, speaker, style and
+// placement; not its provenance or next id), which is what an operation key holds of it.
+struct CompiledCueList final {
+    std::shared_ptr<const document::CueListValue> list =
+        std::make_shared<const document::CueListValue>();
+    std::shared_ptr<const std::vector<core::RationalTime>> runningEnd =
+        std::make_shared<const std::vector<core::RationalTime>>();
+    core::Sha256Digest digest = emptyDigest();
+
+    CompiledCueList() = default;
+    explicit CompiledCueList(document::CueListValue value);
+    // The sorted indices of the cues that show at `time` (start <= time < end).
+    [[nodiscard]] std::vector<std::size_t> activeAt(core::RationalTime time) const;
+    [[nodiscard]] static core::Sha256Digest emptyDigest();
+    [[nodiscard]] static core::Sha256Digest digestOf(const document::CueListValue& value);
+    friend bool operator==(const CompiledCueList& left, const CompiledCueList& right) {
+        return left.list == right.list || left.digest == right.digest;
+    }
+};
+
 using CompiledValue =
     std::variant<bool, std::int64_t, double, document::Vec2d, document::Vec3d, core::Color4d,
-                 std::string, CompiledPathValue, CompiledNumberList, CompiledSpaceValue>;
+                 std::string, CompiledPathValue, CompiledNumberList, CompiledSpaceValue,
+                 CompiledCueList>;
 
 // Where one value lands. The plan's value outputs are a flat table: every operation claims a
 // consecutive run of entries in it, so a Separate RGBA's four channels and a Time node's two units

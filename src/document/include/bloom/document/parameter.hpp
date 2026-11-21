@@ -8,6 +8,7 @@
 #include <bloom/document/color_grade_nodes.hpp>
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/compositing_recipe_nodes.hpp>
+#include <bloom/document/cue_list.hpp>
 #include <bloom/document/depth_effect_parameters.hpp>
 #include <bloom/document/field_parameters.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
@@ -509,7 +510,7 @@ struct NumberListValue {
 
 using ParameterValue =
     std::variant<bool, std::int64_t, double, Vec2d, Vec3d, core::Color4d, std::string,
-                 core::RationalTime, PathValue, GradientValue, NumberListValue>;
+                 core::RationalTime, PathValue, GradientValue, NumberListValue, CueListValue>;
 
 struct ConstantValueSource {
     ParameterValue value;

@@ -1622,6 +1622,20 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         break;
     case NodeLoweringKind::Text:
         return lowerText(node);
+    case NodeLoweringKind::Subtitles: {
+        // #752 (SB1): the node's definition, ports and cue list exist; its picture is a
+        // transparent canvas the size of the composition frame (the node's content bounds) until
+        // the subtitles render replaces this lowering. A canvas Solid is covered GPU work.
+        const auto& format = composition_->format();
+        return runtime::CompiledSolid{
+            node.id,
+            runtime::CompiledColorParameter{document::ParameterId{},
+                                            core::Color4d{0.0, 0.0, 0.0, 0.0}},
+            runtime::CompiledScalarParameter{document::ParameterId{},
+                                             static_cast<double>(format.width())},
+            runtime::CompiledScalarParameter{document::ParameterId{},
+                                             static_cast<double>(format.height())}};
+    }
     case NodeLoweringKind::LayerOutput:
         return lowerLayerOutput(node, indices);
     case NodeLoweringKind::LayerStack:

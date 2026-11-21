@@ -161,6 +161,12 @@ yyjson_mut_val* referenceValue(Json& out, const document::ParameterValue& value)
                     out.append(values, referenceNumber(out, each));
                 out.set(list, "values", values);
                 return list;
+            } else if constexpr (std::is_same_v<T, document::CueListValue>) {
+                auto* list = out.object();
+                out.set(list, "kind", out.text("cueList"));
+                out.set(list, "count", out.number(static_cast<std::uint64_t>(held.cues.size())));
+                out.set(list, "language", out.text(held.language));
+                return list;
             } else
                 return path(out, held);
         },

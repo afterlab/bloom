@@ -13,6 +13,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
@@ -255,6 +256,15 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
             if (warp->role != "filter" || static_cast<std::int64_t>(index) != kWarpFilterAutomatic)
                 options.push_back(
                     {std::string(warp->choices[index]), static_cast<std::int64_t>(index)});
+        return options;
+    }
+    // #752 Subtitles.
+    if (const auto* subtitles = subtitlesParameterSpec(schemaKey);
+        subtitles != nullptr && subtitles->kind == SubtitlesParameterKind::Choice) {
+        Options options;
+        for (std::size_t index = 0; index < subtitles->choices.size(); ++index)
+            options.push_back({std::string(subtitles->choices[index]),
+                               static_cast<std::int64_t>(index)});
         return options;
     }
     // #587 Test Card.

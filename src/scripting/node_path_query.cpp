@@ -221,6 +221,8 @@ std::optional<document::ParameterValue> parameterValueOf(const runtime::Compiled
                 return document::ParameterValue{document::NumberListValue{*held.values}};
             else if constexpr (std::is_same_v<T, runtime::CompiledSpaceValue>)
                 return std::nullopt;
+            else if constexpr (std::is_same_v<T, runtime::CompiledCueList>)
+                return document::ParameterValue{*held.list};
             else
                 return document::ParameterValue{held};
         },

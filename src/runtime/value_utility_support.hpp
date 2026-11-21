@@ -147,6 +147,8 @@ class ValueUtilityReader final {
         return CompiledNumberList{};
     case document::SocketValueKind::Space:
         return CompiledSpaceValue{};
+    case document::SocketValueKind::CueList:
+        return CompiledCueList{};
     }
     return 0.0;
 }

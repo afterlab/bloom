@@ -733,6 +733,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::TestCard:
     // Four-Color Gradient's raster.
     case NodeLoweringKind::FourColorGradient:
+    // #752: a Subtitles node's picture.
+    case NodeLoweringKind::Subtitles:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -781,6 +783,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     switch (lowering) {
     case NodeLoweringKind::Solid:
     case NodeLoweringKind::Gradient:
+    // #752 (SB1): a Subtitles node lowers to a transparent canvas Solid until its render lands.
+    case NodeLoweringKind::Subtitles:
         return "operation.CompiledSolid";
     case NodeLoweringKind::Checker:
         return "operation.CompiledChecker";

@@ -63,6 +63,9 @@ kit::Color socketColorToken(const runtime::SocketValueKind kind) noexcept {
     // pale steel blue (both are geometry) and is told apart by its square socket and its name.
     case runtime::SocketValueKind::Space:
         return kit::Color::SocketPath;
+    // #752: a cue list is timed text, drawn in the String hue until its own token (SB3).
+    case runtime::SocketValueKind::CueList:
+        return kit::Color::SocketString;
     }
     return kit::Color::SocketImage;
 }
@@ -428,6 +431,9 @@ QString parameterText(const document::ParameterRecord& parameter) {
             } else if constexpr (std::is_same_v<Value, document::NumberListValue>) {
                 return QCoreApplication::translate("node_editor", "%1 items")
                     .arg(value.values.size());
+            } else if constexpr (std::is_same_v<Value, document::CueListValue>) {
+                return QCoreApplication::translate("node_editor", "%1 cues")
+                    .arg(value.cues.size());
             } else {
                 return QStringLiteral("%1/%2").arg(value.numerator()).arg(value.denominator());
             }
@@ -698,6 +704,8 @@ QString socketKindName(const document::SocketValueKind kind) {
         return QStringLiteral("Number List");
     case document::SocketValueKind::Space:
         return QStringLiteral("Space");
+    case document::SocketValueKind::CueList:
+        return QStringLiteral("Cues");
     }
     return {};
 }

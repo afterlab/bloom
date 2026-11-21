@@ -18,6 +18,7 @@
 #include <bloom/document/light_rays_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/denoise_nodes.hpp>
@@ -486,6 +487,7 @@ ParameterPresentation fallback(const ParameterValueKind kind) {
     case ParameterValueKind::Path:
     case ParameterValueKind::Gradient:
     case ParameterValueKind::NumberList:
+    case ParameterValueKind::CueList:
         break;
     }
     ParameterPresentation other;
@@ -729,6 +731,33 @@ std::optional<ParameterPresentation> testCardPresentation(const std::string_view
     return std::nullopt;
 }
 
+// #752 Subtitles: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> subtitlesPresentation(const std::string_view schemaKey) {
+    const auto* spec = subtitlesParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case SubtitlesParameterKind::Choice:
+        return choice();
+    case SubtitlesParameterKind::Whole:
+        return whole(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                     spec->unit);
+    case SubtitlesParameterKind::Scalar:
+        return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                      spec->step, spec->decimals, spec->unit);
+    case SubtitlesParameterKind::Offset:
+        return pixels(spec->minimum, spec->maximum, 4096.0);
+    case SubtitlesParameterKind::Color:
+        return channel();
+    case SubtitlesParameterKind::Cues:
+    case SubtitlesParameterKind::Font:
+    case SubtitlesParameterKind::Boolean:
+    case SubtitlesParameterKind::Text:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 // Four-Color Gradient: the points are pixel offsets, the blend a power.
 std::optional<ParameterPresentation> fourColorGradientPresentation(const std::string_view schemaKey) {
     if (isFourColorGradientPointSchemaKey(schemaKey))
@@ -823,6 +852,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *shutter;
     if (auto warp = warpPresentation(schemaKey))
         return *warp;
+    if (auto subtitles = subtitlesPresentation(schemaKey))
+        return *subtitles;
     if (auto card = testCardPresentation(schemaKey))
         return *card;
     if (auto rays = lightRaysPresentation(schemaKey))
@@ -844,7 +875,7 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
             return choice();
     if (kind == ParameterValueKind::Boolean || kind == ParameterValueKind::String ||
         kind == ParameterValueKind::Path || kind == ParameterValueKind::Gradient ||
-        kind == ParameterValueKind::NumberList) {
+        kind == ParameterValueKind::NumberList || kind == ParameterValueKind::CueList) {
         auto other = fallback(kind);
         other.named = true;
         return other;

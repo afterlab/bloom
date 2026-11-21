@@ -200,6 +200,10 @@ std::string parameterValueJson(const document::ParameterValue& value) {
                 for (std::size_t index = 0; index < held.values.size(); ++index)
                     text += (index == 0 ? "" : ",") + number(held.values[index]);
                 return text + "]}";
+            } else if constexpr (std::is_same_v<T, document::CueListValue>) {
+                // #752: a cue list is read with the subtitles query; here only its size.
+                return "{\"kind\":\"cueList\",\"count\":" + std::to_string(held.cues.size()) +
+                       ",\"language\":\"" + held.language + "\"}";
             } else
                 return pathJson(held);
         },

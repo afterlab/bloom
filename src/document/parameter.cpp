@@ -18,6 +18,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
+#include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
@@ -63,6 +64,9 @@ namespace {
                 if (const auto* list =
                         std::get_if<bloom::document::NumberListValue>(&valueSource.value))
                     return list->isValid();
+                if (const auto* cues =
+                        std::get_if<bloom::document::CueListValue>(&valueSource.value))
+                    return cues->isValid();
                 if (const auto* value = std::get_if<double>(&valueSource.value)) {
                     return std::isfinite(*value);
                 }
@@ -577,6 +581,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #642 Vector Artwork: a data block id (0 for none) and the fit switch.
     if (isVectorArtworkParameterSchemaKey(schemaKey))
         return isVectorArtworkParameterValueValid(schemaKey, constant.value);
+    // #752 Subtitles: every parameter within its document domain.
+    if (isSubtitlesSchemaKey(schemaKey))
+        return isSubtitlesParameterValueValid(schemaKey, constant.value);
     // Four-Color Gradient: every parameter within its document domain.
     if (schemaKey.starts_with("bloom.four-color-gradient."))
         return isFourColorGradientParameterValueValid(schemaKey, constant.value);
@@ -805,6 +812,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isRollingShutterConstantSchemaKey(schemaKey) ||
          bloom::document::isWarpConstantSchemaKey(schemaKey) ||
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
+         bloom::document::isSubtitlesConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isImagePixelConstantSchemaKey(schemaKey) ||
@@ -821,6 +829,10 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #627: a list has no keys: it is a constant, or (an operand) the driver on its socket.
     if ((schemaKey == bloom::document::kNumberListValueParameterSchemaKey ||
          schemaKey == bloom::document::kNumberListOperandParameterSchemaKey) &&
+        std::holds_alternative<bloom::document::AnimationCurveSource>(source))
+        return false;
+    // #752: a cue list has no keys either: a constant, or the driver on the `cues` socket.
+    if (schemaKey == bloom::document::kCueListValueParameterSchemaKey &&
         std::holds_alternative<bloom::document::AnimationCurveSource>(source))
         return false;
     // #543: a stop link holds its driver and nothing else.
@@ -866,7 +878,8 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kRollingShutterCameraOffsetSchemaKey ||
            isWarpPointSchemaKey(schemaKey) || isSpaceVec2SchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
-           isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
+           isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey) ||
+           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Offset);
 }
 
 bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -921,6 +934,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kDenoiseRadiusSchemaKey || schemaKey == kDenoiseStrengthSchemaKey ||
            isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
            isColorCleanupScalarSchemaKey(schemaKey) ||
+           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Scalar) ||
            schemaKey == kLayerMaskFeatherSchemaKey ||
            schemaKey == kLayerMaskExpansionSchemaKey || schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -932,7 +946,8 @@ bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kColorValueParameterSchemaKey || isRecipeColorSchemaKey(schemaKey) ||
            isColorizeColorSchemaKey(schemaKey) || isDepthColorAnimatableSchemaKey(schemaKey) ||
            isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey) ||
-           isFourColorGradientColorSchemaKey(schemaKey);
+           isFourColorGradientColorSchemaKey(schemaKey) ||
+           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Color);
 }
 
 bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -1064,6 +1079,8 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return value >= -3.4028234663852886e38 && value <= 3.4028234663852886e38;
     if (schemaKey == kTextLineHeightParameterSchemaKey)
         return value > 0.0;
+    if (isSubtitlesSchemaKey(schemaKey))
+        return isSubtitlesScalarWithinDomain(schemaKey, value);
     if (hasUnitDomainSchemaKey(schemaKey)) {
         return value >= 0.0 && value <= 1.0;
     }

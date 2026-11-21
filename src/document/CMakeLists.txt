@@ -25,6 +25,9 @@ target_sources(
         chromatic_aberration_nodes.cpp
         test_card_nodes.cpp
         four_color_gradient_nodes.cpp
+        subtitles_nodes.cpp
+        cue_list.cpp
+        cue_markup.cpp
         light_rays_nodes.cpp
         motion_blur_nodes.cpp
         sharpen_nodes.cpp

@@ -185,6 +185,7 @@ std::optional<document::ParameterValue> coerce(const document::ParameterValue& v
     case document::ParameterValueKind::Vec3d:
     case document::ParameterValueKind::Gradient:
     case document::ParameterValueKind::NumberList:
+    case document::ParameterValueKind::CueList:
         return value;
     }
     return value;

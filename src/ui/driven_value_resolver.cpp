@@ -162,6 +162,8 @@ QString valueText(const runtime::CompiledValue& value) {
                 return numberListReadout(*held.values);
             else if constexpr (std::is_same_v<T, runtime::CompiledSpaceValue>)
                 return spaceReadout(held);
+            else if constexpr (std::is_same_v<T, runtime::CompiledCueList>)
+                return QObject::tr("%1 cues").arg(held.list->cues.size());
             else
                 return QString::number(static_cast<qlonglong>(held));
         },

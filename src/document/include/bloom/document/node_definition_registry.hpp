@@ -52,6 +52,9 @@ enum class SocketValueKind {
     // and read by any number of consumers. A space has no stored form, so its input is an edge
     // with no parameter behind it: unconnected means "no space". Connects only to its own kind.
     Space,
+    // #752: a list of timed subtitle cues (document::CueListValue). Connects only to its own kind,
+    // like a path; a cue list is a constant or driven, never keyed.
+    CueList,
 };
 
 enum class ParameterValueKind {
@@ -73,6 +76,8 @@ enum class ParameterValueKind {
     Gradient,
     // #627: a list of numbers (NumberListValue).
     NumberList,
+    // #752: a list of subtitle cues (CueListValue).
+    CueList,
 };
 
 // The lower-case names scripting clients and diagnostics use for the two kinds ("scalar",
@@ -113,6 +118,8 @@ enum class ParameterValueKind {
         return "number-list";
     case SocketValueKind::Space:
         return "space";
+    case SocketValueKind::CueList:
+        return "cue-list";
     }
     return "image";
 }
@@ -140,6 +147,8 @@ parameterValueKindName(const ParameterValueKind kind) noexcept {
         return "gradient";
     case ParameterValueKind::NumberList:
         return "number-list";
+    case ParameterValueKind::CueList:
+        return "cue-list";
     }
     return "scalar";
 }
@@ -156,6 +165,8 @@ socketKindForParameterValueKind(const ParameterValueKind kind) noexcept {
         return std::nullopt; // Gradients (#541) are inline: no socket carries them.
     case ParameterValueKind::NumberList:
         return SocketValueKind::NumberList; // #627.
+    case ParameterValueKind::CueList:
+        return SocketValueKind::CueList; // #752.
     case ParameterValueKind::Color4d:
         return SocketValueKind::Color;
     case ParameterValueKind::Vec2d:
@@ -231,6 +242,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::Path:
     case SocketValueKind::NumberList:
     case SocketValueKind::Space:
+    case SocketValueKind::CueList:
         return false;
     }
     return false;
@@ -449,6 +461,9 @@ enum class NodeLoweringKind {
     // of its own: the compiler replaces it with the nodes of the SVG it names before anything is
     // lowered.
     VectorArtwork,
+    // #752: a Subtitles node (subtitles_nodes.hpp): the active cues drawn over the composition
+    // frame, and the cue list, text, index and progress as values.
+    Subtitles,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -507,6 +522,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::Matte:
     case NodeLoweringKind::TestCard:
     case NodeLoweringKind::FourColorGradient:
+    case NodeLoweringKind::Subtitles:
         return false;
     }
     return false;

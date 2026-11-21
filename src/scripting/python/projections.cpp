@@ -105,6 +105,13 @@ nb::object parameterValue(const document::ParameterValue& value) {
                 nb::dict list;
                 list["values"] = values;
                 return list;
+            } else if constexpr (std::is_same_v<T, document::CueListValue>) {
+                // #752: bloom.data.subtitles reads the cues; a parameter gives its size.
+                nb::dict list;
+                list["kind"] = "cueList";
+                list["count"] = item.cues.size();
+                list["language"] = item.language;
+                return list;
             } else {
                 return nb::cast(item);
             }

@@ -161,6 +161,8 @@ compiledValueFrom(const document::ParameterValue& value) {
                     runtime::CompiledPathValue{std::make_shared<document::PathValue>(held)}};
             } else if constexpr (std::is_same_v<Held, document::NumberListValue>) {
                 return runtime::CompiledValue{runtime::CompiledNumberList{held.values}};
+            } else if constexpr (std::is_same_v<Held, document::CueListValue>) {
+                return runtime::CompiledValue{runtime::CompiledCueList{held}};
             } else {
                 return runtime::CompiledValue{held};
             }
@@ -1042,6 +1044,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     }
     case runtime::NodeLoweringKind::NodeGroup:
     case runtime::NodeLoweringKind::VectorArtwork:
+    case runtime::NodeLoweringKind::Subtitles:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
