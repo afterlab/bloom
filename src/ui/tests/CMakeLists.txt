@@ -600,7 +600,7 @@ bloom_add_test(
     COMMAND bloom_kit_popup_test
     LABELS ui unit kit
     TIMEOUT 30
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 bloom_add_test(
@@ -1060,7 +1060,7 @@ bloom_enable_warnings(bloom_assets_panel_test)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.assets-panel.dpr${scale} COMMAND bloom_assets_panel_test
         LABELS ui integration assets TIMEOUT 60
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_project_host_empty_test project_host_empty_tests.cpp)
@@ -1119,9 +1119,9 @@ add_executable(bloom_node_canvas_repaint_test node_canvas_repaint_tests.cpp)
 target_include_directories(bloom_node_canvas_repaint_test PRIVATE .. ${PROJECT_SOURCE_DIR}/src/ui)
 target_link_libraries(bloom_node_canvas_repaint_test PRIVATE bloom_ui bloom_project Qt6::Test)
 bloom_enable_warnings(bloom_node_canvas_repaint_test)
-bloom_add_test(NAME bloom.ui.node-canvas-repaint COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
-bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-1.5 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1;QT_SCALE_FACTOR=1.5")
-bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-2 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1;QT_SCALE_FACTOR=2")
+bloom_add_test(NAME bloom.ui.node-canvas-repaint COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
+bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-1.5 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1" "QT_SCALE_FACTOR=1.5")
+bloom_add_test(NAME bloom.ui.node-canvas-repaint-scale-2 COMMAND bloom_node_canvas_repaint_test LABELS ui integration kit TIMEOUT 60 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1" "QT_SCALE_FACTOR=2")
 
 add_executable(bloom_node_layout_arrange_test node_layout_arrange_tests.cpp)
 target_include_directories(bloom_node_layout_arrange_test PRIVATE ..)
@@ -1550,7 +1550,7 @@ bloom_add_test(
     COMMAND bloom_export_panel_test
     LABELS ui integration export
     TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 add_executable(bloom_export_panel_capture export_panel_capture.cpp)
@@ -1562,7 +1562,7 @@ bloom_enable_warnings(bloom_export_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.export_panel_capture.dpr${scale} COMMAND bloom_export_panel_capture
         LABELS ui grammar TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_export_queue_host_test export_queue_host_tests.cpp)
@@ -1575,7 +1575,7 @@ bloom_add_test(
     COMMAND bloom_export_queue_host_test
     LABELS ui integration export
     TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 add_executable(bloom_background_preview_test background_preview_tests.cpp)
@@ -1613,7 +1613,7 @@ bloom_add_test(NAME bloom.ui.properties-registry COMMAND bloom_properties_regist
 bloom_add_test(NAME bloom.ui.properties-registry.labels.dpr1.5
     COMMAND bloom_properties_registry_test --label-audit
     LABELS ui integration kit TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=1.5")
 # #344 #349 #509: the value-node readouts resolve, and the path nodes' stamp, source and Alpha
 # Contour rows read whole (BLOOM_READOUT_CAPTURE_DIR saves their Properties captures).
 bloom_add_test(NAME bloom.ui.properties-readouts COMMAND bloom_properties_registry_test --readouts LABELS ui integration kit TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
@@ -1641,7 +1641,7 @@ bloom_enable_warnings(bloom_ui_grammar_audit_test)
 foreach(scale IN ITEMS 1 1.5 2)
     bloom_add_test(NAME bloom.ui.grammar_audit.dpr${scale} COMMAND bloom_ui_grammar_audit_test
         LABELS ui grammar TIMEOUT 60
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # One control look and one control height: every chrome row, panel header and card row of the
@@ -1654,7 +1654,7 @@ bloom_enable_warnings(bloom_control_geometry_test)
 foreach(scale IN ITEMS 1 1.5 2)
     bloom_add_test(NAME bloom.ui.control_geometry.dpr${scale} COMMAND bloom_control_geometry_test
         LABELS ui grammar TIMEOUT 60
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # Bloom's type roles win over the platform theme: the main-window fixture and every offscreen
@@ -1667,7 +1667,7 @@ bloom_enable_warnings(bloom_kit_typography_test)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.kit_typography.dpr${scale} COMMAND bloom_kit_typography_test
         LABELS ui kit grammar TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_window_golden_test window_golden_tests.cpp)
@@ -1684,7 +1684,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     foreach(scale IN ITEMS 1 1.5)
         bloom_add_test(NAME bloom.ui.window_golden.dpr${scale} COMMAND bloom_window_golden_test
             LABELS ui golden TIMEOUT 60
-            ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
     endforeach()
 endif()
 
@@ -1777,14 +1777,14 @@ target_compile_definitions(bloom_ui_bug_batch_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_ui_bug_batch_test)
 bloom_add_test(NAME bloom.ui.bug-batch COMMAND bloom_ui_bug_batch_test LABELS ui integration kit TIMEOUT 240
-               ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #706: the soft popup shadow and its capture (popup-shadow-<platform>.png in the working directory).
 add_executable(bloom_popup_shadow_test popup_shadow_tests.cpp)
 target_link_libraries(bloom_popup_shadow_test PRIVATE bloom_ui_kit Qt6::Test)
 bloom_enable_warnings(bloom_popup_shadow_test)
 bloom_add_test(NAME bloom.ui.popup-shadow COMMAND bloom_popup_shadow_test LABELS ui unit kit TIMEOUT 60
-               ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+               ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_popup_capture popup_capture.cpp)
 target_link_libraries(bloom_popup_capture PRIVATE bloom_ui_kit)
@@ -1799,7 +1799,7 @@ bloom_enable_warnings(bloom_assets_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.assets_panel_capture.dpr${scale} COMMAND bloom_assets_panel_capture
         LABELS ui grammar TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_chrome_capture chrome_capture.cpp)
@@ -1841,7 +1841,7 @@ bloom_enable_warnings(bloom_viewer_chrome_capture)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.viewer_chrome.dpr${scale} COMMAND bloom_viewer_chrome_capture
         LABELS ui grammar TIMEOUT 90
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_media_ui_test media_ui_tests.cpp)
@@ -1851,7 +1851,7 @@ bloom_enable_warnings(bloom_media_ui_test)
 foreach(scale IN ITEMS 1 1.5 2)
     bloom_add_test(NAME bloom.ui.media.dpr${scale} COMMAND bloom_media_ui_test
         LABELS ui media integration TIMEOUT 60
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # The tests from here on write real OpenEXR fixtures. Resolve the package where it is first used,
@@ -1869,7 +1869,7 @@ target_link_libraries(bloom_cryptomatte_ui_test PRIVATE bloom_ui bloom_runtime_c
 bloom_enable_warnings(bloom_cryptomatte_ui_test)
 bloom_add_test(NAME bloom.ui.cryptomatte COMMAND bloom_cryptomatte_ui_test
     LABELS ui media integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #483: Z Defocus focus picking in the Viewer (the click, Shift to keep picking, Escape, undo) and
 # the focus point drawn over the frame.
@@ -1881,7 +1881,7 @@ target_include_directories(bloom_depth_focus_pick_ui_test PRIVATE "${PROJECT_SOU
 bloom_enable_warnings(bloom_depth_focus_pick_ui_test)
 bloom_add_test(NAME bloom.ui.depth-focus-pick COMMAND bloom_depth_focus_pick_ui_test
     LABELS ui integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #484: the on-Viewer handles of Directional, Spin and Zoom Blur: each drag edits live and is one
 # command, Escape confirms it; Spin's turn unwraps past a revolution.
@@ -1892,7 +1892,7 @@ target_link_libraries(bloom_motion_blur_viewer_ui_test PRIVATE bloom_ui bloom_ru
 bloom_enable_warnings(bloom_motion_blur_viewer_ui_test)
 bloom_add_test(NAME bloom.ui.motion-blur-viewer COMMAND bloom_motion_blur_viewer_ui_test
     LABELS ui integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #599: the Viewer point handles of a Line's two ends: a constant end is set, a keyed end gets a key
 # at the playhead, a driven end takes no drag; each drag is one command.
@@ -1904,7 +1904,7 @@ target_include_directories(bloom_line_end_viewer_ui_test PRIVATE "${PROJECT_SOUR
 bloom_enable_warnings(bloom_line_end_viewer_ui_test)
 bloom_add_test(NAME bloom.ui.line-end-viewer COMMAND bloom_line_end_viewer_ui_test
     LABELS ui integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #510: the on-Viewer handles of Procedural Warp: its points and its radius ring, each drag one
 # command, Escape confirms it.
@@ -1916,7 +1916,7 @@ target_include_directories(bloom_warp_viewer_ui_test PRIVATE "${PROJECT_SOURCE_D
 bloom_enable_warnings(bloom_warp_viewer_ui_test)
 bloom_add_test(NAME bloom.ui.warp-viewer COMMAND bloom_warp_viewer_ui_test
     LABELS ui integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #645: drilling into grouped and SVG artwork in the Viewer: levels, picks on evaluated outlines
 # on a worker, Escape/Enter/double-click, keyed point drags, selection sync, MCP level, Break Apart.
@@ -1928,7 +1928,7 @@ target_include_directories(bloom_viewer_drill_test PRIVATE "${PROJECT_SOURCE_DIR
 bloom_enable_warnings(bloom_viewer_drill_test)
 bloom_add_test(NAME bloom.ui.viewer-drill COMMAND bloom_viewer_drill_test
     LABELS ui integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #487: the Shuffle slot pickers, channel/layer checklists, data block and audio stream dropdowns
 # on a rootless multi-layer EXR, in Properties and on the node cards.
@@ -1939,7 +1939,7 @@ target_link_libraries(bloom_channel_pickers_ui_test PRIVATE bloom_ui bloom_runti
 bloom_enable_warnings(bloom_channel_pickers_ui_test)
 bloom_add_test(NAME bloom.ui.channel-pickers COMMAND bloom_channel_pickers_ui_test
     LABELS ui media integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # Assets validity in the application's AssetController: a Cryptomatte-only EXR sequence and an
 # H.264 video are valid assets with thumbnails, not "Missing — Relink".
@@ -1952,7 +1952,7 @@ bloom_enable_warnings(bloom_asset_validity_ui_test)
 bloom_add_test(NAME bloom.ui.asset_validity COMMAND bloom_asset_validity_ui_test
     --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
     LABELS ui media integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 set_tests_properties(bloom.ui.asset_validity PROPERTIES FIXTURES_REQUIRED media3)
 
 # #364 the owner's Cryptomatte setup end to end: a beauty and a sidecar Cryptomatte-only EXR
@@ -1966,7 +1966,7 @@ target_link_libraries(bloom_cryptomatte_sidecar_ui_test PRIVATE bloom_ui bloom_r
 bloom_enable_warnings(bloom_cryptomatte_sidecar_ui_test)
 bloom_add_test(NAME bloom.ui.cryptomatte_sidecar COMMAND bloom_cryptomatte_sidecar_ui_test
     LABELS ui media integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_media_window_capture media_window_capture.cpp)
 target_include_directories(bloom_media_window_capture PRIVATE ..)
@@ -1976,7 +1976,7 @@ target_compile_definitions(bloom_media_window_capture PRIVATE
 bloom_enable_warnings(bloom_media_window_capture)
 bloom_add_test(NAME bloom.ui.media-window.dpr1 COMMAND bloom_media_window_capture
     LABELS ui media capture TIMEOUT 60
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=1" "BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_color_boundary_test color_boundary_tests.cpp)
 target_include_directories(bloom_color_boundary_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
@@ -1985,7 +1985,7 @@ bloom_enable_warnings(bloom_color_boundary_test)
 foreach(scale IN ITEMS 1 1.25 1.5 2)
     bloom_add_test(NAME bloom.ui.color-boundary.dpr${scale}
         COMMAND bloom_color_boundary_test LABELS ui integration color TIMEOUT 60
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale}")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}")
 endforeach()
 
 # End-to-end audio transport: WAV import -> audio layer -> compiled mix -> PlaybackController ->
@@ -1997,7 +1997,7 @@ target_compile_definitions(bloom_audio_transport_test PRIVATE
     BLOOM_GRAMMAR_ARTIFACT_DIR="${PROJECT_SOURCE_DIR}/build")
 bloom_enable_warnings(bloom_audio_transport_test)
 bloom_add_test(NAME bloom.ui.audio-transport COMMAND bloom_audio_transport_test
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=1" "BLOOM_REDUCED_MOTION=1")
 
 # #400: looped playback keeps the mixer and the transport on one work-area period.
 add_executable(bloom_ui_audio_loop_transport_test audio_loop_transport_tests.cpp)
@@ -2099,7 +2099,7 @@ bloom_add_test(
     COMMAND bloom_import_progress_window_test
     LABELS ui media integration
     TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=1" "BLOOM_REDUCED_MOTION=1"
 )
 
 # Lane C: the kit dialog primitive (KDialog, form, prompts, chooseFile, task dialog).
@@ -2111,7 +2111,7 @@ bloom_add_test(
     COMMAND bloom_kit_dialog_test
     LABELS ui unit kit
     TIMEOUT 60
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 # Lane C: Export Composition's H.264 encoder gate and its worker-only verify/Locate.
@@ -2138,7 +2138,7 @@ target_compile_definitions(bloom_ui_mcp_live_undo_test PRIVATE
 bloom_enable_warnings(bloom_ui_mcp_live_undo_test)
 bloom_add_test(NAME bloom.ui.mcp-live-undo COMMAND bloom_ui_mcp_live_undo_test
     LABELS ui mcp integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #744 (A2): a live commit is prepared off the UI thread; the UI thread only publishes it.
 add_executable(bloom_ui_live_commit_preparation_test live_commit_preparation_tests.cpp)
@@ -2147,7 +2147,7 @@ target_link_libraries(bloom_ui_live_commit_preparation_test PRIVATE bloom_ui Qt6
 bloom_enable_warnings(bloom_ui_live_commit_preparation_test)
 bloom_add_test(NAME bloom.ui.live-commit-preparation COMMAND bloom_ui_live_commit_preparation_test
     LABELS ui mcp integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # MCP is a UI for agents: the real binding of mcp::McpLiveUiPort over the real window.
 add_executable(bloom_ui_mcp_live_ui_binding_test mcp_live_ui_binding_tests.cpp)
@@ -2160,7 +2160,7 @@ target_include_directories(bloom_ui_mcp_live_ui_binding_test PRIVATE "${PROJECT_
 bloom_enable_warnings(bloom_ui_mcp_live_ui_binding_test)
 bloom_add_test(NAME bloom.ui.mcp-live-ui-binding COMMAND bloom_ui_mcp_live_ui_binding_test
     LABELS ui mcp integration TIMEOUT 240
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # Issue #737: a failed Save or Save As names its stage and cause (agent diagnostic, status bar,
 # artist dialog), and an agent's failed save never opens a dialog, with the binding built before the
@@ -2175,7 +2175,7 @@ target_include_directories(bloom_ui_mcp_save_failure_test PRIVATE "${PROJECT_SOU
 bloom_enable_warnings(bloom_ui_mcp_save_failure_test)
 bloom_add_test(NAME bloom.ui.mcp-save-failure COMMAND bloom_ui_mcp_save_failure_test
     LABELS ui mcp integration TIMEOUT 240
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #389: the live-UI port's application members (Viewer settings, preferences, purge, jobs, cancel
 # open, reveal, composition presets) over the real window.
@@ -2188,7 +2188,7 @@ target_compile_definitions(bloom_ui_mcp_live_ui_application_test PRIVATE
 bloom_enable_warnings(bloom_ui_mcp_live_ui_application_test)
 bloom_add_test(NAME bloom.ui.mcp-live-ui-application COMMAND bloom_ui_mcp_live_ui_application_test
     LABELS ui mcp integration TIMEOUT 240
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 if(BLOOM_BUILD_PYTHON)
     # #603: script.run end to end against the live Script runtime, over Streamable HTTP.
@@ -2202,7 +2202,7 @@ if(BLOOM_BUILD_PYTHON)
     bloom_enable_warnings(bloom_ui_mcp_script_run_test)
     bloom_add_test(NAME bloom.ui.mcp-script-run COMMAND bloom_ui_mcp_script_run_test
         LABELS ui mcp scripting python integration TIMEOUT 180
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
     add_executable(bloom_script_panel_test script_panel_tests.cpp)
     target_include_directories(bloom_script_panel_test PRIVATE ..)
@@ -2214,7 +2214,7 @@ if(BLOOM_BUILD_PYTHON)
     bloom_enable_warnings(bloom_script_panel_test)
     bloom_add_test(NAME bloom.ui.script-panel COMMAND bloom_script_panel_test
         LABELS ui scripting python integration TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 endif()
 
 # Presentation coordinator (real Wayland lifecycle) and ViewerGpuPresenter adapter tests. All three
@@ -2385,7 +2385,7 @@ bloom_add_test(
     COMMAND bloom_ui_scopes_panel_test
     LABELS ui unit cache
     TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 # #724 Scopes: the scope region in the Viewer, through the Viewer's own mouse and key handling.
 add_executable(bloom_ui_scopes_mcp_warm_test scopes_mcp_warm_tests.cpp)
@@ -2407,7 +2407,7 @@ bloom_add_test(
     COMMAND bloom_ui_scopes_region_test
     LABELS ui unit
     TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 add_executable(bloom_ui_preview_frame_cache_cpu_edge_test preview_frame_cache_cpu_edge_tests.cpp)
 add_executable(bloom_ui_preview_frame_trace_test preview_frame_trace_tests.cpp)
@@ -3241,7 +3241,7 @@ target_link_libraries(bloom_ui_layer_drop_test PRIVATE bloom_ui bloom_commands)
 target_include_directories(bloom_ui_layer_drop_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_layer_drop_test)
 bloom_add_test(NAME bloom.ui.layer-drop COMMAND bloom_ui_layer_drop_test LABELS ui integration
-    TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    TIMEOUT 120 ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #380 in the whole window: the Assets header for a video and a composition, and Timeline drags
 # from Assets (row insertion, time marker, a sequenced multi-item drop).
@@ -3256,7 +3256,7 @@ bloom_enable_warnings(bloom_ui_layer_drop_window_test)
 bloom_add_test(NAME bloom.ui.layer-drop-window COMMAND bloom_ui_layer_drop_window_test
     --media-fixtures "${PROJECT_BINARY_DIR}/apps/bloom-media-worker/fixtures"
     LABELS ui media integration TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=1" "BLOOM_REDUCED_MOTION=1")
 set_tests_properties(bloom.ui.layer-drop-window PROPERTIES FIXTURES_REQUIRED media3)
 
 # #490: the Image Preview node's thumbnail and node editor background.
@@ -3266,7 +3266,7 @@ target_include_directories(bloom_ui_image_preview_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_image_preview_test)
 bloom_add_test(NAME bloom.ui.image-preview COMMAND bloom_ui_image_preview_test
     LABELS ui integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 # #380: the Assets header's composition frames, prepared on a worker and kept per revision.
 add_executable(bloom_ui_composition_thumbnail_test composition_thumbnail_tests.cpp)
@@ -3275,7 +3275,7 @@ target_include_directories(bloom_ui_composition_thumbnail_test PRIVATE ..)
 bloom_enable_warnings(bloom_ui_composition_thumbnail_test)
 bloom_add_test(NAME bloom.ui.composition-thumbnail COMMAND bloom_ui_composition_thumbnail_test
     LABELS ui integration TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1")
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1")
 
 add_executable(bloom_ui_timeline_layer_timing_test timeline_layer_timing_gesture_tests.cpp)
 target_link_libraries(bloom_ui_timeline_layer_timing_test PRIVATE bloom_ui)
@@ -3343,7 +3343,7 @@ bloom_add_test(
     COMMAND bloom_mcp_server_panel_test
     LABELS ui unit
     TIMEOUT 60
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 # Compile-failure details: status bar disclosure, popup, Select, Copy details; DPR captures.
@@ -3353,7 +3353,7 @@ bloom_enable_warnings(bloom_compile_failure_test)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.compile_failure.dpr${scale} COMMAND bloom_compile_failure_test
         LABELS ui unit TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # #418: hovering the status bar cells and the kit's tool-tip labels again and again keeps memory
@@ -3365,7 +3365,7 @@ bloom_enable_warnings(bloom_tooltip_memory_test)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.tooltip_memory.dpr${scale} COMMAND bloom_tooltip_memory_test
         LABELS ui unit TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 add_executable(bloom_mcp_panel_capture mcp_panel_capture.cpp)
@@ -3377,7 +3377,7 @@ bloom_enable_warnings(bloom_mcp_panel_capture)
 foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.mcp_panel_capture.dpr${scale} COMMAND bloom_mcp_panel_capture
         LABELS ui grammar TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # The Profiler panel (#423): registration and glyph, feed subscription with a refcount, fixed
@@ -3390,7 +3390,7 @@ bloom_add_test(
     COMMAND bloom_profiler_panel_test
     LABELS ui unit
     TIMEOUT 120
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 # Profiler captures over the fake feed at DPR 1 and 1.5; BLOOM_PROFILER_CAPTURE_DIR keeps them.
@@ -3401,7 +3401,7 @@ foreach(scale IN ITEMS 1 1.5)
     bloom_add_test(NAME bloom.ui.profiler_panel_capture.dpr${scale}
         COMMAND bloom_profiler_panel_capture
         LABELS ui grammar TIMEOUT 120
-        ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=${scale};BLOOM_REDUCED_MOTION=1")
+        ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "QT_SCALE_FACTOR=${scale}" "BLOOM_REDUCED_MOTION=1")
 endforeach()
 
 # #724 Scopes: offscreen pictures of the panel and of the Viewer's scope region overlay, for review.
@@ -3423,7 +3423,7 @@ bloom_add_test(
     COMMAND bloom_workspace_window_test
     LABELS ui integration
     TIMEOUT 180
-    ENVIRONMENT "QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1"
+    ENVIRONMENT "QT_QPA_PLATFORM=offscreen" "BLOOM_REDUCED_MOTION=1"
 )
 
 # The names and settings store Bloom starts with, and the package check's own profile.
