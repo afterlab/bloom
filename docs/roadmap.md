@@ -2,11 +2,11 @@
 
 Status: working
 
-Updated: 2026-11-20
+Updated: 2026-11-21
 
 This roadmap records what has shipped, what is queued and in what order, and what is parked. It
-follows the backlog tracker (#384), which owns the
-priority order; the tracker wins when the two differ. The focused architecture and product
+follows the [Bloom GitHub Project](https://github.com/orgs/afterlab/projects/2), which owns the
+priority order and shows what is being built now; the Project wins when the two differ. The focused architecture and product
 documents own detailed semantics and must not be duplicated here.
 
 Bloom is in alpha. Download the latest alpha from the
