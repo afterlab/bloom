@@ -4,7 +4,8 @@
 #
 # The check must pass a build that names only listed LGPL parts, and must fail, with the reason,
 # on a GPL-only module added to the build, on a GPL-only module added to the list, on a part
-# offered under a commercial license only, and on a listed part the locked Qt does not have.
+# offered under a commercial license only, and on a listed part the locked Qt does not have; a
+# build tree inside the repository is skipped.
 cmake_minimum_required(VERSION 3.25)
 if(NOT BLOOM_WORK)
     message(FATAL_ERROR "BloomQtModuleCheckTest.cmake needs BLOOM_WORK")
@@ -95,6 +96,22 @@ expect_failure("an unreadable list line" "unreadable line" ${qt})
 write_tree("${build}" "${list}module Absent all package\n")
 expect_failure("a listed part the locked Qt does not have"
                "bill of materials has no part Absent" ${qt})
+# A build tree inside the repository is not the repository: its generated files, and the
+# synthetic tree this test writes while the check of the real repository runs, are skipped (#750).
+# A file of the repository that names the same part is still refused.
+write_tree("${build}" "${list}")
+file(WRITE "${BLOOM_WORK}/source/build/tree/CMakeCache.txt" "")
+file(WRITE "${BLOOM_WORK}/source/build/tree/synthetic/src/CMakeLists.txt"
+     "target_link_libraries(app PRIVATE Qt6::Charts)\n")
+run(result output ${qt})
+if(NOT result EQUAL 0)
+    message(FATAL_ERROR "a file in a build tree inside the repository was checked:\n${output}")
+endif()
+file(WRITE "${BLOOM_WORK}/source/src/build/CMakeLists.txt"
+     "target_link_libraries(app PRIVATE Qt6::Charts)\n")
+expect_failure("a repository folder named build that is not a build tree"
+               "names the Qt part Charts, which the Qt module list does not have" ${qt})
+
 # A part listed for another operating system is not looked up here.
 write_tree("${build}" "${list}module Absent windows package\n")
 run(result output ${qt})

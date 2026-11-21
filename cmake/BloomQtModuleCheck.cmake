@@ -77,6 +77,28 @@ file(GLOB_RECURSE files
      "${BLOOM_SOURCE_ROOT}/tests/*CMakeLists.txt" "${BLOOM_SOURCE_ROOT}/tests/*.cmake")
 # This check and its test name Qt parts as examples.
 list(FILTER files EXCLUDE REGEX "/BloomQtModuleCheck(Test)?\\.cmake$")
+# A build tree inside the repository (build/<name>, the usual place) is not the repository's: it
+# holds generated CMake files, and the files this check's own test writes for its synthetic tree
+# while the two run side by side (#750). A file below a folder with a CMakeCache.txt is skipped.
+set(source_files)
+foreach(file IN LISTS files)
+    get_filename_component(folder "${file}" DIRECTORY)
+    set(in_build_tree FALSE)
+    string(LENGTH "${BLOOM_SOURCE_ROOT}" root_length)
+    string(LENGTH "${folder}" folder_length)
+    while(folder_length GREATER root_length)
+        if(EXISTS "${folder}/CMakeCache.txt")
+            set(in_build_tree TRUE)
+            break()
+        endif()
+        get_filename_component(folder "${folder}" DIRECTORY)
+        string(LENGTH "${folder}" folder_length)
+    endwhile()
+    if(NOT in_build_tree)
+        list(APPEND source_files "${file}")
+    endif()
+endforeach()
+set(files ${source_files})
 # Qt's own tools and the umbrella target are not modules.
 set(tools qmake moc rcc uic qtpaths windeployqt macdeployqt lrelease lupdate Platform)
 set(named 0)
