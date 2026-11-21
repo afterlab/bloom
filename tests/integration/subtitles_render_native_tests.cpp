@@ -17,7 +17,15 @@
 // Then every state is prepared by the production CpuGpuSceneBuilder, run by the production
 // GpuSceneExecutor, and must match the CPU reference (2e-6) full frame, over an ROI and at a
 // reduced render scale, with a warm rerun that dispatches nothing, a changed value that changes the
-// pixels, and a frame later in the same cue that dispatches nothing new. Without a device the GPU
+// pixels, and a frame later in the same cue that dispatches nothing new.
+//
+// The node is a vector leaf: a scaled or rotated Subtitles layer redraws its paths through the
+// layer matrix instead of resampling the node's image. Against the unscaled render, a layer scaled
+// two times covers four times the solid area with an antialiased edge one pixel wide (about twice
+// the unscaled edge pixels, where a resampled image's edge would be two pixels wide, about four
+// times), and a rotated layer keeps its solid area and edge; both match the CPU reference on the GPU,
+// also at half opacity (folded layers, and a single layer), warm and on a later frame of the cue with
+// nothing dispatched, and a cancelled redraw publishes nothing on either route. Without a device the GPU
 // half reports an explicit SKIP (exit 77) after the CPU half passed; --require-device makes that a
 // failure.
 
@@ -572,6 +580,95 @@ void cpuTests(Expectations& expectations, std::vector<std::pair<std::string, Ref
     }
 }
 
+// Pixels a picture covers fully, and pixels on its antialiased edge.
+struct EdgeCount final {
+    std::size_t solid = 0;
+    std::size_t partial = 0;
+};
+[[nodiscard]] EdgeCount edgeCount(const Reference& reference) {
+    EdgeCount count;
+    for (const auto& pixel : reference.frame->processImage().pixels()) {
+        if (pixel.alpha() >= 1.0F)
+            ++count.solid;
+        else if (pixel.alpha() > 0.0F)
+            ++count.partial;
+    }
+    return count;
+}
+
+// #752: a scaled or a rotated Subtitles layer redraws the cue's paths through the layer matrix
+// (the vector leaf), so it stays as crisp as the unscaled render.
+void transformTests(Expectations& expectations,
+                    std::vector<std::pair<std::string, Reference>>& gpu) {
+    auto made = fixture(listOf({cue(1, seconds(0), seconds(2), "Hello <i>world</i>")}));
+    made->set("size", 32.0);
+    // Centered on the frame, so the layer's pivot (the frame's center) keeps it in view.
+    made->set("anchor", std::int64_t{4});
+    const auto layer = layerNode(made->document, made->main, lastLayer(made->document, made->main));
+    const auto setLayer = [&](const std::string_view role, document::ParameterValue value) {
+        execute<commands::SetParameterSource>(made->document, made->commands, made->main,
+                                              parameter(made->document, made->main, layer, role),
+                                              document::ConstantValueSource{std::move(value)});
+    };
+    const auto plain = referenceAt(expectations, *made, seconds(1), "unscaled layer");
+    setLayer("scale", document::Vec2d{2.0, 2.0});
+    const auto scaled = referenceAt(expectations, *made, seconds(1), "scaled layer");
+    setLayer("opacity", 0.5);
+    const auto faded = referenceAt(expectations, *made, seconds(1), "scaled layer, half opacity");
+    setLayer("opacity", 1.0);
+    setLayer("scale", document::Vec2d{1.0, 1.0});
+    setLayer("rotation", 30.0);
+    const auto rotated = referenceAt(expectations, *made, seconds(1), "rotated layer");
+    // One layer only (no outline, one paint): its coverage command carries the opacity itself.
+    setLayer("rotation", 0.0);
+    setLayer("scale", document::Vec2d{2.0, 2.0});
+    setLayer("opacity", 0.5);
+    made->set("outlineWidth", 0.0);
+    const auto single =
+        referenceAt(expectations, *made, seconds(1), "scaled layer, fill only, half opacity");
+    if (!plain || !scaled || !faded || !single || !rotated)
+        return;
+    // A cancelled redraw publishes nothing, on either route.
+    {
+        const auto result = runtime::CpuCompositionEvaluator{}.evaluate(
+            rotated->plan, rotated->request, makeCancelledToken());
+        expectations.expect(result.status() == runtime::EvaluationStatus::Cancelled &&
+                                result.frame() == nullptr,
+                            "a cancelled evaluation of a rotated layer is cancelled");
+        const auto prepared = runtime::CpuGpuSceneBuilder{}.build(rotated->plan, rotated->request,
+                                                                  makeCancelledToken());
+        expectations.expect(!prepared.hasValue() && prepared.diagnostic.code ==
+                                                        runtime::PreparedGpuSceneDiagnosticCode::
+                                                            Cancelled,
+                            "a cancelled GPU preparation of a rotated layer is cancelled");
+    }
+    const auto base = edgeCount(*plain);
+    const auto large = edgeCount(*scaled);
+    const auto turned = edgeCount(*rotated);
+    std::cout << "edges: unscaled solid=" << base.solid << " partial=" << base.partial
+              << "; scaled solid=" << large.solid << " partial=" << large.partial
+              << "; rotated solid=" << turned.solid << " partial=" << turned.partial << '\n';
+    const auto ratio = [](const std::size_t a, const std::size_t b) {
+        return b == 0 ? 0.0 : static_cast<double>(a) / static_cast<double>(b);
+    };
+    expectations.expect(base.solid > 500 && base.partial > 100, "the unscaled cue draws");
+    expectations.expect(ratio(large.solid, base.solid) > 3.6 &&
+                            ratio(large.solid, base.solid) < 4.4,
+                        "a layer scaled two times covers four times the solid area");
+    expectations.expect(ratio(large.partial, base.partial) < 2.6,
+                        "a layer scaled two times keeps a one-pixel antialiased edge: it is "
+                        "redrawn, not resampled");
+    expectations.expect(ratio(turned.solid, base.solid) > 0.9 &&
+                            ratio(turned.solid, base.solid) < 1.1 &&
+                            ratio(turned.partial, base.partial) < 1.4,
+                        "a rotated layer keeps the unscaled solid area and edge: it is redrawn, "
+                        "not resampled");
+    gpu.emplace_back("scaled layer", *scaled);
+    gpu.emplace_back("scaled layer, half opacity", *faded);
+    gpu.emplace_back("scaled layer, fill only, half opacity", *single);
+    gpu.emplace_back("rotated layer", *rotated);
+}
+
 void budgetTests(Expectations& expectations) {
     const auto refusal = [&](const std::shared_ptr<const runtime::CompiledCompositionPlan>& plan,
                              const std::string& label) {
@@ -704,6 +801,8 @@ int main(int argc, char** argv) {
         placementTests(expectations);
         valueOutputTests(expectations);
         cpuTests(expectations, references);
+        const auto transformedFrom = references.size();
+        transformTests(expectations, references);
         budgetTests(expectations);
         checkTests(expectations);
         if (expectations.failures() != 0) {
@@ -749,6 +848,23 @@ int main(int argc, char** argv) {
                         executor.executor->counters().dispatches == before.dispatches,
                     "a later frame of the same cue matches and dispatches nothing new");
             }
+        }
+        // A later frame of the same cue on a scaled or rotated layer redraws nothing either.
+        for (auto index = transformedFrom; index < references.size(); ++index) {
+            auto later = references[index].second;
+            later.request.time = seconds(3, 2);
+            const auto prepared = runtime::CpuGpuSceneBuilder{}.build(later.plan, later.request);
+            expectations.expect(prepared.hasValue(),
+                                references[index].first + ": a later frame of the cue prepares");
+            if (!prepared)
+                continue;
+            const auto before = executor.executor->counters();
+            const auto pixels = runScene(*executor.executor, prepared.scene);
+            expectations.expect(
+                parity(pixels, references[index].second.frame->processImage().pixels()) &&
+                    executor.executor->counters().dispatches == before.dispatches,
+                references[index].first +
+                    ": a later frame of the same cue matches and dispatches nothing new");
         }
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " subtitles expectation(s) failed\n";
