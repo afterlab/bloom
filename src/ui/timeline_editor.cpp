@@ -535,6 +535,7 @@ class TimelineLayerRow final : public kit::KRow {
     void bind(const TimelineLayerEntry& entry, const bool selected, const int rowIndex) {
         setName(entry.name, entry.expanded ? kit::IconId::CaretDown : kit::IconId::CaretRight);
         setRowState(rowIndex, selected);
+        const auto previousTarget = bound_ ? std::optional(rowTarget(entry_)) : std::nullopt;
         entry_ = entry;
         bound_ = true;
         audioLayer_ = entry.kind == TimelineEditor::tr("Audio");
@@ -594,9 +595,23 @@ class TimelineLayerRow final : public kit::KRow {
         parentDropdown_->setEnabled(!locked_);
         parentDropdown_->setToolTip(TimelineEditor::tr("Transform relative to another layer"));
         parentDropdown_->show();
-        // ADR 0028 Track Matte column: the current matte only, the candidates when it opens.
-        matte_cell::showCurrent(*matteDropdown_, *session_, rowTarget(entry));
-        matteFilled_ = false;
+        // ADR 0028 Track Matte column: the current matte only, the candidates when it opens. Any
+        // snapshot publication re-binds the rows (an edit landing, an agent's commit, the color
+        // converter finishing on its worker), so a re-bind can arrive while the artist has the
+        // list open: the same row's open list is filled again from the new state and keeps every
+        // choice; a row re-pointed at another layer closes the list it opened for the old one.
+        const auto target = rowTarget(entry);
+        const bool sameTarget = previousTarget && previousTarget->entry == target.entry &&
+                                previousTarget->layer == target.layer;
+        if (matteDropdown_->isPopupVisible() && sameTarget) {
+            matte_cell::populate(*matteDropdown_, *session_, target);
+            matteFilled_ = true;
+        } else {
+            if (matteDropdown_->isPopupVisible())
+                matteDropdown_->hidePopup();
+            matte_cell::showCurrent(*matteDropdown_, *session_, target);
+            matteFilled_ = false;
+        }
         matteDropdown_->setEnabled(!locked_);
         blending_->setCurrentIndex(row >= 0 ? row : 0);
         blending_->setToolTip(mode.has_value()

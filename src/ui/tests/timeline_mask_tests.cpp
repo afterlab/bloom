@@ -98,6 +98,16 @@ int main(int argc, char** argv) {
     click(matte);
     expect(matte->isPopupVisible(), "clicking the cell opens its menu");
     expect(matte->count() == 5 && matte->currentIndex() == 0, "None, one layer, three actions");
+    // A re-bind while the list is open keeps every choice in it. Any snapshot publication rebuilds
+    // the rows (an edit landing, an agent's commit, the session's color converter finishing on its
+    // worker); here an edit of the other layer forces one while the artist has the list open.
+    const auto bindsBefore = stack->work().layerRowBinds;
+    expect(surfaces.session.setLayerBlendMode(bottom, core::BlendMode::Multiply),
+           "the other layer is edited while the list is open");
+    expect(stack->work().layerRowBinds > bindsBefore, "the edit re-binds the open row");
+    expect(matte->isPopupVisible(), "the open list stays open through the re-bind");
+    expect(matte->count() == 5 && matte->currentIndex() == 0,
+           "the re-bound open list still holds None, one layer and three actions");
     pickPopupRow(*matte, 1);
     expect(surfaces.session.composition()->graph().findLayer(top)->trackMatte &&
                surfaces.session.composition()->graph().findLayer(top)->trackMatte->source == bottom,
@@ -123,5 +133,16 @@ int main(int argc, char** argv) {
     pickPopupRow(*matte, 0);
     expect(!surfaces.session.composition()->graph().findLayer(top)->trackMatte,
            "None clears the matte");
+    // A re-bind that points the open row at another layer closes the list it opened for the old
+    // one, so no choice ever acts on a layer the artist did not open it for.
+    matte =
+        surfaces.layerRow(0)->findChild<kit::KDropdown*>(QStringLiteral("layerTrackMatteDropdown"));
+    click(matte);
+    expect(matte->isPopupVisible() && matte->count() == 5, "the list is open on the top row");
+    expect(addDefaultSolidLayer(surfaces.session), "a layer is added above while the list is open");
+    expect(stack->entries()[0].layerId != top, "the new layer takes the top row");
+    expect(!matte->isPopupVisible(), "the re-pointed row's list closes");
+    expect(matte->count() == 1 && matte->currentText() == QStringLiteral("None"),
+           "the re-pointed row shows its own layer's current matte");
     return failures == 0 ? 0 : 1;
 }

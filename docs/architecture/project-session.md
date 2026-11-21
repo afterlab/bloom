@@ -192,7 +192,10 @@ panel once per frame instead of once per commit. A change that does not wait emi
 rebuild with its own, and a rebind's rebuild follows its `documentRebound`, so no row of the old
 project outlives it. An agent session's slower hold (#746) adopts commits at its own cadence on top
 of this. The Timeline rebuilds its rows from one index of the graph per rebuild, keeps its pooled
-row widgets, and lists a row's Track Matte candidates only when the artist opens the cell.
+row widgets, and lists a row's Track Matte candidates only when the artist opens the cell. A
+rebuild can land while that list is open (an edit, an agent's commit, the colour converter
+publishing from its worker): the open list of a row still bound to the same layer is filled again
+from the new snapshot and keeps every choice, and a row re-pointed at another layer closes it.
 
 ## New Project
 
