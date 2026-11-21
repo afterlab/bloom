@@ -297,3 +297,15 @@ Illumination (CIE) in the CIE 15 technical report, "Colorimetry" (also distribut
 reference data, not code; it is used only to draw the spectral locus graticule and is never an
 input to any measurement. Its sums over 380 nm to 780 nm are checked in
 `src/color/tests/scope_colorimetry_tests.cpp` against the published equal-energy normalization.
+
+### WHATWG HTML named character references and Encoding Standard indexes
+
+Bloom embeds two tables generated from WHATWG standards for its subtitle readers (issue #752):
+the HTML Standard's named character references (`src/document/html_named_references.inc`, from
+https://html.spec.whatwg.org/entities.json), which WebVTT cue text uses, and the single-byte
+indexes and labels of the Encoding Standard (`src/subtitles/whatwg_single_byte_tables.inc`, from
+https://github.com/whatwg/encoding). Copyright © WHATWG (Apple, Google, Mozilla, Microsoft). The
+standards are licensed under the Creative Commons Attribution 4.0 International License; portions
+incorporated into source code, as these tables are, are licensed under the BSD 3-Clause License.
+The source revisions and digests are recorded in `src/document/HTML-NAMED-REFERENCES-PROVENANCE.md`
+and `src/subtitles/WHATWG-ENCODING-PROVENANCE.md`.

@@ -1,0 +1,1435 @@
+[
+  {
+    "case": "arrows",
+    "title": "arrows",
+    "signatureInvalid": false,
+    "cueCount": 6,
+    "cues": [
+      {
+        "id": "",
+        "text": "text0"
+      },
+      {
+        "id": "",
+        "text": "text1"
+      },
+      {
+        "id": "",
+        "text": "text2"
+      },
+      {
+        "id": "",
+        "text": "text3"
+      },
+      {
+        "id": "",
+        "text": "text4"
+      },
+      {
+        "id": "",
+        "text": "text5"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "comment-in-cue-text",
+    "title": "comment-in-cue-text",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "text": "NOTE text",
+        "startTime": 0,
+        "endTime": 1
+      },
+      {
+        "text": "NOTE text\nNOTE text2",
+        "startTime": 1,
+        "endTime": 2
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "empty",
+    "title": "signature, empty",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "header-garbage",
+    "title": "header, garbage",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "text": "text",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "header-space",
+    "title": "header, space",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "text": "text",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "header-tab",
+    "title": "header, tab",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "text": "text",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "header-timings",
+    "title": "header, timings",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "text": "text",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "ids",
+    "title": "ids",
+    "signatureInvalid": false,
+    "cueCount": 5,
+    "cues": [
+      {
+        "id": " leading space"
+      },
+      {
+        "id": "trailing space "
+      },
+      {
+        "id": "-- >"
+      },
+      {
+        "id": "->"
+      },
+      {
+        "id": " "
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "ids-across-region-block",
+    "title": "ids not carried across a region block",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "id": ""
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "ids-across-style-block",
+    "title": "ids not carried across a style block",
+    "signatureInvalid": false,
+    "cueCount": 1,
+    "cues": [
+      {
+        "id": ""
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "newlines",
+    "title": "newlines",
+    "signatureInvalid": false,
+    "cueCount": 4,
+    "cues": [
+      {
+        "id": "cr",
+        "text": "text0"
+      },
+      {
+        "id": "lf",
+        "text": "text1"
+      },
+      {
+        "id": "crlf",
+        "text": "text2"
+      },
+      {
+        "id": "lfcr",
+        "text": "text3"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "nulls",
+    "title": "nulls",
+    "signatureInvalid": false,
+    "cueCount": 7,
+    "cues": [
+      {
+        "id": "",
+        "text": "text0"
+      },
+      {
+        "id": "\ufffd (null in id)",
+        "text": "text1"
+      },
+      {
+        "id": "\ufffd (null in cue data)",
+        "text": "\ufffdtext\ufffd2"
+      },
+      {
+        "align": "center",
+        "text": "text3"
+      },
+      {
+        "align": "center",
+        "text": "text4"
+      },
+      {
+        "align": "center",
+        "text": "text5"
+      },
+      {
+        "align": "end",
+        "text": "text6"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-id",
+    "title": "regions, id",
+    "signatureInvalid": false,
+    "cueCount": 4,
+    "cues": [
+      {
+        "region": {
+          "lines": 2
+        }
+      },
+      {
+        "region": {
+          "lines": 1
+        }
+      },
+      {
+        "region": {
+          "lines": 3
+        }
+      },
+      {
+        "region": {
+          "lines": 4
+        }
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-lines",
+    "title": "regions, lines",
+    "signatureInvalid": false,
+    "cueCount": 11,
+    "cues": [
+      {
+        "region": {
+          "lines": 0
+        }
+      },
+      {
+        "region": {
+          "lines": 1
+        }
+      },
+      {
+        "region": {
+          "lines": 100
+        }
+      },
+      {
+        "region": {
+          "lines": 101
+        }
+      },
+      {
+        "region": {
+          "lines": 65536
+        }
+      },
+      {
+        "region": {
+          "lines": 4294967295
+        }
+      },
+      {
+        "region": {
+          "lines": 2
+        }
+      },
+      {
+        "region": {
+          "lines": 3
+        }
+      },
+      {
+        "region": {
+          "lines": 3
+        }
+      },
+      {
+        "region": {
+          "lines": 3
+        }
+      },
+      {
+        "region": {
+          "lines": 3
+        }
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-old",
+    "title": "regions, old",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "region": null
+      },
+      {
+        "region": null
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-regionanchor",
+    "title": "regions, regionanchor",
+    "signatureInvalid": false,
+    "cueCount": 20,
+    "cues": [
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 0
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 1,
+          "regionAnchorY": 1
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 100,
+          "regionAnchorY": 0
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 100,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "regionAnchorX": 0,
+          "regionAnchorY": 100
+        }
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-scroll",
+    "title": "regions, scroll",
+    "signatureInvalid": false,
+    "cueCount": 6,
+    "cues": [
+      {
+        "region": {
+          "scroll": ""
+        }
+      },
+      {
+        "region": {
+          "scroll": "up"
+        }
+      },
+      {
+        "region": {
+          "scroll": "up"
+        }
+      },
+      {
+        "region": {
+          "scroll": ""
+        }
+      },
+      {
+        "region": {
+          "scroll": ""
+        }
+      },
+      {
+        "region": {
+          "scroll": "up"
+        }
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "regions-viewportanchor",
+    "title": "regions, viewportanchor",
+    "signatureInvalid": false,
+    "cueCount": 20,
+    "cues": [
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 0
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 1,
+          "viewportAnchorY": 1
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 100,
+          "viewportAnchorY": 0
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 100,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      },
+      {
+        "region": {
+          "viewportAnchorX": 0,
+          "viewportAnchorY": 100
+        }
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-align",
+    "title": "settings, align",
+    "signatureInvalid": false,
+    "cueCount": 13,
+    "cues": [
+      {
+        "align": "center"
+      },
+      {
+        "align": "start"
+      },
+      {
+        "align": "center"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "left"
+      },
+      {
+        "align": "right"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "end"
+      },
+      {
+        "align": "center"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-line",
+    "title": "settings, line",
+    "signatureInvalid": false,
+    "cueCount": 47,
+    "cues": [
+      {
+        "line": -1,
+        "snapToLines": true
+      },
+      {
+        "line": 0,
+        "snapToLines": true
+      },
+      {
+        "line": 0,
+        "snapToLines": true
+      },
+      {
+        "line": 1,
+        "snapToLines": true
+      },
+      {
+        "line": 100,
+        "snapToLines": true
+      },
+      {
+        "line": 101,
+        "snapToLines": true
+      },
+      {
+        "line": 65536,
+        "snapToLines": true
+      },
+      {
+        "line": 4294967296,
+        "snapToLines": true
+      },
+      {
+        "line": 18446744073709552000,
+        "snapToLines": true
+      },
+      {
+        "line": 1e+34,
+        "snapToLines": true
+      },
+      {
+        "line": 1.5,
+        "snapToLines": true
+      },
+      {
+        "line": 1.7976931348623157e+308,
+        "snapToLines": true
+      },
+      {
+        "line": -1.7976931348623157e+308,
+        "snapToLines": true
+      },
+      {
+        "line": 5e-324,
+        "snapToLines": true
+      },
+      {
+        "line": 0,
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": "auto",
+        "snapToLines": true
+      },
+      {
+        "line": 0,
+        "snapToLines": false
+      },
+      {
+        "line": 0,
+        "snapToLines": false
+      },
+      {
+        "line": 100,
+        "snapToLines": false,
+        "lineAlign": "start"
+      },
+      {
+        "line": 100,
+        "snapToLines": false,
+        "lineAlign": "start"
+      },
+      {
+        "line": 100,
+        "snapToLines": false,
+        "lineAlign": "center"
+      },
+      {
+        "line": 100,
+        "snapToLines": false,
+        "lineAlign": "end"
+      },
+      {
+        "line": 5e-324,
+        "snapToLines": false
+      },
+      {
+        "line": 0,
+        "snapToLines": false
+      },
+      {
+        "line": "auto",
+        "snapToLines": true,
+        "lineAlign": "start"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-multiple",
+    "title": "settings, multiple",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "id": "id0",
+        "text": "text0",
+        "align": "start",
+        "line": 1,
+        "snapToLines": false,
+        "vertical": "lr",
+        "size": 50,
+        "position": 25
+      },
+      {
+        "id": "id1",
+        "text": "text1",
+        "align": "center",
+        "line": 1,
+        "vertical": "rl",
+        "size": 0,
+        "position": 100
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-position",
+    "title": "settings, position",
+    "signatureInvalid": false,
+    "cueCount": 25,
+    "cues": [
+      {
+        "position": 1,
+        "positionAlign": "auto"
+      },
+      {
+        "position": 100,
+        "positionAlign": "auto"
+      },
+      {
+        "position": 1,
+        "positionAlign": "auto"
+      },
+      {
+        "position": 1.5,
+        "positionAlign": "auto"
+      },
+      {
+        "position": 1,
+        "positionAlign": "line-left"
+      },
+      {
+        "position": 1,
+        "positionAlign": "center"
+      },
+      {
+        "position": 1,
+        "positionAlign": "line-right"
+      },
+      {
+        "position": 1,
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      },
+      {
+        "position": "auto",
+        "positionAlign": "auto"
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-region",
+    "title": "settings, region",
+    "signatureInvalid": false,
+    "cueCount": 9,
+    "cues": [
+      {
+        "regionPresent": true,
+        "regionSameAsCue": 0
+      },
+      {
+        "regionPresent": true,
+        "regionSameAsCue": 1
+      },
+      {
+        "regionSameAsCue": 1
+      },
+      {
+        "region": null
+      },
+      {
+        "regionSameAsCue": 0
+      },
+      {
+        "region": null
+      },
+      {
+        "region": null
+      },
+      {
+        "region": null
+      },
+      {
+        "region": null
+      }
+    ],
+    "regionsDistinct": [
+      [
+        0,
+        1
+      ]
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-size",
+    "title": "settings, size",
+    "signatureInvalid": false,
+    "cueCount": 16,
+    "cues": [
+      {
+        "size": 100
+      },
+      {
+        "size": 2
+      },
+      {
+        "size": 0
+      },
+      {
+        "size": 0
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 50
+      },
+      {
+        "size": 1.5
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      },
+      {
+        "size": 100
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "settings-vertical",
+    "title": "settings, size",
+    "signatureInvalid": false,
+    "cueCount": 8,
+    "cues": [
+      {
+        "vertical": ""
+      },
+      {
+        "vertical": "lr"
+      },
+      {
+        "vertical": "rl"
+      },
+      {
+        "vertical": "lr"
+      },
+      {
+        "vertical": ""
+      },
+      {
+        "vertical": ""
+      },
+      {
+        "vertical": ""
+      },
+      {
+        "vertical": ""
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "signature-bom",
+    "title": "signature, bom",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-formfeed",
+    "title": "signature, formfeed",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-invalid",
+    "title": "signature, invalid",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-invalid-whitespace",
+    "title": "signature, invalid whitespace",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-lowercase",
+    "title": "signature, lowercase",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-missing",
+    "title": "signature, missing",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-missing-whitespace",
+    "title": "signature, missing whitespace",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-no-newline",
+    "title": "signature, no newline",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-null",
+    "title": "signature, null",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-partial",
+    "title": "signature, partial",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-space",
+    "title": "signature, space",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-space-no-newline",
+    "title": "signature, space, no newline",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-tab",
+    "title": "signature, tab",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-tab-no-newline",
+    "title": "signature, tab, no newline",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-timings",
+    "title": "signature, timings",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-two-boms",
+    "title": "signature, two boms",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "signature-websrt",
+    "title": "signature, websrt",
+    "signatureInvalid": true,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "stylesheets",
+    "title": "stylesheets, rules",
+    "signatureInvalid": false,
+    "cues": [],
+    "unconverted": [
+      "assert_equals(document.styleSheets.length, 0);"
+    ]
+  },
+  {
+    "case": "timings-60",
+    "title": "timings, 60",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "text": "text1",
+        "startTime": 0,
+        "endTime": 216001
+      },
+      {
+        "text": "text2",
+        "startTime": 216000,
+        "endTime": 216001
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "timings-eof",
+    "title": "timings, eof",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "timings-garbage",
+    "title": "timings, garbage",
+    "signatureInvalid": false,
+    "cueCount": 0,
+    "cues": [],
+    "unconverted": []
+  },
+  {
+    "case": "timings-negative",
+    "title": "timings, negative",
+    "signatureInvalid": false,
+    "cueCount": 4,
+    "cues": [
+      {
+        "text": "text0",
+        "startTime": 0,
+        "endTime": 0
+      },
+      {
+        "text": "text1",
+        "startTime": 1,
+        "endTime": 0.999
+      },
+      {
+        "text": "text2",
+        "startTime": 60,
+        "endTime": 59.999
+      },
+      {
+        "text": "text3",
+        "startTime": 3600,
+        "endTime": 3599.999
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "timings-omitted-hours",
+    "title": "timings, omitted hours",
+    "signatureInvalid": false,
+    "cueCount": 3,
+    "cues": [
+      {
+        "text": "text0",
+        "startTime": 0,
+        "endTime": 1
+      },
+      {
+        "text": "text1",
+        "startTime": 0,
+        "endTime": 1
+      },
+      {
+        "text": "text2",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "timings-too-long",
+    "title": "timings, too long",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "text": "text0",
+        "startTime": 0,
+        "endTime": 1
+      },
+      {
+        "text": "text1",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "timings-too-short",
+    "title": "timings, too short",
+    "signatureInvalid": false,
+    "cueCount": 2,
+    "cues": [
+      {
+        "text": "text0",
+        "startTime": 0,
+        "endTime": 1
+      },
+      {
+        "text": "text1",
+        "startTime": 0,
+        "endTime": 1
+      }
+    ],
+    "unconverted": []
+  },
+  {
+    "case": "whitespace-chars",
+    "title": "whitespace chars",
+    "signatureInvalid": false,
+    "cueCount": 3,
+    "cues": [
+      {
+        "id": "spaces",
+        "text": "   text0"
+      },
+      {
+        "id": "tabs",
+        "text": "text1"
+      },
+      {
+        "id": "form feed",
+        "text": "text2"
+      }
+    ],
+    "unconverted": []
+  }
+]

@@ -75,6 +75,10 @@ constexpr auto kPythonQualificationTools = std::to_array<std::string_view>(
     {"tools/ci/configure_gpu_qualification.py",
      // The Google Fonts index generator (docs/architecture/fonts.md): run by hand before a release.
      "tools/fonts/generate_google_catalogue.py", "tools/ci/gpu_qualification.py",
+     // The subtitle tables and conformance corpus importers (docs/architecture/subtitles.md), run by
+     // hand when a source revision is updated; each checks its checked-in output with --check.
+     "tools/subtitles/generate_html_named_references.py",
+     "tools/subtitles/generate_whatwg_single_byte.py", "tools/subtitles/import_wpt_webvtt.py",
      "tools/quality/qualify_private_share_outage.py",
      // The documented local qualification runner and its own test (local-validation.md).
      "tools/local/sprint_validation.py", "tools/local/test_sprint_validation.py",
@@ -477,7 +481,7 @@ void appendRepositoryPolicyFindings(const Path& root, const std::span<const Path
 
 constexpr auto kKnownModules = std::to_array<std::string_view>(
     {"core", "platform", "document", "commands", "project", "render", "runtime", "media", "color",
-     "output", "host", "scripting", "mcp", "svgartwork", "update", "crash"});
+     "output", "host", "scripting", "mcp", "svgartwork", "update", "crash", "subtitles"});
 constexpr auto kAllowedModuleDependencies =
     std::to_array<std::pair<std::string_view, std::string_view>>({
         {"platform", "core"},      {"document", "core"},      {"commands", "core"},
@@ -510,6 +514,9 @@ constexpr auto kAllowedModuleDependencies =
         {"runtime", "svgartwork"}, /* ADR 0038: the SVG artwork builder and expansion. */
         {"update", "core"},        {"update", "platform"}, /* ADR 0041: the self-update core. */
         {"crash", "core"},         {"crash", "platform"}, /* #736: crash reports. */
+        {"subtitles", "core"},     {"subtitles", "document"}, {"commands", "subtitles"},
+        {"host", "subtitles"},     {"scripting", "subtitles"},
+        {"mcp", "subtitles"}, /* #752: the subtitle file readers and writers. */
     });
 
 [[nodiscard]] constexpr auto isAllowedDependency(const std::string_view module,

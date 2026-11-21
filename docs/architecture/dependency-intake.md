@@ -367,6 +367,31 @@ With downloads off, all three must already be in the archive cache when the supe
 configured. Changing one is an intake: a new version, checksum and license review, in the same
 change as its record.
 
+### Expat In The Subtitle Readers
+
+The TTML/IMSC reader of `src/subtitles` (issue #752, `docs/architecture/subtitles.md`) links the
+locked static Expat 2.8.3 directly. It is a new consumer of an existing lock component, not a new
+component: the archive, build, license and security records are the ones OpenColorIO already
+consumes, and `bloom_subtitles` is the only Bloom target that includes `expat.h`.
+
+A subtitle file is untrusted input that the user picks or that a linked file changes into, so the
+reader bounds what reaches Expat:
+
+- A file is refused above 16 MiB before it is read, and the load runs on a task with cancellation,
+  never on the UI thread.
+- The parser is namespace aware and refuses a document type declaration, any entity declaration and
+  any external entity reference (parameter entity parsing is off), so no entity is expanded.
+- Element nesting deeper than 64 is refused.
+- **CVE-2026-66046** (quadratic attribute processing in `storeAtts()`, open in 2.8.3; see
+  `dependencies/licenses/expat/security.md`) is mitigated for this consumer by a scan of the raw
+  text before Expat reads it: an element with more than 256 attributes is refused with its line,
+  which bounds the per-element cost at a few tens of thousands of comparisons. TTML elements carry
+  a handful of attributes.
+
+The lock's disposition for the CVE is unchanged (`mitigated`); its mandatory re-review on the first
+Expat release with the upstream fix covers this consumer too, and the attribute scan stays as a
+defense either way.
+
 ### Closed Resource Limits
 
 Limits are checked on encoded bytes before allocation and during parsing with checked arithmetic.
