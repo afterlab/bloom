@@ -153,6 +153,24 @@ All three options are off by default and the programs still build. A `COMPOSITOR
 exit as skipped without its session, so it is not registered at all unless the session is provided:
 a green default run says nothing about those tests, and does not pretend to.
 
+`ENVIRONMENT` takes one argument per variable: `ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+"QT_SCALE_FACTOR=1.5" "BLOOM_REDUCED_MOTION=1"` (#763). `bloom_add_test` reads its arguments with
+`cmake_parse_arguments(PARSE_ARGV)`, which keeps a quoted `"A=1;B=2"` as one entry, so CTest would
+set `A` to `1;B=2` and never set `B`. A scale variant registered that way ran with
+`QT_QPA_PLATFORM="offscreen;QT_SCALE_FACTOR=1.5;..."`, which Qt reads as a list of platforms to
+try, so it ran offscreen at scale 1 with motion on and nothing failed. `bloom_add_test` refuses
+such an argument when the build is configured (`cmake/BloomTestEnvironment.cmake`); a value that is
+itself a list, such as a search path, is still one variable. A UI test that runs at several display
+scales registers one variant per scale, named `<name>.dpr<scale>` (or `<name>-scale-<scale>`), with
+`QT_SCALE_FACTOR=<scale>`. Three tests hold this: `bloom.quality.test_environment_entries` reads
+the CTest files and fails for any test with an entry that names several variables, or a scale
+variant that does not run with its `QT_SCALE_FACTOR` (its self-test,
+`bloom.quality.test_environment_entries_rejects`, reads the line CMake wrote before);
+`bloom.build.test-environment-registration` configures a small project through the real
+`bloom_add_test`, which must refuse the joined form and hand each variable of the split form to
+its test; and `bloom.ui.test-display-scale.dpr1`, `.dpr1.5` and `.dpr2` read the platform, device
+pixel ratio, grab size and reduced-motion switch the process actually got.
+
 Shared test support lives in `tests/support`:
 
 - `fixed_memory_budget.hpp`: a constant host memory reading (16 GiB physical, 8 GiB available) in

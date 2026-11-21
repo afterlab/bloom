@@ -1,5 +1,6 @@
 include_guard(GLOBAL)
 
+include(BloomTestEnvironment)
 include(BloomVulkanRuntime)
 
 # Tests prove one behavior at the smallest size that shows it. Three kinds of run are not part of
@@ -38,6 +39,9 @@ set(BLOOM_TEST_FIXED_MEMORY_READING "17179869184,8589934592,8589934592"
 # properties through this function's arguments (or guard with `if(TEST <name>)`), because
 # set_tests_properties fails for a test that is not registered. Never replace a registered test's
 # ENVIRONMENT afterwards (it would drop the reading); pass it here, or APPEND to the property.
+# ENVIRONMENT takes one argument per variable, ENVIRONMENT "A=1" "B=2": a quoted "A=1;B=2" is one
+# argument, which would set A to "1;B=2" and never set B, so it stops the configuration (#763;
+# bloom.quality.test_environment_entries checks the CTest files the same way).
 # Whether `target` links Qt, directly or through the libraries it links (their interface and, for a
 # static library, its own links). Sets `result` in the caller.
 function(_bloom_links_qt target result)
@@ -95,6 +99,17 @@ function(bloom_add_test)
     endif()
     if(NOT ARG_TIMEOUT)
         set(ARG_TIMEOUT 30)
+    endif()
+    # #763: each ENVIRONMENT argument names one variable (cmake/BloomTestEnvironment.cmake). A quoted
+    # "A=1;B=2" stays one argument here and would set only A, to "1;B=2".
+    bloom_joined_test_environment(bloom_test_joined_environment ARG_ENVIRONMENT)
+    if(bloom_test_joined_environment)
+        list(JOIN bloom_test_joined_environment ", " bloom_test_joined_environment)
+        message(FATAL_ERROR
+            "bloom_add_test(${ARG_NAME}): one ENVIRONMENT argument names several variables "
+            "(${bloom_test_joined_environment}), so the test would get only the first, holding "
+            "the rest in its value. Pass each variable as its own argument: "
+            "ENVIRONMENT \"A=1\" \"B=2\", not ENVIRONMENT \"A=1;B=2\".")
     endif()
     if(DEFINED ARG_LIVE_MEMORY OR "LIVE_MEMORY" IN_LIST ARG_KEYWORDS_MISSING_VALUES)
         string(STRIP "${ARG_LIVE_MEMORY}" bloom_test_live_memory_reason)

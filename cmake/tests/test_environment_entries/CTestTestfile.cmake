@@ -1,0 +1,23 @@
+# A CTest file in the forms CMake writes, for bloom.quality.test_environment_entries_rejects.
+# fixture.joined-dpr1.5 is the line CMake wrote for a scale variant before #763: one variable,
+# QT_QPA_PLATFORM, holding "offscreen;QT_SCALE_FACTOR=1.5;BLOOM_REDUCED_MOTION=1".
+add_test("fixture.split" "/bin/true")
+set_tests_properties("fixture.split" PROPERTIES  ENVIRONMENT [[A=1;QT_QPA_PLATFORM=offscreen;BLOOM_REDUCED_MOTION=1]] LABELS "unit" TIMEOUT "30")
+add_test("fixture.joined-dpr1.5" "/bin/true")
+set_tests_properties("fixture.joined-dpr1.5" PROPERTIES  ENVIRONMENT [[A=1;QT_QPA_PLATFORM=offscreen\;QT_SCALE_FACTOR=1.5\;BLOOM_REDUCED_MOTION=1]] LABELS "ui" TIMEOUT "60")
+add_test("fixture.joined-quoted" "/bin/true")
+set_tests_properties("fixture.joined-quoted" PROPERTIES  ENVIRONMENT "QT_QPA_PLATFORM=offscreen\;BLOOM_REDUCED_MOTION=1" LABELS "ui" TIMEOUT "60")
+add_test("fixture.search-path" "/bin/true")
+set_tests_properties("fixture.search-path" PROPERTIES  ENVIRONMENT [[PATH=C:/one\;C:/two;A=1]] LABELS "unit" TIMEOUT "30")
+add_test("fixture.no-properties" "/bin/true")
+add_test("fixture.view.dpr1.5" "/bin/true")
+set_tests_properties("fixture.view.dpr1.5" PROPERTIES  ENVIRONMENT [[QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5;BLOOM_REDUCED_MOTION=1]] LABELS "ui" TIMEOUT "60")
+add_test("fixture.view.dpr2" "/bin/true")
+set_tests_properties("fixture.view.dpr2" PROPERTIES  ENVIRONMENT [[QT_QPA_PLATFORM=offscreen;QT_SCALE_FACTOR=1.5]] LABELS "ui" TIMEOUT "60")
+add_test("fixture.view.dpr1" "/bin/true")
+set_tests_properties("fixture.view.dpr1" PROPERTIES  ENVIRONMENT [[QT_QPA_PLATFORM=offscreen]] LABELS "ui" TIMEOUT "60")
+add_test("fixture.view-scale-2" "/bin/true")
+set_tests_properties("fixture.view-scale-2" PROPERTIES  ENVIRONMENT [[QT_SCALE_FACTOR=2;QT_QPA_PLATFORM=offscreen]] LABELS "ui" TIMEOUT "60")
+add_test("fixture.view-scale-1.5" "/bin/true")
+set_tests_properties("fixture.view-scale-1.5" PROPERTIES  ENVIRONMENT [[QT_SCALE_FACTOR=1.5;QT_SCALE_FACTOR=1]] LABELS "ui" TIMEOUT "60")
+subdirs("sub")

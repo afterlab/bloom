@@ -176,6 +176,36 @@ if(BUILD_TESTING)
             -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_memory_reading.cmake"
         LABELS quality build unit
         TIMEOUT 60)
+    # #763: every variable a registration names reaches its test on its own, and a scale variant
+    # (<name>.dpr<scale>, <name>-scale-<scale>) runs at its scale. The first test reads this build's
+    # CTest files; the second proves that check rejects the joined form CMake wrote before; the
+    # third registers through the real bloom_add_test, which must refuse the joined form when the
+    # build is configured and hand each variable of the split form to the test.
+    bloom_add_test(
+        NAME bloom.quality.test_environment_entries
+        COMMAND ${CMAKE_COMMAND} "-DTREE=${CMAKE_BINARY_DIR}" "-DCONFIG=$<CONFIG>"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_environment_entries.cmake"
+        LABELS quality build
+        TIMEOUT 60)
+    set(bloom_environment_check_rejected fixture.joined-dpr1.5 fixture.joined-quoted
+        fixture.view.dpr1 fixture.view.dpr2 fixture.view-scale-1.5 fixture.sub-joined.dpr2)
+    list(JOIN bloom_environment_check_rejected "," bloom_environment_check_rejected)
+    bloom_add_test(
+        NAME bloom.quality.test_environment_entries_rejects
+        COMMAND ${CMAKE_COMMAND}
+            "-DTREE=${PROJECT_SOURCE_DIR}/cmake/tests/test_environment_entries"
+            "-DEXPECT_REJECTED=${bloom_environment_check_rejected}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_environment_entries.cmake"
+        LABELS quality build unit
+        TIMEOUT 60)
+    bloom_add_test(
+        NAME bloom.build.test-environment-registration
+        COMMAND ${CMAKE_COMMAND} "-DMODULE_DIR=${PROJECT_SOURCE_DIR}/cmake"
+            "-DWORK=${CMAKE_BINARY_DIR}/test-environment-registration"
+            "-DGENERATOR=${CMAKE_GENERATOR}" "-DMAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}"
+            -P "${PROJECT_SOURCE_DIR}/cmake/tests/test_environment_registration.cmake"
+        LABELS unit build
+        TIMEOUT 120)
     # #749: on macOS every registered test runs with a home of its own, so no test reaches the
     # user's real per-user folders there (cmake/BloomTesting.cmake). Registered on macOS only:
     # Linux and Windows find those folders from XDG_* and LOCALAPPDATA, which the runner and the
