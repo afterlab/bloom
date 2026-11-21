@@ -2960,7 +2960,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
-                              coordinate-space-axes)
+                              coordinate-space-axes subtitles)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2970,7 +2970,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #742, #743, #511, #528, #519, #527, #510 and #591: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #743, #511, #528, #519, #527, #510, #591 and #752: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
                               corner-pin-trilinear pixel-art-automatic
@@ -2986,7 +2986,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-split-asymmetric field-noise-vector
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
-                              coordinate-space-axes)
+                              coordinate-space-axes subtitles)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

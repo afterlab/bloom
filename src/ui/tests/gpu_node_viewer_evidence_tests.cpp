@@ -32,6 +32,7 @@
 #include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
+#include <bloom/commands/subtitles_operations.hpp>
 #include <bloom/commands/transaction.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
 #include <bloom/document/new_project.hpp>
@@ -140,6 +141,8 @@ struct Scenario final {
     // #591: the source is a stroked Shape whose path is an Axes drawn in a Coordinate Space; the
     // animated role is the space's, so a RAM preview moves every point of the path through it.
     bool coordinateSpace = false;
+    // #752: the source is a Subtitles node; these cues are set on it (bloom.subtitles.set-cues).
+    std::vector<document::Cue> cues = {};
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -232,6 +235,25 @@ struct Scenario final {
                                     Vec2d{960.0, 540.0},
                                     Vec2d{880.0, 600.0}};
     out["coordinate-space-axes"].coordinateSpace = true;
+    // #752: Subtitles with italic and colored runs, a block box and an outline, two cues stacked,
+    // the offset keyed so a RAM preview moves them every frame.
+    out["subtitles"] = {"bloom.subtitles",
+                        {{"size", 72.0}, {"box", std::int64_t{2}}, {"outlineWidth", 4.0}},
+                        {},
+                        {},
+                        "offset",
+                        Vec2d{0.0, 0.0},
+                        Vec2d{0.0, -240.0}};
+    out["subtitles"].animateSource = true;
+    {
+        document::Cue first;
+        first.start = core::RationalTime::fromInteger(0);
+        first.end = core::RationalTime::fromInteger(10);
+        first.text = "Hello <i>there</i>, <c.yellow>friend</c>";
+        document::Cue second = first;
+        second.text = "<b>A second line</b>";
+        out["subtitles"].cues = {first, second};
+    }
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
@@ -825,6 +847,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         const auto source = addNode(session, scenario->source);
         checks.expect(source.isValid() && setValues(session, source, scenario->sourceValues),
                       "the source node is added");
+        if (!scenario->cues.empty()) {
+            commands::Transaction transaction("Set cues", session.snapshot().revision());
+            transaction.emplace<commands::SetCues>(session.compositionId(), source,
+                                                   scenario->cues, std::nullopt, std::nullopt,
+                                                   std::nullopt);
+            checks.expect(runTransaction(session, std::move(transaction)),
+                          "the cues are set on the Subtitles node");
+        }
         document::NodeId last = source;
         document::NodeId space;
         if (scenario->coordinateSpace) {
