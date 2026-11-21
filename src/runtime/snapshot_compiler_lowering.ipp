@@ -229,7 +229,8 @@ void entryDependencies(const document::NodeId merge, const document::LayerStackE
             // curve is not compiled either (a compiled curve nothing references refuses the plan).
             if (const auto* parameter = findParameter(binding.parameterId);
                 parameter != nullptr &&
-                document::isParameterInactive(*composition_, *node, parameter->schemaKey))
+                document::isParameterInactive(*composition_, *node, parameter->schemaKey,
+                                              binding.role))
                 continue;
             addParameterCurve(binding.parameterId);
         }

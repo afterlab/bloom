@@ -87,8 +87,9 @@ document::ShapeKind nodeShapeKind(const document::Composition& composition,
 }
 
 bool propertiesRowInactive(const document::Composition& composition,
-                           const document::NodeRecord& node, const std::string_view schemaKey) {
-    return document::isParameterInactive(composition, node, schemaKey);
+                           const document::NodeRecord& node, const std::string_view schemaKey,
+                           const std::string_view role) {
+    return document::isParameterInactive(composition, node, schemaKey, role);
 }
 
 // #525: the Fields parameters whose role alone does not say what they do. The noise rows carry the
@@ -714,7 +715,8 @@ void PropertiesRegistryRow::refresh() {
                                 node && node->typeId == document::kShapeSourceNodeType
                                     ? std::optional(nodeShapeKind(*composition, *node))
                                     : std::nullopt) == PropertiesRowVisibility::Hidden ||
-        (node != nullptr && propertiesRowInactive(*composition, *node, definition_.schemaKey));
+        (node != nullptr && propertiesRowInactive(*composition, *node, definition_.schemaKey,
+                                                    definition_.role));
     setProperty("roleHidden", hidden);
     setVisible(!hidden);
     const auto* parameter = composition ? composition->parameters().find(parameter_) : nullptr;

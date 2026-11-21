@@ -19,4 +19,12 @@ namespace bloom::document {
 [[nodiscard]] bool isParameterInactive(const Composition& composition, const NodeRecord& node,
                                        std::string_view schemaKey);
 
+// The same rule for one bound parameter, told apart by its role as well: a few rows share a generic
+// operand key with rows that stay active, so the key alone cannot say. #591: while a space is
+// connected to Function Plot, Axes or Axis Tick, the space places the drawing and their own Origin
+// and Pixels Per Unit are not read (Axis Tick's Label Offset, the same kind of value, still is).
+// Every reader that knows the role asks this one.
+[[nodiscard]] bool isParameterInactive(const Composition& composition, const NodeRecord& node,
+                                       std::string_view schemaKey, std::string_view role);
+
 } // namespace bloom::document

@@ -132,10 +132,12 @@ propertiesRowVisibility(std::string_view role, std::string_view schemaKey,
 // Blur's vertical radius needs Separate axes, its per-channel radii need Per-channel radius,
 // Denoise's frame count needs Temporal mode and its radius needs any other mode) has no row while it
 // would do nothing, as a Shape source's rows follow its kind. Both toggles and the mode are
-// constants, so the answer is read straight from the document.
+// constants, so the answer is read straight from the document. #591: Function Plot, Axes and Axis
+// Tick's Origin and Pixels Per Unit have no row while a space is connected (the role tells them
+// from rows that share their key).
 [[nodiscard]] bool propertiesRowInactive(const document::Composition& composition,
                                          const document::NodeRecord& node,
-                                         std::string_view schemaKey);
+                                         std::string_view schemaKey, std::string_view role);
 [[nodiscard]] PropertiesRowControl propertiesRowControl(std::string_view schemaKey);
 QList<std::pair<QString, std::int64_t>> propertiesSelectorItems(std::string_view schemaKey);
 class PropertiesRegistryRow final : public QWidget {

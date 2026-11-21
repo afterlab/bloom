@@ -708,6 +708,11 @@ struct Controls final {
                                     0.0, 200.0, 100.0, 50.0});
         controls.sliders.push_back({"startOffset", std::string(document::kResampleStartOffsetSchemaKey),
                                     0.0, 100.0, 0.0, 25.0});
+    } else if (typeId == document::kFunctionPlotNodeType || typeId == document::kAxesNodeType ||
+               typeId == document::kAxisTickNodeType) {
+        // #591: nothing of their own to draw. The widget is what lets the card follow activity:
+        // while a space is connected it places the drawing, so Origin and Pixels Per Unit have no
+        // row (a linked one still shows, so its link never dangles), as in Properties.
     } else if (typeId == document::kCoordinateSpaceNodeType) {
         // #591: the turn on a dial (clockwise on screen); the card shows only what the mode reads
         // (the origin and scale, the rectangle or the corners), as Properties does.
@@ -1049,7 +1054,7 @@ std::vector<std::string> NodeControlsCardWidget::inactiveRoles() const {
     if (node == nullptr || definition == nullptr)
         return roles;
     for (const auto& parameter : definition->parameters)
-        if (document::isParameterInactive(*composition, *node, parameter.schemaKey))
+        if (document::isParameterInactive(*composition, *node, parameter.schemaKey, parameter.role))
             roles.push_back(parameter.role);
     return roles;
 }

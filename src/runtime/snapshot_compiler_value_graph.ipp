@@ -528,6 +528,21 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     const auto operandOf = [&](const std::string_view port) {
         return valueOperand(node, definition, port);
     };
+    // A value the node does not read now (document::isParameterInactive) is not lowered: its curve
+    // is not compiled, so it reads as the definition's default.
+    const auto inactiveDefault =
+        [&](const std::string_view role) -> std::optional<runtime::CompiledValue> {
+        const auto* binding = runtime::detail::findParameterBinding(node, role);
+        const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+        if (parameter == nullptr ||
+            !document::isParameterInactive(*composition_, node, parameter->schemaKey, role))
+            return std::nullopt;
+        const auto declared = std::ranges::find(definition.parameters, role,
+                                                &document::ParameterDefinition::role);
+        if (declared == definition.parameters.end())
+            return std::nullopt;
+        return compiledValueFrom(declared->defaultValue);
+    };
     switch (definition.lowering) {
     case runtime::NodeLoweringKind::ValueConstant: {
         const auto* binding = runtime::detail::findParameterBinding(node, kValueParameterRole);
@@ -754,21 +769,6 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
                 return std::nullopt;
             return compiledValueFrom(declared->defaultValue);
         };
-        // A value the node's mode does not read (document::isParameterInactive) is not lowered:
-        // its curve is not compiled, so it reads as the definition's default.
-        const auto inactiveDefault =
-            [&](const std::string_view role) -> std::optional<runtime::CompiledValue> {
-            const auto* binding = runtime::detail::findParameterBinding(node, role);
-            const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
-            if (parameter == nullptr ||
-                !document::isParameterInactive(*composition_, node, parameter->schemaKey))
-                return std::nullopt;
-            const auto declared = std::ranges::find(definition.parameters, role,
-                                                    &document::ParameterDefinition::role);
-            if (declared == definition.parameters.end())
-                return std::nullopt;
-            return compiledValueFrom(declared->defaultValue);
-        };
         for (const auto& declared : descriptor->operands) {
             if (auto unread = inactiveDefault(declared.role)) {
                 operands.push_back(runtime::CompiledValueOperand{{}, *std::move(unread)});
@@ -986,8 +986,16 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             auto start = operandOf(document::kFunctionPlotStartRole);
             auto end = operandOf(document::kFunctionPlotEndRole);
             auto samples = operandOf(document::kFunctionPlotSamplesRole);
-            auto origin = operandOf(document::kFunctionPlotOriginRole);
-            auto scale = operandOf(document::kFunctionPlotScaleRole);
+            // #591: with a space connected the plot places by it, so its own origin and scale are
+            // inactive and lower to their defaults.
+            const auto placement = [&](const std::string_view role) {
+                if (auto unread = inactiveDefault(role))
+                    return std::optional<runtime::CompiledValueOperand>(
+                        runtime::CompiledValueOperand{{}, *std::move(unread)});
+                return operandOf(role);
+            };
+            auto origin = placement(document::kFunctionPlotOriginRole);
+            auto scale = placement(document::kFunctionPlotScaleRole);
             auto smooth = operandOf(document::kFunctionPlotSmoothRole);
             if (!start || !end || !samples || !origin || !scale || !smooth)
                 return std::nullopt;

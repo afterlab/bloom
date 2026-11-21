@@ -4,6 +4,7 @@
 #include <bloom/document/colorize_nodes.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
+#include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
@@ -36,7 +37,29 @@ namespace {
     return std::nullopt;
 }
 
+// #591: whether something is wired into `node`'s space input.
+[[nodiscard]] bool spaceConnected(const Composition& composition, const NodeRecord& node) {
+    for (const auto& edge : composition.graph().edges())
+        if (const auto* input = std::get_if<NodeInputRef>(&edge.destination);
+            input != nullptr && input->nodeId == node.id && input->port == kSpacePortName)
+            return true;
+    return false;
+}
+
 } // namespace
+
+bool isParameterInactive(const Composition& composition, const NodeRecord& node,
+                         const std::string_view schemaKey, const std::string_view role) {
+    // #591: a connected space replaces the placement these three nodes otherwise read. A connected
+    // space that is refused upstream reaches them as "no space" and they then place at the
+    // definition's defaults, as any inactive value lowers.
+    if ((node.typeId == kFunctionPlotNodeType || node.typeId == kAxesNodeType ||
+         node.typeId == kAxisTickNodeType) &&
+        (role == kFunctionPlotOriginRole || role == kFunctionPlotScaleRole) &&
+        spaceConnected(composition, node))
+        return true;
+    return isParameterInactive(composition, node, schemaKey);
+}
 
 bool isParameterInactive(const Composition& composition, const NodeRecord& node,
                          const std::string_view schemaKey) {
