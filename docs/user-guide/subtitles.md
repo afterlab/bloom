@@ -5,6 +5,63 @@ are, and keeps the cues so they can also be exported as a subtitle track or file
 an SRT, WebVTT, TTML or ASS file, from text you type, or from another node's cue list. The full
 specification is [Subtitles](../architecture/subtitles.md).
 
+## Adding subtitles
+
+- **File > Import**, or drop a subtitle file (.srt, .vtt, .ttml, .dfxp, .ass, .ssa) on the window,
+  the Timeline or the Viewer: a Subtitles layer that follows the file starts at the composition's
+  start. A subtitle file does not become an asset.
+- **Add > Subtitles** in the Timeline or the Viewer: an empty Subtitles layer to type cues into.
+- The **Subtitles** node in the Nodes Add menu (Text & Paths).
+
+A new layer's Size is 5.5 % of the composition's height (59 pixels at 1080) and its outline 1/360
+of it (3 pixels at 1080).
+
+## Editing cues
+
+Select the Subtitles layer. Properties opens its section with the **Source** row and the cue list.
+
+The **Source** row says where the cues come from: typed in Bloom, a file (with its state: in sync,
+changed, missing or unreadable) or another node. **Load File…** reads a file into the node; choose
+its format and encoding, or leave them to be detected, and whether the cues follow the file. What
+the reader dropped or changed is listed under the row. **Reload** reads a followed file again;
+**Unlink** keeps the cues and stops following the file. Cues that follow a file, or come from
+another node, cannot be edited in Bloom; edit the file, or Unlink.
+
+The cue list shows each cue's number, start, end, duration, text, speaker and checks. Times read in
+frames or timecode, as the Timeline does. Double-click a cell to edit it; a time takes a frame
+number or a timecode. The filter shows the cues whose text or speaker holds the words.
+
+| Button | Key | What it does |
+| --- | --- | --- |
+| Add | `Insert` | A cue at the playhead, two seconds long or up to the next cue |
+| Delete | `Delete` | Deletes the picked cues |
+| Split | `Ctrl+B` | Cuts the picked cue in two at the playhead |
+| Merge | `Ctrl+J` | Joins the picked cue and the next one |
+| Set Start, Set End | `[`, `]` | Moves the picked cue's start or end to the playhead |
+| Shift… | | Moves every cue, or the picked ones, earlier or later |
+| Scale… | | Retimes cues made for one frame rate (25) to play at another (23.976) |
+
+**Edit as Text** shows the whole list as SRT or WebVTT text to edit freely. **Apply** reads it back;
+if a line does not read, the errors are listed with their line numbers and nothing changes until it
+does. **Copy** puts the list on the clipboard as SRT or WebVTT.
+
+Every edit is one step of Undo.
+
+## On the Timeline and in the Viewer
+
+A Subtitles layer's bar on the Timeline shows a block for each cue. Click one to pick it; drag it to
+move the cue, or drag its edge to move its start or end. The edge snaps to the playhead and to the
+other cues' edges and lands on a frame; hold `Shift` to snap to frames only. `Delete` deletes the
+picked cue. The bar's own ends still trim the layer.
+
+With the layer selected, the Viewer outlines the safe area and each cue showing, with its number.
+Click a cue to pick it, drag it to move the subtitles (their Offset), and double-click it to edit its
+text in place (`Ctrl+Return` to finish, `Escape` to cancel).
+
+When Burn in is off, the Viewer still shows the cues as a guide, white on a dark plate with a dashed
+outline, so you can time them. Turn it off with View > Guides > Show Track-Only Subtitles. The guide
+is never part of a RAM Preview or an export.
+
 ## What a cue shows
 
 A cue shows from its start up to, but not including, its end. Its text may use WebVTT markup:
@@ -71,7 +128,8 @@ captions.
 Each cue is checked against the node's Checks settings: characters per line, reading speed
 (characters per second), lines, minimum duration, the gap to the next cue (in frames), overlaps,
 cues past the composition's end, and scripts drawn without shaping. A check never changes the
-picture. The findings are listed with each cue in the `subtitles` read of MCP and Python.
+picture. The findings are listed with each cue in the cue list's Checks column and in the
+`subtitles` read of MCP and Python.
 
 ## Limits
 

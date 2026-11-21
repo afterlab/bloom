@@ -213,6 +213,11 @@ The value outputs are evaluated on every frame, also when Burn in is off.
 
 Title safe and Action safe are the composition's safe areas (Composition Settings).
 
+A Subtitles layer made by `add-subtitles` (and so by Import, a drop and Add > Subtitles) sizes its
+Size to 5.5 % of the composition's height and its Outline width to 1/360 of it, rounded to whole
+pixels with a minimum of one (`kSubtitlesSizeOfHeight`, `kSubtitlesOutlineOfHeight`): 59 and 3 at
+1080. A node added on its own from the Nodes Add menu keeps the definition's defaults.
+
 ## Layout
 
 One cue is laid out by `runtime::layoutSubtitleCues` (`bloom/runtime/subtitles_layout.hpp`) over
@@ -402,3 +407,45 @@ Python `bloom.data.subtitles`.
 - `at` keeps the cues showing at a time, and `from` and `to` keep those overlapping `[from, to)`.
 - A cursor is valid only at the revision it came from.
 - `format` `srt` or `vtt` answers the whole list as that file's text.
+
+## Editing In The Application
+
+The interaction contract is `docs/ux/interaction-model.md`, "Subtitles"; this section is how it is
+built.
+
+**Edits.** `src/ui/subtitles_editing.hpp` holds every artist edit (add at the playhead, delete,
+split, merge, set start or end, cell edits, shift, scale, Edit as Text, load, reload, unlink). Each
+builds one transaction from the operations above, so each is one undo step and every refusal is the
+command's own. The Properties cue list, the Timeline cue blocks and the Viewer call the same
+functions. Cue times are key times of the cue list (the layer's clock); the surfaces convert them
+with the session's key clock and show them in the composition's frames or timecode.
+
+**The picked cue** is session state (`CompositionSession::selectCue`, `cueSelectionChanged`), not
+document state, so Properties, the Timeline and the Viewer agree on it and Undo never touches it.
+
+**Off the interface thread.** `ui::SubtitlesInspector`, owned by the session, runs on its own task
+scheduler worker. For every Subtitles node of the composition it compiles the snapshot (cached per
+revision), places the cues showing at the playhead (`runtime::placeSubtitleCues`, the render's own
+layout at the UI-sampled style), checks the linked file's state, and, for the nodes a surface asked
+about in detail (the node open in Properties), runs the checks over the whole list. It refreshes
+on snapshot, time, composition and live-value changes; a newer request supersedes an older one.
+Reading a file for Load File, Import or a drop, and parsing Edit as Text, run on the same worker.
+The Viewer's outlines, the Properties Checks column and the node card's file state read its
+results.
+
+**The cue list** is a `QTableView` over a model of the node's list: it builds no widget per cue
+(only an open cell editor), so a 10,000-cue list costs one view.
+
+**Previews.** A Timeline cue drag previews through the session's value edit on the cue-list
+parameter (the whole list, re-sorted), which the preview controller renders as an interactive edit;
+the release cancels the preview and commits one Move Cue or Retime Cue. A Viewer drag previews the
+Offset the same way.
+
+**Track-only guide.** With Burn in off, the Viewer draws the placed cues as an overlay (white text on
+a dark plate, dashed outline) while View > Guides > Show Track-Only Subtitles is on (the default;
+the `viewer/overlay/track-only-subtitles` setting). It is an overlay painter, so it is never in the
+display buffer, a RAM Preview frame or an export.
+
+**Import.** A subtitle file among the paths of File > Import or a drop (`.srt`, `.vtt`, `.ttml`,
+`.dfxp`, `.ass`, `.ssa`; a plain `.xml` is never claimed) is read on the inspector's worker and
+becomes one `add-subtitles` with `link=true` at the composition's start. It is not an asset.

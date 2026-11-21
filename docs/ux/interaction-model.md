@@ -685,7 +685,7 @@ Viewer and Nodes; Space no longer arms a pan gesture.
 | `Ctrl+0` | Timeline View → Zoom to Fit |
 | `Ctrl++` / `Ctrl+-` | Timeline View → Zoom In / Zoom Out about the visible center |
 | `Ctrl+A` / `Ctrl+Shift+A` | Timeline Select → Select All / Deselect All (shared layer-boundary selection) |
-| `Delete` / `Backspace` with layer stack or lanes focused | Timeline Edit → Delete Layer, through `RemoveNodes` on the selected layers' Layer nodes |
+| `Delete` / `Backspace` with layer stack or lanes focused | Timeline Edit → Delete Layer, through `RemoveNodes` on the selected layers' Layer nodes; with a cue block picked in the lanes, deletes that cue (see Subtitles) |
 | Drop Assets items onto the layer stack | Inserts a layer for each at the row under the pointer, starting at the playhead |
 | Drop Assets items onto the lanes | Inserts them at the row under the pointer, starting at the frame under the pointer |
 | Drop Assets items elsewhere in the Timeline | Adds them on top, starting at the playhead |
@@ -882,6 +882,65 @@ Node" adds a mask shaped by the first node Mask. The Track Matte section has a s
 (None, "Layer: <name>" for the layers of the same Merge and "Node: <name>" for the node Masks), an
 Alpha/Luma channel dropdown and an Inverted switch. A node that would form a cycle with the layer is
 not listed. A locked layer disables both sections.
+
+## Subtitles
+
+A Subtitles node's cues are edited in Properties, on the Timeline and in the Viewer. Every edit is
+one undo step through the subtitle commands. Cues that follow a file, or come from another node,
+are read-only everywhere: each surface shows the reason ("These cues follow talk.srt. Edit the
+file, or Unlink to edit here.") and offers Reload and Unlink instead. The picked cue is session
+state, so picking it in one surface picks it in the others. Cue times read in the composition's
+reading (frames or timecode, the `timeline/time-format` preference) and land on its frames.
+
+**Properties.** A Subtitles node's section opens with its Source row and cue list; the generic
+Cues row is not shown.
+
+| Gesture | Action |
+| --- | --- |
+| Source row: Load File… | The file chooser with Format (from the extension, or one named), Encoding (detected, or one named) and Link to file (on). The file is read off the interface thread and loaded as one "Load Subtitles" step; what the reader dropped or changed is listed under the row |
+| Source row: Reload / Unlink | Read the linked file again ("Reload Subtitles") / keep the cues and stop following the file ("Unlink Subtitles"). The row shows the file's state: in sync, changed, missing or unreadable |
+| Add / `Insert` with the list focused | A cue at the playhead, two seconds long or up to the next cue ("Add Cue"); it is picked |
+| Delete / `Delete` or `Backspace` with the list focused | Delete the picked cues |
+| Split / `Ctrl+B` | Cut the picked cue at the playhead into two |
+| Merge / `Ctrl+J` | Join the picked cue and the next: the first's start, the next's end, their text on two lines |
+| Set Start / `[`, Set End / `]` | Move the picked cue's start or end to the playhead |
+| Shift… | A dialog: an amount in the composition's reading, earlier or later, every cue or the picked cues |
+| Scale… | A dialog: the rate the cues were timed for and the rate they play at (25 to 23.976 by default); the timing scales exactly |
+| Double-click a Start, End, Text or Speaker cell | Edit it in place; a time cell takes a frame number or a timecode, text that is neither is refused. A text cell takes several lines; `Ctrl+Return` or leaving it commits, `Escape` cancels |
+| Type in the filter | Show the cues whose text or speaker holds the words |
+| Edit as Text | The list as SRT or WebVTT text. Apply parses it off the interface thread; errors are listed with their line and nothing is written until it parses ("Edit Cues as Text"); cues that kept their times and text keep their ids. Cancel returns to the list |
+| Copy | Copy the list as SRT or WebVTT |
+
+The Checks column lists each cue's findings against the node's Checks settings (characters per
+line, reading speed, lines, duration, gap, overlap, past the end, unshaped scripts).
+
+**Timeline.** A Subtitles layer's bar shows one block per cue, labelled with its first line.
+
+| Gesture | Action |
+| --- | --- |
+| Click a block | Pick the cue (and select its layer) |
+| Drag a block's body / edge | Move the cue / its start or end. The Viewer follows through a preview; one "Move Cue" or "Retime Cue" step on release. The moved edge snaps to the playhead and to other cues' edges, else lands on a frame |
+| `Shift` during the drag | No magnetic snapping; the edge still lands on a frame |
+| `Escape` during the drag | Cancel; nothing is written |
+| `Delete` / `Backspace` with a block picked | Delete that cue ("Delete Cue"), not the layer |
+
+The bar's own ends stay the layer's trim handles.
+
+**Viewer.** With a Subtitles layer selected, the Viewer outlines its safe area (dashed) and each
+cue showing, numbered; the picked cue's outline is heavier.
+
+| Gesture | Action |
+| --- | --- |
+| Click a cue | Pick it (and select its layer) |
+| Drag a cue | Move the node's Offset; one step on release, `Escape` cancels |
+| Double-click a cue | Edit its text in place over the block; `Ctrl+Return` or leaving it commits ("Edit Cue Text"), `Escape` cancels |
+| View > Guides > Show Track-Only Subtitles (on by default) | With Burn in off, the cues still show as a guide (white text on a dark plate, dashed outline). The guide is never in the picture, a RAM Preview or an export |
+
+**Adding.** File > Import, and dropping a subtitle file (.srt, .vtt, .ttml, .dfxp, .ass, .ssa) on
+the window, the Assets, the Timeline or the Viewer, adds a Subtitles layer linked to the file at
+the composition's start ("Add Subtitles Layer"); a subtitle file is not an asset. Add >
+Subtitles in the Timeline and the Viewer adds an empty Subtitles layer sized for the composition;
+the Nodes Add menu lists the Subtitles node under Text & Paths.
 
 ## Export
 
