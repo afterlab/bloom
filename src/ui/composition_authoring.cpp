@@ -14,6 +14,7 @@
 #include <bloom/document/graph.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/shape.hpp>
+#include <bloom/document/subtitles_nodes.hpp>
 
 #include <QCoreApplication>
 #include <QMouseEvent>
@@ -178,6 +179,27 @@ bool addDefaultTextLayer(CompositionSession& session) {
                                              document::kTextSourceNodeSchemaVersion);
     return session.addTextLayer(TimelineEditor::tr("Text %1").arg(layerNumber),
                                 TimelineEditor::tr("Text"));
+}
+
+bool addDefaultSubtitlesLayer(CompositionSession& session) {
+    if (session.composition() == nullptr) {
+        emit session.commandRejected(
+            QCoreApplication::translate("subtitles", "No composition is open to add subtitles to"));
+        return false;
+    }
+    const auto layerNumber = nextLayerNumber(session, document::kSubtitlesNodeType,
+                                             document::kSubtitlesNodeSchemaVersion);
+    commands::Transaction transaction("Add Subtitles Layer", session.snapshot().revision());
+    transaction.emplace<commands::AddSubtitlesLayer>(
+        session.compositionId(),
+        TimelineEditor::tr("Subtitles %1").arg(layerNumber).toStdString(),
+        document::CueListValue{});
+    const auto result = session.executeTransaction(std::move(transaction));
+    if (!result.changed())
+        return false;
+    if (const auto layer = result.outputId<document::LayerId>("layer"))
+        session.selectLayer(*layer);
+    return true;
 }
 
 // One "Add <shape>" gesture, two entry points (the viewer's Add menu, the Timeline's Add menu):

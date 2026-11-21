@@ -1,3 +1,5 @@
+#include "subtitles_inspector.hpp"
+#include <bloom/subtitles/subtitles.hpp>
 #include "asset_data_thumbnail.hpp"
 #include "asset_thumbnail_display.hpp"
 #include "asset_thumbnail_interpretation.hpp"
@@ -68,7 +70,16 @@ namespace {
         "Media (*.cube *.clf *.spi1d *.spi3d *.svg *.SVG *.png *.jpg *.jpeg *.exr *.tif *.tiff "
         "*.dpx *.wav "
         "*.mp3 *.mp4 *.mov *.mkv *.webm *.mxf *.m4v *.mts *.m2ts *.ts *.PNG *.JPG *.JPEG *.EXR "
-        "*.TIF *.TIFF *.DPX *.WAV *.MP3 *.MP4 *.MOV *.MKV *.WEBM *.MXF)");
+        "*.TIF *.TIFF *.DPX *.WAV *.MP3 *.MP4 *.MOV *.MKV *.WEBM *.MXF *.srt *.vtt *.ttml *.dfxp "
+        "*.ass *.ssa *.SRT *.VTT *.TTML *.DFXP *.ASS *.SSA)");
+}
+// #752: a subtitle file is not an asset; importing or dropping one adds a linked Subtitles layer.
+// TTML in a plain .xml is read by Load File but never claimed by Import, which keeps other XML.
+[[nodiscard]] bool isSubtitleFile(const QString& path) {
+    for (const auto* suffix : {".srt", ".vtt", ".ttml", ".dfxp", ".ass", ".ssa"})
+        if (path.endsWith(QLatin1StringView(suffix), Qt::CaseInsensitive))
+            return true;
+    return false;
 }
 [[nodiscard]] bool isSvgFile(const std::filesystem::path& path) {
     auto extension = path.extension().string();
@@ -1071,6 +1082,8 @@ void AssetController::importFiles(const QStringList& paths,
     for (const auto& path : paths) {
         if (path.endsWith(QStringLiteral(".svg"), Qt::CaseInsensitive))
             svg.push_back(nativePath(path));
+        else if (isSubtitleFile(path))
+            addSubtitlesLayer(nativePath(path));
         else
             media.push_back(path);
     }
@@ -1093,6 +1106,67 @@ void AssetController::importFiles(const QStringList& paths,
     if (media.isEmpty() && importShared_ != nullptr && importShared_ != running)
         importFollowUp_ = std::move(followUp);
 }
+void AssetController::addSubtitlesLayer(const std::filesystem::path& path) {
+    if (session_.composition() == nullptr) {
+        emit session_.commandRejected(
+            tr("Open a composition first: a subtitle file becomes a Subtitles layer in it"));
+        return;
+    }
+    const auto composition = session_.compositionId();
+    subtitles::FileLoadRequest request;
+    request.path = path;
+    request.projectDirectory = session_.projectDirectory();
+    request.link = true;
+    const auto name = QString::fromStdU16String(path.stem().u16string());
+    // The file is read on the inspector's worker; the layer is one undoable step when it lands.
+    session_.subtitlesInspector().read(
+        QStringLiteral("Import Subtitles"),
+        [request]() {
+            SubtitlesInspector::CueRead read;
+            auto loaded = subtitles::loadFile(request);
+            if (auto* failure = std::get_if<subtitles::LoadFailure>(&loaded)) {
+                read.reports = failure->reports;
+                read.failure = std::move(*failure);
+            } else {
+                auto& file = std::get<subtitles::FileLoad>(loaded);
+                read.reports = std::move(file.loaded.reports);
+                read.list = std::move(file.loaded.cues);
+            }
+            return read;
+        },
+        this,
+        [this, composition, name, file = QString::fromStdU16String(path.filename().u16string())](
+            SubtitlesInspector::CueRead read) {
+            if (read.failure || !read.list) {
+                const auto message = read.failure ? QString::fromStdString(read.failure->message)
+                                                  : tr("The file could not be read");
+                emit session_.commandRejected(
+                    tr("Could not import %1: %2").arg(file, message));
+                return;
+            }
+            if (session_.compositionId() != composition || session_.composition() == nullptr)
+                return;
+            QStringList report;
+            std::vector<std::string> warnings;
+            for (const auto& row : read.reports) {
+                report.push_back(QString::fromStdString(subtitles::describe(row)));
+                warnings.push_back(report.back().toStdString());
+            }
+            commands::Transaction transaction("Add Subtitles Layer",
+                                              session_.snapshot().revision());
+            transaction.emplace<commands::AddSubtitlesLayer>(composition, name.toStdString(),
+                                                             std::move(*read.list),
+                                                             std::move(warnings));
+            const auto result = session_.executeTransaction(std::move(transaction));
+            if (!result.changed())
+                return;
+            if (const auto node = result.outputId<document::NodeId>("subtitlesNode"))
+                session_.setSubtitlesLoadReport(*node, report);
+            if (const auto layer = result.outputId<document::LayerId>("layer"))
+                session_.selectLayer(*layer);
+        });
+}
+
 void AssetController::startNextSvg() {
     if (pendingSvg_.empty() || busy_)
         return;

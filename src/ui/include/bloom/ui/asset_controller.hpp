@@ -129,6 +129,9 @@ class AssetController final : public QObject {
     void importFiles(const QStringList& paths, std::optional<document::AssetFolderId> folder,
                      ImportFollowUp followUp = {}, commands::ImportOptions options = {},
                      std::optional<commands::LayerDropPlacement> svgPlacement = std::nullopt);
+    // #752: a subtitle file among `paths` (.srt .vtt .ttml .dfxp .ass .ssa) is read off the interface
+    // thread and becomes a Subtitles layer linked to it at the composition's start, one undo step.
+    void addSubtitlesLayer(const std::filesystem::path& path);
     // #642: how the SVG files of one import or drop batch import. Asks once for the batch: the
     // remembered answer (Preferences > Import) is used without a prompt; otherwise the chooser
     // opens over the active window with As one layer selected and a "Remember my choice" check.

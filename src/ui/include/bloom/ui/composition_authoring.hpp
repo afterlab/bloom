@@ -77,6 +77,9 @@ blendModeFromDropdownIndex(const kit::KDropdown& dropdown, int index);
 
 [[nodiscard]] bool addDefaultSolidLayer(CompositionSession& session);
 [[nodiscard]] bool addDefaultTextLayer(CompositionSession& session);
+// #752: Layer > New > Subtitles (the Timeline's and the Viewer's Add menus): a Subtitles layer with
+// an empty typed cue list, named Subtitles N, selected; one undo step.
+[[nodiscard]] bool addDefaultSubtitlesLayer(CompositionSession& session);
 
 // One "Add <shape>" gesture, shared by the viewer's Add menu and the Timeline's Add menu (task
 // SHAPEFIX-1, deliverable 2): the composition-centred, default-sized shape layer
