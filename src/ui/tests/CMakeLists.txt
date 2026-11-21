@@ -1466,6 +1466,13 @@ target_include_directories(bloom_dcache_capture PRIVATE ${CMAKE_CURRENT_SOURCE_D
 target_link_libraries(bloom_dcache_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_dcache_capture)
 
+# #742, #743 review captures of the layer Filter and Snap rows and the Pixel Art switch (a tool, not
+# a test): bloom_layer_filter_snap_capture <directory>, with QT_SCALE_FACTOR 1, 1.5 or 2.
+add_executable(bloom_layer_filter_snap_capture layer_filter_snap_capture.cpp)
+target_include_directories(bloom_layer_filter_snap_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_layer_filter_snap_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_layer_filter_snap_capture)
+
 # The shared global-preferences model: defaults, round-trip, invalid-value fallback, and the
 # absolute-path/zero-budget rules the existing readers rely on. Also covers non-finite grid values.
 add_executable(bloom_application_preferences_test application_preferences_tests.cpp)
@@ -2905,6 +2912,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
     foreach(scenario IN ITEMS four-color-gradient denoise-median denoise-bilateral denoise-spatial
                               denoise-temporal blur-separate blur-per-channel transform-skew
                               transform-trilinear transform-anisotropic transform-nearest-shrunk
+                              corner-pin-trilinear pixel-art-automatic
                               resize-trilinear hue-vibrance
                               hue-colorize node-group tile-mirror-tile tile-mirror-wrap-offset
                               tile-mirror-mirror tile-mirror-kaleidoscope inner-shadow
@@ -2928,9 +2936,10 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #742, #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #743, #511, #528, #519, #527 and #510: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
+                              corner-pin-trilinear pixel-art-automatic
                               tile-mirror-tile tile-mirror-wrap-offset tile-mirror-mirror
                               tile-mirror-kaleidoscope inner-shadow inner-glow-edge inner-glow-center
                               quantize-threshold quantize-threshold-soft quantize-posterize

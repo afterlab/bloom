@@ -29,6 +29,7 @@
 #include "unique_temp_dir.hpp"
 
 #include <bloom/commands/command_stack.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/group_definition_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/transaction.hpp>
@@ -38,6 +39,7 @@
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
+#include <bloom/ui/composition_commands.hpp>
 #include <bloom/ui/composition_preview_controller.hpp>
 #include <bloom/ui/composition_preview_cpu_stage.hpp>
 #include <bloom/ui/composition_preview_gpu_scene_stage.hpp>
@@ -132,6 +134,9 @@ struct Scenario final {
     // #342: the effect sits inside a Node Group definition (Group Input image1 -> effect -> Group
     // Output image1) and the source feeds the instance's image1, so the node under test is the group.
     bool group = false;
+    // #743: the composition is in pixel-art mode (Automatic filters read Nearest, Automatic snaps
+    // round the layer to whole pixels).
+    bool pixelArt = false;
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -188,6 +193,30 @@ struct Scenario final {
         {},
         "bloom.resize-fit",
         {{"width", std::int64_t{384}}, {"height", std::int64_t{216}}, {"filter", std::int64_t{2}}}};
+    // #742: a 1920x1080 checker pinned to about a ninth of its size through Trilinear (the
+    // homography's own Jacobian picks the levels), the top-left corner keyed so a RAM preview
+    // shows a new picture every frame.
+    out["corner-pin-trilinear"] = {"bloom.checker-source",
+                                   {},
+                                   "bloom.corner-pin",
+                                   {{"topLeft", Vec2d{300.0, 200.0}},
+                                    {"topRight", Vec2d{-1400.0, 260.0}},
+                                    {"bottomRight", Vec2d{-1380.0, -680.0}},
+                                    {"bottomLeft", Vec2d{340.0, -700.0}},
+                                    {"filter", std::int64_t{2}}},
+                                   "topLeft",
+                                   Vec2d{300.0, 200.0},
+                                   Vec2d{330.4, 213.7}};
+    // #743: pixel-art mode resolves the Transform 2D's Automatic filter to Nearest and snaps the
+    // layer (its snap is Automatic); the translation is keyed by fractions of a pixel.
+    out["pixel-art-automatic"] = {"bloom.checker-source",
+                                  {},
+                                  "bloom.transform-2d",
+                                  {{"scale", Vec2d{0.3, 0.3}}, {"filter", std::int64_t{4}}},
+                                  "translate",
+                                  Vec2d{0.3, 0.2},
+                                  Vec2d{2.7, 1.1}};
+    out["pixel-art-automatic"].pixelArt = true;
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
@@ -799,6 +828,12 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
             checks.expect(connect(session, last, layerNode,
                                   std::string(document::kLayerOutputContentInputPort)),
                           "the chain feeds the layer");
+        if (scenario->pixelArt) {
+            auto pixelArt = commands::compositionSettingsOf(*session.composition());
+            pixelArt.pixelArt = true;
+            checks.expect(ui::applyCompositionSettings(session, compositionId, pixelArt),
+                          "the composition is put in pixel-art mode");
+        }
         if (options.ramFrames > 0 && (!scenario->effect.empty() || scenario->animateSource) &&
             !scenario->animatedRole.empty()) {
             // Key the animated value on the first and on the last frame.
