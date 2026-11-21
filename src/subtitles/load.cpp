@@ -156,9 +156,11 @@ constexpr std::array<Refused, 8> kRefused{{
         std::chrono::duration_cast<std::chrono::nanoseconds>(time.time_since_epoch()).count());
 }
 
-[[nodiscard]] std::string pathText(const std::filesystem::path& path) {
-    const auto text = path.u8string();
+[[nodiscard]] std::string pathText(const std::u8string& text) {
     return {reinterpret_cast<const char*>(text.data()), text.size()};
+}
+[[nodiscard]] std::string pathText(const std::filesystem::path& path) {
+    return pathText(path.u8string());
 }
 
 } // namespace
@@ -291,6 +293,147 @@ FileReadOutcome readFile(const std::filesystem::path& path, const std::stop_toke
     contents.size = contents.bytes.size();
     contents.modifiedNanoseconds = stamp->modifiedNanoseconds;
     return contents;
+}
+
+std::string describe(const Report& report) {
+    std::string text;
+    if (report.line != 0) {
+        text = "line " + std::to_string(report.line);
+        if (report.column != 0)
+            text += ", column " + std::to_string(report.column);
+        text += ": ";
+    }
+    return text + "[" + report.code + "] " + report.message;
+}
+
+FileLocator locate(const std::filesystem::path& path,
+                   const std::filesystem::path& projectDirectory) {
+    std::error_code error;
+    auto absolute = std::filesystem::absolute(path, error);
+    if (error)
+        absolute = path;
+    absolute = absolute.lexically_normal();
+    if (!projectDirectory.empty()) {
+        auto base = std::filesystem::absolute(projectDirectory, error);
+        if (!error) {
+            const auto relative = absolute.lexically_relative(base.lexically_normal());
+            if (!relative.empty() && !relative.is_absolute() && *relative.begin() != ".." &&
+                relative.native().find(std::filesystem::path::value_type{':'}) ==
+                    std::filesystem::path::string_type::npos)
+                return {"project-relative", pathText(relative.generic_u8string())};
+        }
+    }
+    return {"absolute", pathText(absolute.generic_u8string())};
+}
+
+std::filesystem::path linkedFilePath(const document::CueFileProvenance& provenance,
+                                     const std::filesystem::path& projectDirectory) {
+    const std::filesystem::path path(
+        std::u8string(reinterpret_cast<const char8_t*>(provenance.path.data()),
+                      provenance.path.size()));
+    if (provenance.portability == "project-relative")
+        return (projectDirectory / path).lexically_normal();
+    return path;
+}
+
+FileLoadOutcome loadFile(const FileLoadRequest& request) {
+    auto read = readFile(request.path, request.options.stop);
+    if (auto* failed = std::get_if<LoadFailure>(&read))
+        return std::move(*failed);
+    auto& contents = std::get<FileContents>(read);
+    auto options = request.options;
+    if (options.sourceName.empty())
+        options.sourceName = pathText(request.path.u8string());
+    auto loaded = load(std::span<const std::byte>(contents.bytes), options);
+    if (auto* failed = std::get_if<LoadFailure>(&loaded))
+        return std::move(*failed);
+    FileLoad result;
+    result.loaded = std::move(std::get<LoadResult>(loaded));
+    for (const auto& report : result.loaded.reports)
+        result.warnings.push_back(describe(report));
+    result.digest = contents.digest;
+    result.size = contents.size;
+    result.modifiedNanoseconds = contents.modifiedNanoseconds;
+    if (request.link) {
+        const auto locator = locate(request.path, request.projectDirectory);
+        document::CueFileProvenance file;
+        file.portability = locator.portability;
+        file.path = locator.path;
+        file.format = std::string(formatName(result.loaded.format));
+        file.encoding = result.loaded.encoding;
+        file.digest = contents.digest;
+        file.size = contents.size;
+        file.modifiedNanoseconds = contents.modifiedNanoseconds;
+        result.loaded.cues.provenance = std::move(file);
+    }
+    return result;
+}
+
+std::variant<LoadResult, LoadFailure> loadText(const std::string_view text,
+                                               const LoadOptions& options,
+                                               std::vector<std::string>& warnings) {
+    auto loaded = load(text, options);
+    if (auto* failed = std::get_if<LoadFailure>(&loaded))
+        return std::move(*failed);
+    auto& result = std::get<LoadResult>(loaded);
+    for (const auto& report : result.reports)
+        warnings.push_back(describe(report));
+    return std::move(result);
+}
+
+std::variant<FileWriteResult, LoadFailure> writeFile(const document::CueListValue& cues,
+                                                    const Format format,
+                                                    const std::filesystem::path& path,
+                                                    const bool overwrite,
+                                                    const WriteOptions& options) {
+    if (!isWritableFormat(format))
+        return refusal(codes::kUnrecognized, std::string(formatName(format)) +
+                                                 " is read only; write srt, vtt or ttml");
+    auto written = write(cues, format, options);
+    if (!written)
+        return refusal(codes::kUnrecognized, "The list could not be written as " +
+                                                 std::string(formatName(format)));
+    std::error_code error;
+    const auto status = std::filesystem::symlink_status(path, error);
+    if (!error && std::filesystem::exists(status)) {
+        if (!overwrite)
+            return refusal(codes::kFile, "The file " + pathText(path) +
+                                             " exists; pass overwrite=true to replace it");
+        if (!std::filesystem::is_regular_file(status))
+            return refusal(codes::kFile, "The path " + pathText(path) + " is not a regular file");
+    }
+    const auto folder = path.parent_path().empty() ? std::filesystem::path(".") : path.parent_path();
+    if (!std::filesystem::is_directory(folder, error))
+        return refusal(codes::kFile, "The folder " + pathText(folder) + " does not exist");
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    auto temporaryName = path.filename();
+    temporaryName += ".bloom-" + std::to_string(stamp) + ".tmp";
+    const auto temporary = folder / temporaryName;
+    {
+        std::ofstream stream(temporary, std::ios::binary | std::ios::trunc);
+        if (!stream)
+            return refusal(codes::kFile, "The file " + pathText(temporary) +
+                                             " could not be created");
+        stream.write(written->text.data(), static_cast<std::streamsize>(written->text.size()));
+        stream.flush();
+        if (!stream) {
+            stream.close();
+            std::filesystem::remove(temporary, error);
+            return refusal(codes::kFile, "The file " + pathText(temporary) + " could not be written");
+        }
+    }
+    std::filesystem::rename(temporary, path, error);
+    if (error) {
+        const auto reason = error.message();
+        std::filesystem::remove(temporary, error);
+        return refusal(codes::kFile, "The file " + pathText(path) + " could not be replaced: " +
+                                         reason);
+    }
+    FileWriteResult result;
+    result.reports = std::move(written->reports);
+    result.size = written->text.size();
+    result.digest = digestOf(std::as_bytes(std::span(written->text.data(), written->text.size())));
+    return result;
 }
 
 std::optional<WriteResult> write(const document::CueListValue& cues, const Format format,

@@ -124,6 +124,46 @@ struct FileStamp {
 // "sha256:<hex>" of bytes.
 [[nodiscard]] std::string digestOf(std::span<const std::byte> bytes);
 
+// A report row as one line of text: "line L, column C: [code] message" (the position left out
+// when the row is about the whole file). What a load publishes as its warnings.
+[[nodiscard]] std::string describe(const Report& report);
+
+// The locator of a linked file: relative ('/' separators) when `path` lies under
+// `projectDirectory`, otherwise absolute. An empty `projectDirectory` (an unsaved project) gives
+// an absolute locator.
+struct FileLocator {
+    std::string portability; // "project-relative" or "absolute"
+    std::string path;
+};
+[[nodiscard]] FileLocator locate(const std::filesystem::path& path,
+                                 const std::filesystem::path& projectDirectory);
+// The file a linked list follows (`projectDirectory` resolves a project-relative locator).
+[[nodiscard]] std::filesystem::path linkedFilePath(const document::CueFileProvenance& provenance,
+                                                   const std::filesystem::path& projectDirectory);
+
+// A file read and loaded for a list that is stored: the cues' provenance is the file (with its
+// digest and stamp) when `link`, otherwise authored. Runs on the caller's thread; call it from a
+// task, never the UI thread.
+struct FileLoadRequest {
+    std::filesystem::path path;
+    std::filesystem::path projectDirectory;
+    LoadOptions options; // sourceName is the path when empty
+    bool link = false;
+};
+struct FileLoad {
+    LoadResult loaded;
+    std::vector<std::string> warnings; // describe() of each report row
+    std::string digest;
+    std::uint64_t size = 0;
+    std::int64_t modifiedNanoseconds = 0;
+};
+using FileLoadOutcome = std::variant<FileLoad, LoadFailure>;
+[[nodiscard]] FileLoadOutcome loadFile(const FileLoadRequest& request);
+// Text loaded the same way (provenance authored; there is no file to follow).
+[[nodiscard]] std::variant<LoadResult, LoadFailure> loadText(std::string_view text,
+                                                             const LoadOptions& options,
+                                                             std::vector<std::string>& warnings);
+
 struct WriteOptions {
     // TTML: a rate the times are counted in when every time is a whole frame of it
     // (ttp:frameRate and ttp:frameRateMultiplier); otherwise ticks.
@@ -141,6 +181,18 @@ struct WriteResult {
 // last. ASS is refused (std::nullopt).
 [[nodiscard]] std::optional<WriteResult> write(const document::CueListValue& cues, Format format,
                                                const WriteOptions& options = {});
+
+// Writes a list to a file atomically: the text goes to a temporary file in the same folder, which
+// is then renamed over `path`, so a reader sees the old file or the whole new one. An existing
+// file is refused unless `overwrite`. Failures use codes::kFile with the system's reason.
+struct FileWriteResult {
+    std::vector<Report> reports;
+    std::uint64_t size = 0;
+    std::string digest;
+};
+[[nodiscard]] std::variant<FileWriteResult, LoadFailure>
+writeFile(const document::CueListValue& cues, Format format, const std::filesystem::path& path,
+          bool overwrite, const WriteOptions& options = {});
 
 // ---------------------------------------------------------------------------------------------
 // Encodings (WHATWG Encoding Standard).
