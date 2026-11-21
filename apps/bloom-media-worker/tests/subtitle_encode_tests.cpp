@@ -41,7 +41,8 @@ FrameProduct grey(const EncodeSettingsV1& settings, const std::uint64_t index) {
     plane.bytes.resize(static_cast<std::size_t>(plane.stride) * plane.height);
     for (std::size_t at = 0; at < plane.bytes.size(); at += 2) {
         const bool alpha = (at / 2) % 4 == 3;
-        const std::uint16_t value = alpha ? 65535U : static_cast<std::uint16_t>(20000U + index * 400U);
+        const std::uint16_t value =
+            alpha ? 65535U : static_cast<std::uint16_t>(20000U + index * 400U);
         plane.bytes[at] = static_cast<std::byte>(value & 255U);
         plane.bytes[at + 1] = static_cast<std::byte>(value >> 8U);
     }
@@ -100,7 +101,8 @@ void inspect(const std::filesystem::path& path, const EncodeSettingsV1& settings
         if (stream->codecpar->codec_type != AVMEDIA_TYPE_SUBTITLE)
             continue;
         ++found;
-        test::check(stream->codecpar->codec_id == (webm ? AV_CODEC_ID_WEBVTT : AV_CODEC_ID_MOV_TEXT),
+        test::check(stream->codecpar->codec_id ==
+                        (webm ? AV_CODEC_ID_WEBVTT : AV_CODEC_ID_MOV_TEXT),
                     "the track is WebVTT in WebM, 3GPP Timed Text in MOV and MP4");
         test::check((stream->disposition & (AV_DISPOSITION_DEFAULT | AV_DISPOSITION_FORCED)) == 0,
                     "the track is neither default nor forced");
@@ -131,8 +133,8 @@ void inspect(const std::filesystem::path& path, const EncodeSettingsV1& settings
         std::cerr << path.filename().string() << ": " << difference << '\n';
     test::check(difference.empty(), "the file read back by FFmpeg holds exactly the cues sent");
     for (const auto& track : reopened)
-        std::cout << path.filename().string() << " track " << track.language << " \""
-                  << track.title << "\" cues=" << track.cues.size() << '\n';
+        std::cout << path.filename().string() << " track " << track.language << " \"" << track.title
+                  << "\" cues=" << track.cues.size() << '\n';
 }
 
 EncodeSettingsV1 base() {

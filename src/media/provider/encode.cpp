@@ -94,8 +94,8 @@ bool valid(const SubtitleTrackV1& track, const std::string_view container,
 std::string subtitleTrackDifference(const std::vector<SubtitleTrackV1>& sent,
                                     const std::vector<SubtitleTrackV1>& reopened) {
     if (sent.size() != reopened.size())
-        return "The reopened file holds " + std::to_string(reopened.size()) +
-               " subtitle tracks, " + std::to_string(sent.size()) + " were sent";
+        return "The reopened file holds " + std::to_string(reopened.size()) + " subtitle tracks, " +
+               std::to_string(sent.size()) + " were sent";
     for (std::size_t index = 0; index < sent.size(); ++index) {
         const auto& expected = sent[index];
         const auto& actual = reopened[index];
@@ -103,8 +103,7 @@ std::string subtitleTrackDifference(const std::vector<SubtitleTrackV1>& sent,
         if (actual.language != expected.language)
             return track + "its language is " + actual.language + ", sent " + expected.language;
         if (actual.title != expected.title)
-            return track + "its title is \"" + actual.title + "\", sent \"" + expected.title +
-                   "\"";
+            return track + "its title is \"" + actual.title + "\", sent \"" + expected.title + "\"";
         if (actual.cues.size() != expected.cues.size())
             return track + "it holds " + std::to_string(actual.cues.size()) + " cues, " +
                    std::to_string(expected.cues.size()) + " were sent";
@@ -114,8 +113,8 @@ std::string subtitleTrackDifference(const std::vector<SubtitleTrackV1>& sent,
             const auto cue = track + "cue " + std::to_string(at + 1) + " ";
             if (got.first != want.first || got.end != want.end)
                 return cue + "shows frames " + std::to_string(got.first) + "-" +
-                       std::to_string(got.end - 1) + ", sent " + std::to_string(want.first) +
-                       "-" + std::to_string(want.end - 1);
+                       std::to_string(got.end - 1) + ", sent " + std::to_string(want.first) + "-" +
+                       std::to_string(want.end - 1);
             if (got.text != want.text)
                 return cue + "holds other text than was sent";
         }

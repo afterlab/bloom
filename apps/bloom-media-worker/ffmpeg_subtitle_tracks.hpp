@@ -33,11 +33,11 @@ namespace bloom::media::ffmpeg {
 // language, title, and each non-empty sample's text and the frames [first, end) at `rate` a
 // player shows it on. Reads every packet; the caller does not use the demuxer afterwards. Throws
 // provider::Unavailable for a packet it cannot read.
-[[nodiscard]] std::vector<provider::SubtitleTrackV1>
-readSubtitleTracks(AVFormatContext& opened, provider::Rational rate);
+[[nodiscard]] std::vector<provider::SubtitleTrackV1> readSubtitleTracks(AVFormatContext& opened,
+                                                                        provider::Rational rate);
 // The same for a movie file opened by its path.
-[[nodiscard]] std::vector<provider::SubtitleTrackV1>
-readSubtitleTracks(const std::string& path, provider::Rational rate);
+[[nodiscard]] std::vector<provider::SubtitleTrackV1> readSubtitleTracks(const std::string& path,
+                                                                        provider::Rational rate);
 
 // FFmpeg's MOV muxer marks the first text track enabled, which readers take as the default
 // track. Clears the enabled flag in the track header of every text track of the ISO BMFF file

@@ -214,11 +214,12 @@ void testSubtitles() {
 
     auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
     auto tracks = job(1, seed.initialCompositionId);
-    tracks.outputs[0].settings.subtitles =
-        ExportSubtitles{{ExportSubtitleFormat::Srt, ExportSubtitleFormat::Ttml}, true, std::nullopt};
-    tracks.outputs[1].settings.subtitles = ExportSubtitles{
-        {ExportSubtitleFormat::WebVtt}, false,
-        std::vector<NodeId>{NodeId::fromRaw(4), NodeId::fromRaw(12)}};
+    tracks.outputs[0].settings.subtitles = ExportSubtitles{
+        {ExportSubtitleFormat::Srt, ExportSubtitleFormat::Ttml}, true, std::nullopt};
+    tracks.outputs[1].settings.subtitles =
+        ExportSubtitles{{ExportSubtitleFormat::WebVtt},
+                        false,
+                        std::vector<NodeId>{NodeId::fromRaw(4), NodeId::fromRaw(12)}};
     seed.project.setExportQueue({{tracks}});
     const Document withTracks{std::move(seed.project)};
     const auto text = encode(withTracks);
@@ -252,8 +253,8 @@ void testSubtitles() {
     twice.settings.subtitles->sidecars = {ExportSubtitleFormat::Srt, ExportSubtitleFormat::Srt};
     expect(!validateExportOutput(twice).ok(), "a sidecar format given twice is refused");
     auto unordered = tracks.outputs[1];
-    unordered.settings.subtitles->nodes = std::vector<NodeId>{NodeId::fromRaw(12),
-                                                              NodeId::fromRaw(4)};
+    unordered.settings.subtitles->nodes =
+        std::vector<NodeId>{NodeId::fromRaw(12), NodeId::fromRaw(4)};
     expect(!validateExportOutput(unordered).ok(), "unordered nodes are refused");
     auto none = tracks.outputs[1];
     none.settings.subtitles->nodes = std::vector<NodeId>{};

@@ -3,9 +3,9 @@
 
 namespace bloom::media::provider {
 // #752: one cue track an export embeds: 3GPP Timed Text (FFmpeg's mov_text) in MOV and MP4,
-// WebVTT in WebM. Cues are in output frames: a cue shows frames [first, end). `text` is the sample's
-// text: plain UTF-8 lines joined by '\n' for 3GPP Timed Text, the WebVTT cue payload (cue text
-// markup) for WebVTT. A MOV or MP4 track's cues never overlap (the host joins cues that show
+// WebVTT in WebM. Cues are in output frames: a cue shows frames [first, end). `text` is the
+// sample's text: plain UTF-8 lines joined by '\n' for 3GPP Timed Text, the WebVTT cue payload (cue
+// text markup) for WebVTT. A MOV or MP4 track's cues never overlap (the host joins cues that show
 // together); a WebM track's cues are ordered by `first`. The track is neither default nor forced.
 struct SubtitleCueV1 {
     std::uint64_t first = 0, end = 0;

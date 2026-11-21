@@ -144,7 +144,8 @@ std::optional<ExportOverwritePolicy> parseExportOverwrite(const std::string_view
 std::string_view exportSubtitleFormatToken(const ExportSubtitleFormat format) noexcept {
     return tokenFor(kSubtitleFormats, format);
 }
-std::optional<ExportSubtitleFormat> parseExportSubtitleFormat(const std::string_view token) noexcept {
+std::optional<ExportSubtitleFormat>
+parseExportSubtitleFormat(const std::string_view token) noexcept {
     return parseToken(kSubtitleFormats, token);
 }
 

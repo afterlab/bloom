@@ -136,8 +136,8 @@ std::int64_t subtitleTrackTime(const std::uint64_t frame, const provider::Ration
                                const bool milliseconds) {
     if (!milliseconds)
         return static_cast<std::int64_t>(frame);
-    return av_rescale_rnd(static_cast<std::int64_t>(frame), 1000 * rate.denominator,
-                          rate.numerator, AV_ROUND_DOWN);
+    return av_rescale_rnd(static_cast<std::int64_t>(frame), 1000 * rate.denominator, rate.numerator,
+                          AV_ROUND_DOWN);
 }
 
 std::vector<provider::SubtitleTrackV1> readSubtitleTracks(AVFormatContext& opened,
@@ -169,9 +169,8 @@ std::vector<provider::SubtitleTrackV1> readSubtitleTracks(AVFormatContext& opene
     }
     if (tracks.empty())
         return tracks;
-    std::unique_ptr<AVPacket, void (*)(AVPacket*)> packet(av_packet_alloc(), [](AVPacket* value) {
-        av_packet_free(&value);
-    });
+    std::unique_ptr<AVPacket, void (*)(AVPacket*)> packet(
+        av_packet_alloc(), [](AVPacket* value) { av_packet_free(&value); });
     if (!packet)
         throw Unavailable{Error::Oversized, "Reopen allocation"};
     int status = 0;

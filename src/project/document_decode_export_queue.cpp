@@ -204,8 +204,8 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
         !token(*fields[at++], state, joinPath(path, "encoder"), document::parseExportEncoder,
                out.encoder))
         return false;
-    if (hasSubtitles && !decodeSubtitles(*fields[at + 1], state, joinPath(path, "subtitles"),
-                                         out.subtitles))
+    if (hasSubtitles &&
+        !decodeSubtitles(*fields[at + 1], state, joinPath(path, "subtitles"), out.subtitles))
         return false;
     const auto& naming = *fields[at];
     const auto namingPath = joinPath(path, "naming");
