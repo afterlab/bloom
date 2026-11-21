@@ -48,6 +48,10 @@ enum class SocketValueKind {
     // #627: a list of numbers (document::NumberListValue), Bloom's one list kind. A number or a
     // vector promotes into it; a list connects only to a list input.
     NumberList,
+    // #591: a coordinate space (core::space::Space), evaluated per frame like the other value kinds
+    // and read by any number of consumers. A space has no stored form, so its input is an edge
+    // with no parameter behind it: unconnected means "no space". Connects only to its own kind.
+    Space,
 };
 
 enum class ParameterValueKind {
@@ -107,6 +111,8 @@ enum class ParameterValueKind {
         return "path";
     case SocketValueKind::NumberList:
         return "number-list";
+    case SocketValueKind::Space:
+        return "space";
     }
     return "image";
 }
@@ -224,6 +230,7 @@ isPromotedSocketConnection(const SocketValueKind source,
     case SocketValueKind::ColorField:
     case SocketValueKind::Path:
     case SocketValueKind::NumberList:
+    case SocketValueKind::Space:
         return false;
     }
     return false;

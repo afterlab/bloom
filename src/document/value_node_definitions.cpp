@@ -10,6 +10,7 @@
 #include <bloom/document/value_utility_nodes.hpp>
 
 #include <algorithm>
+#include <span>
 #include <array>
 #include <cstddef>
 #include <string>
@@ -463,6 +464,7 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Space:
     case SocketValueKind::Scalar:
         break;
     case SocketValueKind::Path:
@@ -499,6 +501,7 @@ struct KindVocabulary final {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Space:
     case SocketValueKind::Scalar:
         break;
     case SocketValueKind::Path:
@@ -532,6 +535,7 @@ descriptorDefaultValue(const bloom::document::ValueUtilityOperand& operand) {
     case SocketValueKind::ScalarField:
     case SocketValueKind::Vector2Field:
     case SocketValueKind::ColorField:
+    case SocketValueKind::Space:
     case SocketValueKind::Scalar:
         break;
     case SocketValueKind::Path:
@@ -556,6 +560,9 @@ valueUtilityDefinition(const bloom::document::ValueUtilityDescriptor& descriptor
     outputs.reserve(descriptor.outputs.size());
     for (const auto& declared : descriptor.operands) {
         inputs.push_back(operand(declared.role, declared.kind));
+        // #591: a space arrives by an edge and has no stored form, so no parameter backs it.
+        if (declared.kind == SocketValueKind::Space)
+            continue;
         parameters.push_back(
             parameter(declared.role,
                       declared.schemaKey.empty() ? operandSchemaKeyForSocketKind(declared.kind)
@@ -647,6 +654,8 @@ bool isInlineSelectorSchemaKey(const std::string_view schemaKey) noexcept {
         schemaKey == kIntegerOperationParameterSchemaKey ||
         schemaKey == kBooleanOperationParameterSchemaKey ||
         schemaKey == kTrimModeParameterSchemaKey || schemaKey == kOffsetJoinParameterSchemaKey ||
+        schemaKey == kSpaceModeParameterSchemaKey ||
+        schemaKey == kSpaceConversionParameterSchemaKey ||
         schemaKey == kPathCombineParameterSchemaKey || schemaKey == kStrokeCapParameterSchemaKey ||
         schemaKey == kStrokeStampParameterSchemaKey || schemaKey == kStampAlignParameterSchemaKey ||
         schemaKey == kResampleModeParameterSchemaKey ||
@@ -722,8 +731,13 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         }
         const auto backing = findParameter(input.name);
         if (backing == definition.parameters.end()) {
-            // The only socket with no parameter behind it is a Reroute's pass-through, which is
-            // required precisely because nothing else can supply it.
+            // #591: a Space operand arrives only by an edge (a space has no stored form), and an
+            // unconnected one is "no space", so it is optional.
+            if (definition.lowering == NodeLoweringKind::ValueUtility &&
+                input.valueKind == SocketValueKind::Space && !input.required)
+                continue;
+            // The only other socket with no parameter behind it is a Reroute's pass-through, which
+            // is required precisely because nothing else can supply it.
             if ((definition.lowering != NodeLoweringKind::ValueReroute &&
                  definition.lowering != NodeLoweringKind::ValueBoundsReadout) ||
                 !input.required) {
@@ -812,10 +826,16 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
         // descriptor is what the compiler and the kernel read: a definition that disagreed with it
         // would lower operands the kernel does not expect, at every frame rather than at startup.
         const auto* descriptor = findValueUtilityDescriptor(definition.key.typeId);
+        // #591: a Space operand is a socket with no parameter.
+        const auto parameterOperands = static_cast<std::size_t>(
+            std::ranges::count_if(descriptor == nullptr ? std::span<const bloom::document::ValueUtilityOperand>{}
+                                                        : descriptor->operands,
+                                  [](const bloom::document::ValueUtilityOperand& operand) {
+                                      return operand.kind != SocketValueKind::Space;
+                                  }));
         if (descriptor == nullptr || inputs != descriptor->operands.size() ||
             outputs != descriptor->outputs.size() ||
-            definition.parameters.size() !=
-                descriptor->operands.size() + descriptor->selectors.size() ||
+            definition.parameters.size() != parameterOperands + descriptor->selectors.size() ||
             definition.category != descriptor->category) {
             return false;
         }
@@ -826,7 +846,7 @@ bool hasValidValueLoweringShape(const NodeDefinition& definition) noexcept {
             }
         }
         for (std::size_t index = 0; index < descriptor->selectors.size(); ++index) {
-            const auto& declared = definition.parameters[descriptor->operands.size() + index];
+            const auto& declared = definition.parameters[parameterOperands + index];
             if (declared.role != descriptor->selectors[index].role ||
                 declared.schemaKey != descriptor->selectors[index].schemaKey ||
                 declared.valueKind != ParameterValueKind::Integer) {

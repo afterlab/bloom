@@ -110,7 +110,7 @@ constexpr std::array<ValueUtilityOutput, 2> kLoopValueOutputs{
 // #596 Axes and Axis Tick. Placement is in pixels, Y up on the plot (the path's Y grows downward, so
 // a value's Y is subtracted from the origin). The ranges default to a plot ten units across at 100
 // pixels a unit.
-constexpr std::array<ValueUtilityOperand, 9> kAxesOperands{
+constexpr std::array<ValueUtilityOperand, 10> kAxesOperands{
     ValueUtilityOperand{.role = "xMin", .kind = SocketValueKind::Scalar, .number = -5.0},
     ValueUtilityOperand{.role = "xMax", .kind = SocketValueKind::Scalar, .number = 5.0},
     ValueUtilityOperand{.role = "yMin", .kind = SocketValueKind::Scalar, .number = -5.0},
@@ -120,12 +120,13 @@ constexpr std::array<ValueUtilityOperand, 9> kAxesOperands{
     ValueUtilityOperand{.role = "tickLength", .kind = SocketValueKind::Scalar, .number = 8.0},
     ValueUtilityOperand{.role = "origin", .kind = SocketValueKind::Vector2, .number = 0.0, .y = 0.0},
     ValueUtilityOperand{
-        .role = "pixelsPerUnit", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0}};
+        .role = "pixelsPerUnit", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0},
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space}};
 constexpr std::array<ValueUtilityOutput, 3> kAxesOutputs{
     ValueUtilityOutput{"path", SocketValueKind::Path},
     ValueUtilityOutput{"xTicks", SocketValueKind::Integer},
     ValueUtilityOutput{"yTicks", SocketValueKind::Integer}};
-constexpr std::array<ValueUtilityOperand, 9> kAxisTickOperands{
+constexpr std::array<ValueUtilityOperand, 10> kAxisTickOperands{
     ValueUtilityOperand{.role = "min", .kind = SocketValueKind::Scalar, .number = -5.0},
     ValueUtilityOperand{.role = "max", .kind = SocketValueKind::Scalar, .number = 5.0},
     ValueUtilityOperand{.role = "step", .kind = SocketValueKind::Scalar, .number = 1.0},
@@ -136,7 +137,8 @@ constexpr std::array<ValueUtilityOperand, 9> kAxisTickOperands{
         .role = "pixelsPerUnit", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0},
     ValueUtilityOperand{
         .role = "labelOffset", .kind = SocketValueKind::Vector2, .number = 0.0, .y = 24.0},
-    ValueUtilityOperand{.role = "decimals", .kind = SocketValueKind::Integer, .integer = 0}};
+    ValueUtilityOperand{.role = "decimals", .kind = SocketValueKind::Integer, .integer = 0},
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space}};
 constexpr std::array<ValueUtilityOutput, 4> kAxisTickOutputs{
     ValueUtilityOutput{"value", SocketValueKind::Scalar},
     ValueUtilityOutput{"position", SocketValueKind::Vector2},
@@ -207,6 +209,105 @@ constexpr std::array<ValueUtilityOperand, 3> kShapeMorphOperands{
 constexpr std::array<ValueUtilitySelector, 1> kShapeMorphSelectors{ValueUtilitySelector{
     "pairing", bloom::document::kMorphPairingParameterSchemaKey,
     bloom::document::selectorStoredValue(bloom::document::MorphPairing::ByGroupThenGeometry)}};
+// #591 Coordinate Space. Positions and sizes are in the parent's units (composition pixels without
+// a parent). Scale: `origin` is where the space's (0, 0) lands and `pixelsPerUnit` the size of one
+// unit; Range: the range fills the rectangle at `center` of `size`; Corners: the range's corners
+// land on the four points. `rotation` (clockwise degrees) and `yUp` apply to Scale and Range.
+constexpr std::array<ValueUtilityOperand, 14> kCoordinateSpaceOperands{
+    ValueUtilityOperand{.role = "parent", .kind = SocketValueKind::Space},
+    ValueUtilityOperand{.role = "name", .kind = SocketValueKind::String, .text = "graph"},
+    ValueUtilityOperand{.role = "origin",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceOriginSchemaKey},
+    ValueUtilityOperand{.role = "pixelsPerUnit",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpacePixelsPerUnitSchemaKey,
+                        .number = 100.0,
+                        .y = 100.0},
+    ValueUtilityOperand{.role = "rotation",
+                        .kind = SocketValueKind::Scalar,
+                        .schemaKey = bloom::document::kSpaceRotationParameterSchemaKey},
+    ValueUtilityOperand{.role = "yUp",
+                        .kind = SocketValueKind::Boolean,
+                        .schemaKey = bloom::document::kSpaceYUpSchemaKey,
+                        .flag = true},
+    ValueUtilityOperand{
+        .role = "rangeMin", .kind = SocketValueKind::Vector2, .number = -5.0, .y = -5.0},
+    ValueUtilityOperand{.role = "rangeMax", .kind = SocketValueKind::Vector2, .number = 5.0, .y = 5.0},
+    ValueUtilityOperand{.role = "center",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceCenterSchemaKey},
+    ValueUtilityOperand{.role = "size",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceSizeSchemaKey,
+                        .number = 1000.0,
+                        .y = 1000.0},
+    ValueUtilityOperand{.role = "topLeft",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceCornerSchemaKey},
+    ValueUtilityOperand{.role = "topRight",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceCornerSchemaKey,
+                        .number = 1000.0},
+    ValueUtilityOperand{.role = "bottomRight",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceCornerSchemaKey,
+                        .number = 1000.0,
+                        .y = 1000.0},
+    ValueUtilityOperand{.role = "bottomLeft",
+                        .kind = SocketValueKind::Vector2,
+                        .schemaKey = bloom::document::kSpaceCornerSchemaKey,
+                        .y = 1000.0}};
+constexpr std::array<ValueUtilitySelector, 1> kCoordinateSpaceSelectors{ValueUtilitySelector{
+    bloom::document::kModeParameterRole, bloom::document::kSpaceModeParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::SpaceMode::Scale)}};
+constexpr std::array<ValueUtilityOutput, 1> kCoordinateSpaceOutputs{
+    ValueUtilityOutput{bloom::document::kSpacePortName, SocketValueKind::Space}};
+constexpr std::array<ValueUtilityOperand, 1> kSpaceReadoutOperands{
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space}};
+// Where the space's origin lands, one unit's step along each axis there (pixels), the axes'
+// lengths, the x axis's angle, the range, the 3x3 map row by row (columns x, y, 1), the space's
+// and its parent's names, whether the map is projective, and whether there is a space at all.
+constexpr std::array<ValueUtilityOutput, 12> kSpaceReadoutOutputs{
+    ValueUtilityOutput{"origin", SocketValueKind::Vector2},
+    ValueUtilityOutput{"xAxis", SocketValueKind::Vector2},
+    ValueUtilityOutput{"yAxis", SocketValueKind::Vector2},
+    ValueUtilityOutput{"scale", SocketValueKind::Vector2},
+    ValueUtilityOutput{"rotation", SocketValueKind::Scalar},
+    ValueUtilityOutput{"rangeMin", SocketValueKind::Vector2},
+    ValueUtilityOutput{"rangeMax", SocketValueKind::Vector2},
+    ValueUtilityOutput{"matrix", SocketValueKind::NumberList},
+    ValueUtilityOutput{"name", SocketValueKind::String},
+    ValueUtilityOutput{"parentName", SocketValueKind::String},
+    ValueUtilityOutput{"projective", SocketValueKind::Boolean},
+    ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
+// To Space reads composition pixels and answers the space's units; From Space the reverse.
+constexpr std::array<ValueUtilityOperand, 2> kToSpaceOperands{
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space},
+    ValueUtilityOperand{.role = "pixels", .kind = SocketValueKind::Vector2}};
+constexpr std::array<ValueUtilityOperand, 2> kFromSpaceOperands{
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space},
+    ValueUtilityOperand{.role = "units", .kind = SocketValueKind::Vector2}};
+constexpr std::array<ValueUtilitySelector, 1> kSpaceConversionSelector{ValueUtilitySelector{
+    "conversion", bloom::document::kSpaceConversionParameterSchemaKey,
+    bloom::document::selectorStoredValue(bloom::document::SpaceConversion::Point)}};
+constexpr std::array<ValueUtilityOutput, 2> kSpaceConversionOutputs{
+    ValueUtilityOutput{"result", SocketValueKind::Vector2},
+    ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
+// Place in Space: a layer's Position, Scale and Rotation for a point of a space. `position` is in
+// the space's units and `offset` in pixels after it; the scale is the space's size per unit at the
+// point over `unitSize` (so at that size a layer is drawn at 100%), the rotation the x axis's turn.
+constexpr std::array<ValueUtilityOperand, 4> kPlaceInSpaceOperands{
+    ValueUtilityOperand{.role = bloom::document::kSpacePortName, .kind = SocketValueKind::Space},
+    ValueUtilityOperand{.role = "point", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{.role = "offset", .kind = SocketValueKind::Vector2},
+    ValueUtilityOperand{
+        .role = "unitSize", .kind = SocketValueKind::Vector2, .number = 100.0, .y = 100.0}};
+constexpr std::array<ValueUtilityOutput, 4> kPlaceInSpaceOutputs{
+    ValueUtilityOutput{"position", SocketValueKind::Vector2},
+    ValueUtilityOutput{"scale", SocketValueKind::Vector2},
+    ValueUtilityOutput{"rotation", SocketValueKind::Scalar},
+    ValueUtilityOutput{bloom::document::kValidPortName, SocketValueKind::Boolean}};
 constexpr std::array<ValueUtilityOutput, 1> kPathResult{
     ValueUtilityOutput{"path", SocketValueKind::Path}};
 constexpr std::array<ValueUtilityOperand, 4> kTrimPathOperands{
@@ -626,7 +727,7 @@ constexpr std::array<ValueUtilityOperand, 1> kBooleanValueOperand{
 // composition or to the evaluation request, not to the document's own authored values.
 constexpr std::array<ValueUtilityOperand, 0> kNoOperands{};
 
-constexpr std::array<ValueUtilityDescriptor, 84> kDescriptors{
+constexpr std::array<ValueUtilityDescriptor, 89> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kScalarToStringNodeType, "Scalar To String",
                            ValueUtilityKernel::ScalarToString, NodeCategory::Utilities,
                            kScalarToStringOperands, kNoSelectors, kStringResult},
@@ -882,6 +983,22 @@ constexpr std::array<ValueUtilityDescriptor, 84> kDescriptors{
     ValueUtilityDescriptor{bloom::document::kShapeMorphNodeType, "Shape Morph",
                            ValueUtilityKernel::ShapeMorph, NodeCategory::Values,
                            kShapeMorphOperands, kShapeMorphSelectors, kPathResult},
+    ValueUtilityDescriptor{bloom::document::kCoordinateSpaceNodeType, "Coordinate Space",
+                           ValueUtilityKernel::CoordinateSpace, NodeCategory::Values,
+                           kCoordinateSpaceOperands, kCoordinateSpaceSelectors,
+                           kCoordinateSpaceOutputs},
+    ValueUtilityDescriptor{bloom::document::kSpaceReadoutNodeType, "Space Readout",
+                           ValueUtilityKernel::SpaceReadout, NodeCategory::Values,
+                           kSpaceReadoutOperands, kNoSelectors, kSpaceReadoutOutputs},
+    ValueUtilityDescriptor{bloom::document::kToSpaceNodeType, "To Space",
+                           ValueUtilityKernel::ToSpace, NodeCategory::Values, kToSpaceOperands,
+                           kSpaceConversionSelector, kSpaceConversionOutputs},
+    ValueUtilityDescriptor{bloom::document::kFromSpaceNodeType, "From Space",
+                           ValueUtilityKernel::FromSpace, NodeCategory::Values, kFromSpaceOperands,
+                           kSpaceConversionSelector, kSpaceConversionOutputs},
+    ValueUtilityDescriptor{bloom::document::kPlaceInSpaceNodeType, "Place in Space",
+                           ValueUtilityKernel::PlaceInSpace, NodeCategory::Values,
+                           kPlaceInSpaceOperands, kNoSelectors, kPlaceInSpaceOutputs},
 };
 
 } // namespace

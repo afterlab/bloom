@@ -57,6 +57,25 @@ class OperationKey final {
             }
         } else if constexpr (std::is_same_v<T, CompiledPathValue>) {
             add(*value.value);
+        } else if constexpr (std::is_same_v<T, CompiledSpaceValue>) {
+            // #591: whether there is a space, then its name, dimensions, map, range and the chain
+            // of parents above it (their names; their maps are already in this one).
+            add(value.value != nullptr);
+            for (const auto* space = value.value.get(); space != nullptr;
+                 space = space->parent.get()) {
+                add(space->name);
+                add(space->dimensions);
+                for (const double entry : space->toPixels)
+                    add(entry);
+                add(space->range.has_value());
+                if (space->range) {
+                    add(space->range->minimum.x);
+                    add(space->range->minimum.y);
+                    add(space->range->maximum.x);
+                    add(space->range->maximum.y);
+                }
+                add(space->parent != nullptr);
+            }
         } else if constexpr (std::is_same_v<T, CompiledNumberList>) {
             // #627: the item count, then every item's bits.
             add(value.values->size());

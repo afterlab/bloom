@@ -337,6 +337,7 @@ target_sources(
         value_utility_strings.cpp
         value_utility_numeric.cpp
         value_utility_plot.cpp
+        value_utility_space.cpp
         value_utility_path.cpp
         value_utility_path_stroke.cpp
         value_utility_path_sources.cpp

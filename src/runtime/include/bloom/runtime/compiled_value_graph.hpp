@@ -2,6 +2,7 @@
 
 #include <bloom/core/camera_shake.hpp>
 #include <bloom/core/color.hpp>
+#include <bloom/core/coordinate_space.hpp>
 #include <bloom/core/scalar_primitives.hpp>
 #include <bloom/document/data_block.hpp>
 #include <bloom/document/ids.hpp>
@@ -74,9 +75,20 @@ struct CompiledNumberList final {
     }
 };
 
+// #591: a Space output (core::space::Space), shared in the same way. A null `value` is "no space":
+// what an unconnected space input reads, so a node that can place without one (Function Plot, Axes,
+// Axis Tick) uses its own origin and scale, and one that needs one answers not valid.
+struct CompiledSpaceValue final {
+    std::shared_ptr<const core::space::Space> value;
+    friend bool operator==(const CompiledSpaceValue& left, const CompiledSpaceValue& right) {
+        return left.value == right.value ||
+               (left.value != nullptr && right.value != nullptr && *left.value == *right.value);
+    }
+};
+
 using CompiledValue =
     std::variant<bool, std::int64_t, double, document::Vec2d, document::Vec3d, core::Color4d,
-                 std::string, CompiledPathValue, CompiledNumberList>;
+                 std::string, CompiledPathValue, CompiledNumberList, CompiledSpaceValue>;
 
 // Where one value lands. The plan's value outputs are a flat table: every operation claims a
 // consecutive run of entries in it, so a Separate RGBA's four channels and a Time node's two units
@@ -434,6 +446,9 @@ struct CompiledValueFunctionPlot final {
     CompiledValueOperand origin;
     CompiledValueOperand scale;
     CompiledValueOperand smooth;
+    // #591: the space the plot is drawn in; a null space (nothing connected) places by origin and
+    // scale. Appended: a plot without one is the plot it always was.
+    CompiledValueOperand space{{}, CompiledValue{CompiledSpaceValue{}}};
 
     friend bool operator==(const CompiledValueFunctionPlot&, const CompiledValueFunctionPlot&);
 };
@@ -552,6 +567,7 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 visit(step.origin);
                 visit(step.scale);
                 visit(step.smooth);
+                visit(step.space);
             } else if constexpr (std::is_same_v<Step, CompiledValuePassthrough> ||
                                  std::is_same_v<Step, CompiledValueSeparate> ||
                                  std::is_same_v<Step, CompiledValuePromotion>) {
@@ -647,7 +663,7 @@ inline bool operator==(const CompiledValueFunctionPlot& left,
                        const CompiledValueFunctionPlot& right) {
     return sameFunctionBody(left.body, right.body) && left.start == right.start &&
            left.end == right.end && left.samples == right.samples && left.origin == right.origin &&
-           left.scale == right.scale && left.smooth == right.smooth;
+           left.scale == right.scale && left.smooth == right.smooth && left.space == right.space;
 }
 
 inline bool operator==(const CompiledValueWarpFunction& left,

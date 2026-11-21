@@ -1,5 +1,7 @@
 #include <bloom/runtime/value_utility_kernels.hpp>
 
+#include <bloom/core/coordinate_space.hpp>
+
 #include <bloom/document/value_nodes.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
@@ -9,6 +11,8 @@
 #include <cstdlib>
 #include <iostream>
 #include <limits>
+#include <optional>
+#include <memory>
 #include <source_location>
 #include <string>
 #include <string_view>
@@ -60,6 +64,9 @@ class Expectations final {
                                       const runtime::ValueUtilityLimits limits = {}) {
     return runAt(document::FrameRate::framesPerSecond24(), kernel, values, selectors, limits);
 }
+
+// An unconnected Space input, as the compiler lowers one.
+[[nodiscard]] CompiledValue noSpace() { return runtime::CompiledSpaceValue{}; }
 
 template <typename Value>
 [[nodiscard]] bool holds(const ValueUtilityOutcome& outcome, const std::size_t slot,
@@ -552,7 +559,7 @@ void testAxes(Expectations& expectations) {
     // x from -2 to 2 by 1 (5 ticks), y from -1 to 1 by 0.5 (5 ticks), ticks 10 long, origin (100, 200),
     // 50 by 40 pixels a unit.
     const auto drawn = run(Kernel::Axes, {-2.0, 2.0, -1.0, 1.0, 1.0, 0.5, 10.0, Vec2d{100.0, 200.0},
-                                          Vec2d{50.0, 40.0}});
+                                          Vec2d{50.0, 40.0}, noSpace()});
     expectations.expect(!drawn.failed && holds(drawn, 1, std::int64_t{5}) &&
                             holds(drawn, 2, std::int64_t{5}),
                         "Axes counts five ticks on each axis");
@@ -578,7 +585,7 @@ void testAxes(Expectations& expectations) {
 
     // The axes cross at the range's nearest edge when zero is out of range.
     const auto offset = run(Kernel::Axes, {1.0, 3.0, 2.0, 4.0, 1.0, 1.0, 4.0, Vec2d{0.0, 0.0},
-                                           Vec2d{10.0, 10.0}});
+                                           Vec2d{10.0, 10.0}, noSpace()});
     const auto* shifted = std::get_if<runtime::CompiledPathValue>(&offset.outputs[0]);
     expectations.expect(shifted != nullptr && shifted->value != nullptr &&
                             shifted->value->contours.size() == 2 + 3 + 3 &&
@@ -594,13 +601,13 @@ void testAxes(Expectations& expectations) {
                         "the tick count handles whole steps, no step, a reversed range and too many");
 
     // Refusals say so and still answer an empty path and zero counts.
-    const auto crowded = run(Kernel::Axes, {0.0, 1.0e9, -1.0, 1.0, 1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}});
+    const auto crowded = run(Kernel::Axes, {0.0, 1.0e9, -1.0, 1.0, 1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}, noSpace()});
     const auto* none = std::get_if<runtime::CompiledPathValue>(&crowded.outputs[0]);
     expectations.expect(crowded.failed && none != nullptr && none->value->contours.empty() &&
                             holds(crowded, 1, std::int64_t{0}),
                         "an axis with more than 1024 ticks is refused with an empty path");
     const auto nonFinite = run(Kernel::Axes, {std::numeric_limits<double>::quiet_NaN(), 1.0, 0.0, 1.0,
-                                              1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}});
+                                              1.0, 1.0, 4.0, Vec2d{}, Vec2d{1.0, 1.0}, noSpace()});
     expectations.expect(nonFinite.failed, "a range that is not finite is refused");
 }
 
@@ -610,7 +617,7 @@ void testAxisTick(Expectations& expectations) {
                          const std::int64_t index, const bool yAxis, const Vec2d offset,
                          const std::int64_t decimals) {
         return run(Kernel::AxisTick, {min, max, step, index, yAxis, Vec2d{100.0, 200.0},
-                                      Vec2d{50.0, 40.0}, offset, decimals});
+                                      Vec2d{50.0, 40.0}, offset, decimals, noSpace()});
     };
     // Tick 3 of 0 to 10 by 2.5 is 7.5: 100 + 7.5 * 50 across, 24 below the axis.
     const auto x = tick(0.0, 10.0, 2.5, 3, false, {0.0, 24.0}, 1);
@@ -640,6 +647,258 @@ void testAxisTick(Expectations& expectations) {
                         "tick 4 of -2 to 2 by 1 is the range's end");
 }
 
+// #591 coordinate spaces, against maps worked out by hand and core::space as the reference.
+namespace space_tests {
+using document::Vec2d;
+using Space = std::shared_ptr<const core::space::Space>;
+
+struct Definition final {
+    CompiledValue parent = runtime::CompiledSpaceValue{};
+    std::string name = "graph";
+    Vec2d origin{};
+    Vec2d pixelsPerUnit{100.0, 100.0};
+    double rotation = 0.0;
+    bool yUp = true;
+    Vec2d rangeMin{-5.0, -5.0};
+    Vec2d rangeMax{5.0, 5.0};
+    Vec2d center{};
+    Vec2d size{1000.0, 1000.0};
+    std::array<Vec2d, 4> corners{Vec2d{0.0, 0.0}, Vec2d{1000.0, 0.0}, Vec2d{1000.0, 1000.0},
+                                 Vec2d{0.0, 1000.0}};
+    document::SpaceMode mode = document::SpaceMode::Scale;
+};
+
+[[nodiscard]] ValueUtilityOutcome define(const Definition& d) {
+    return run(Kernel::CoordinateSpace,
+               {d.parent, d.name, d.origin, d.pixelsPerUnit, d.rotation, d.yUp, d.rangeMin, d.rangeMax,
+                d.center, d.size, d.corners[0], d.corners[1], d.corners[2], d.corners[3]},
+               {static_cast<std::int64_t>(d.mode)});
+}
+
+[[nodiscard]] Space spaceOf(const ValueUtilityOutcome& outcome) {
+    const auto* held = outcome.outputCount > 0
+                           ? std::get_if<runtime::CompiledSpaceValue>(&outcome.outputs[0])
+                           : nullptr;
+    return held == nullptr ? nullptr : held->value;
+}
+
+[[nodiscard]] bool near(const double a, const double b, const double tolerance = 1e-9) {
+    return std::abs(a - b) <= tolerance;
+}
+[[nodiscard]] bool near(const CompiledValue& value, const Vec2d expected,
+                        const double tolerance = 1e-9) {
+    const auto* held = std::get_if<Vec2d>(&value);
+    return held != nullptr && near(held->x, expected.x, tolerance) &&
+           near(held->y, expected.y, tolerance);
+}
+
+[[nodiscard]] bool nearScalar(const CompiledValue& value, const double expected) {
+    const auto* held = std::get_if<double>(&value);
+    return held != nullptr && near(*held, expected, 1e-12);
+}
+
+void testDefinitions(Expectations& expectations) {
+    // Origin and scale: the map Function Plot's own origin and scale draw, bit for bit.
+    Definition graph;
+    graph.origin = {256.0, 200.0};
+    graph.pixelsPerUnit = {40.0, 30.0};
+    const auto defined = define(graph);
+    const auto held = spaceOf(defined);
+    expectations.expect(!defined.failed && held != nullptr && held->name == "graph" &&
+                            held->dimensions == 2 && held->parent == nullptr &&
+                            held->range == core::space::Range2{{-5.0, -5.0}, {5.0, 5.0}},
+                        "Coordinate Space defines a named 2D space with its range");
+    if (held == nullptr)
+        return;
+    bool exact = true;
+    for (const double x : {-3.0, -1.0 / 3.0, 0.1, 2.75})
+        for (const double y : {-2.5, 0.2, 1.0}) {
+            const auto pixel = core::space::mapPoint(held->toPixels, {x, y});
+            exact = exact && pixel && pixel->x == 256.0 + x * 40.0 && pixel->y == 200.0 - y * 30.0;
+        }
+    expectations.expect(exact, "an unturned space is exactly the origin plus the scaled units");
+
+    // Range to rectangle: the range's middle on the centre, the range filling the size.
+    Definition rectangle;
+    rectangle.mode = document::SpaceMode::Range;
+    rectangle.rangeMin = {0.0, -1.0};
+    rectangle.rangeMax = {4.0, 1.0};
+    rectangle.center = {300.0, 200.0};
+    rectangle.size = {400.0, 100.0};
+    const auto boxed = spaceOf(define(rectangle));
+    expectations.expect(boxed != nullptr &&
+                            core::space::mapPoint(boxed->toPixels, {0.0, 1.0}) ==
+                                core::space::Point2{100.0, 150.0} &&
+                            core::space::mapPoint(boxed->toPixels, {4.0, -1.0}) ==
+                                core::space::Point2{500.0, 250.0},
+                        "a range to a rectangle puts the range's corners on the rectangle's");
+
+    // Range to corners: projective, every corner on its point.
+    Definition plane;
+    plane.mode = document::SpaceMode::Corners;
+    plane.corners = {Vec2d{180.0, 100.0}, Vec2d{330.0, 100.0}, Vec2d{420.0, 300.0},
+                     Vec2d{90.0, 300.0}};
+    const auto projected = spaceOf(define(plane));
+    const auto corner = [&](const double x, const double y, const Vec2d expected) {
+        const auto pixel = projected ? core::space::mapPoint(projected->toPixels, {x, y})
+                                     : std::nullopt;
+        return pixel && near(pixel->x, expected.x, 1e-9) && near(pixel->y, expected.y, 1e-9);
+    };
+    expectations.expect(projected != nullptr && !core::space::isAffine(projected->toPixels) &&
+                            corner(-5.0, 5.0, plane.corners[0]) && corner(5.0, 5.0, plane.corners[1]) &&
+                            corner(5.0, -5.0, plane.corners[2]) && corner(-5.0, -5.0, plane.corners[3]),
+                        "a range to corners is projective with every corner on its point");
+
+    // A space defined in another: the child's map is the parent's after its own.
+    Definition child;
+    child.parent = runtime::CompiledSpaceValue{held};
+    child.name = "inset";
+    child.origin = {1.0, 1.0};
+    child.pixelsPerUnit = {0.5, 0.5};
+    child.yUp = false;
+    const auto nested = spaceOf(define(child));
+    const auto through = [&](const double x, const double y) {
+        return core::space::mapPoint(held->toPixels, {1.0 + 0.5 * x, 1.0 + 0.5 * y});
+    };
+    const auto direct = nested ? core::space::mapPoint(nested->toPixels, {2.0, -4.0}) : std::nullopt;
+    expectations.expect(nested != nullptr && nested->parent == held && direct &&
+                            near(direct->x, through(2.0, -4.0)->x) &&
+                            near(direct->y, through(2.0, -4.0)->y),
+                        "a parented space composes its map with the parent's");
+
+    // Refusals: each says so and answers no space.
+    Definition flat;
+    flat.pixelsPerUnit = {0.0, 10.0};
+    const auto refusedFlat = define(flat);
+    expectations.expect(refusedFlat.failed && spaceOf(refusedFlat) == nullptr,
+                        "a space with no size on one axis is flat and refused");
+    Definition empty;
+    empty.mode = document::SpaceMode::Range;
+    empty.rangeMax = {-5.0, 5.0};
+    expectations.expect(define(empty).failed, "a range that does not run forward is refused");
+    Definition line = plane;
+    line.corners = {Vec2d{0.0, 0.0}, Vec2d{1.0, 1.0}, Vec2d{2.0, 2.0}, Vec2d{0.0, 5.0}};
+    expectations.expect(define(line).failed, "three corners on one line make no plane");
+    Definition endless;
+    endless.rotation = std::numeric_limits<double>::infinity();
+    expectations.expect(define(endless).failed, "a rotation that is not finite is refused");
+    Definition named;
+    named.name = std::string(document::kMaximumSpaceNameBytes + 1, 'a');
+    expectations.expect(define(named).failed, "a name past 256 bytes is refused");
+    // Sixteen deep: a chain of fifteen parents is the most a space may have.
+    CompiledValue chain = runtime::CompiledSpaceValue{};
+    bool chained = true;
+    for (std::size_t level = 0; level < document::kMaximumSpaceDepth; ++level) {
+        Definition next;
+        next.parent = chain;
+        next.pixelsPerUnit = {1.0, 1.0};
+        const auto outcome = define(next);
+        chained = chained && !outcome.failed;
+        chain = runtime::CompiledSpaceValue{spaceOf(outcome)};
+    }
+    Definition deepest;
+    deepest.parent = chain;
+    expectations.expect(chained && define(deepest).failed,
+                        "a space at most fifteen spaces deep is defined, and one deeper refused");
+}
+
+void testReadoutAndConversions(Expectations& expectations) {
+    Definition graph;
+    graph.origin = {256.0, 200.0};
+    graph.pixelsPerUnit = {40.0, 30.0};
+    graph.rotation = 90.0;
+    const auto held = spaceOf(define(graph));
+    const CompiledValue wired = runtime::CompiledSpaceValue{held};
+    // A quarter turn clockwise, Y up: one unit of x is 40 px down, one unit of y 30 px right.
+    const auto read = run(Kernel::SpaceReadout, {wired});
+    expectations.expect(!read.failed && near(read.outputs[0], {256.0, 200.0}) &&
+                            near(read.outputs[1], {0.0, 40.0}) && near(read.outputs[2], {30.0, 0.0}) &&
+                            near(read.outputs[3], {40.0, 30.0}) && nearScalar(read.outputs[4], 90.0) &&
+                            near(read.outputs[5], {-5.0, -5.0}) && near(read.outputs[6], {5.0, 5.0}) &&
+                            holds(read, 8, std::string("graph")) && holds(read, 9, std::string()) &&
+                            holds(read, 10, false) && holds(read, 11, true),
+                        "Space Readout answers the map's origin, axes, scale, turn, range and name");
+    const auto* matrix = std::get_if<runtime::CompiledNumberList>(&read.outputs[7]);
+    const auto planar = core::space::planar(held->toPixels);
+    expectations.expect(matrix != nullptr &&
+                            *matrix->values == std::vector<double>(planar.begin(), planar.end()),
+                        "the matrix readout is the space's 3x3 map, row by row");
+    const auto none = run(Kernel::SpaceReadout, {noSpace()});
+    expectations.expect(!none.failed && holds(none, 11, false) && holds(none, 8, std::string()),
+                        "with no space connected every readout is empty and not valid");
+
+    // Point conversions are each other's inverse; a vector ignores the origin.
+    const auto from = run(Kernel::FromSpace, {wired, Vec2d{2.0, 1.0}}, {0});
+    expectations.expect(near(from.outputs[0], {256.0 + 30.0, 200.0 + 80.0}) && holds(from, 1, true),
+                        "From Space maps a point of the space to its pixel");
+    const auto to = run(Kernel::ToSpace, {wired, Vec2d{286.0, 280.0}}, {0});
+    expectations.expect(near(to.outputs[0], {2.0, 1.0}) && holds(to, 1, true),
+                        "To Space reads the pixel back as the point");
+    const auto vector = run(Kernel::FromSpace, {wired, Vec2d{1.0, 0.0}}, {1});
+    expectations.expect(near(vector.outputs[0], {0.0, 40.0}), "a vector is turned and scaled only");
+    const auto back = run(Kernel::ToSpace, {wired, Vec2d{0.0, 40.0}}, {1});
+    expectations.expect(near(back.outputs[0], {1.0, 0.0}), "and a pixel vector reads back");
+    expectations.expect(holds(run(Kernel::ToSpace, {noSpace(), Vec2d{1.0, 1.0}}, {0}), 1, false),
+                        "a conversion with no space is not valid");
+
+    // Place in Space: the layer's position, its scale for a 100 px unit and the turn of the x axis.
+    const auto placed = run(Kernel::PlaceInSpace, {wired, Vec2d{1.0, 0.5}, Vec2d{0.0, -3.0},
+                                                   Vec2d{100.0, 100.0}});
+    expectations.expect(near(placed.outputs[0], {256.0 + 15.0, 200.0 + 40.0 - 3.0}) &&
+                            near(placed.outputs[1], {0.4, 0.3}) && nearScalar(placed.outputs[2], 90.0) &&
+                            holds(placed, 3, true),
+                        "Place in Space answers the layer's position, scale and rotation");
+    const auto unplaced =
+        run(Kernel::PlaceInSpace, {noSpace(), Vec2d{1.0, 0.5}, Vec2d{7.0, 8.0}, Vec2d{100.0, 100.0}});
+    expectations.expect(near(unplaced.outputs[0], {7.0, 8.0}) && near(unplaced.outputs[1], {1.0, 1.0}) &&
+                            holds(unplaced, 3, false),
+                        "with no space a layer stays at its offset, unscaled");
+}
+
+void testPlotsInASpace(Expectations& expectations) {
+    // Axes drawn in a space agree, point for point, with the same axes drawn by origin and scale.
+    Definition graph;
+    graph.origin = {100.0, 200.0};
+    graph.pixelsPerUnit = {50.0, 40.0};
+    const CompiledValue wired = runtime::CompiledSpaceValue{spaceOf(define(graph))};
+    const auto own = run(Kernel::Axes, {-2.0, 2.0, -1.0, 1.0, 1.0, 0.5, 10.0, Vec2d{100.0, 200.0},
+                                        Vec2d{50.0, 40.0}, noSpace()});
+    const auto inSpace = run(Kernel::Axes, {-2.0, 2.0, -1.0, 1.0, 1.0, 0.5, 10.0, Vec2d{9.0, 9.0},
+                                            Vec2d{3.0, 3.0}, wired});
+    const auto* a = std::get_if<runtime::CompiledPathValue>(&own.outputs[0]);
+    const auto* b = std::get_if<runtime::CompiledPathValue>(&inSpace.outputs[0]);
+    expectations.expect(!inSpace.failed && a != nullptr && b != nullptr && a->value != nullptr &&
+                            b->value != nullptr && *a->value == *b->value,
+                        "Axes in a space draw exactly what the same origin and scale draw");
+    const auto tickOwn = run(Kernel::AxisTick, {0.0, 10.0, 2.5, std::int64_t{3}, false,
+                                                Vec2d{100.0, 200.0}, Vec2d{50.0, 40.0},
+                                                Vec2d{0.0, 24.0}, std::int64_t{1}, noSpace()});
+    const auto tickSpace = run(Kernel::AxisTick, {0.0, 10.0, 2.5, std::int64_t{3}, false, Vec2d{},
+                                                  Vec2d{1.0, 1.0}, Vec2d{0.0, 24.0},
+                                                  std::int64_t{1}, wired});
+    expectations.expect(holds(tickSpace, 1, Vec2d{475.0, 224.0}) &&
+                            tickOwn.outputs[1] == tickSpace.outputs[1],
+                        "an axis tick in a space is placed where its own origin and scale put it");
+    // A turned space turns the ticks with the axes: an X tick runs along the space's y axis.
+    graph.rotation = 90.0;
+    const CompiledValue turned = runtime::CompiledSpaceValue{spaceOf(define(graph))};
+    const auto turnedAxes = run(Kernel::Axes, {-2.0, 2.0, -1.0, 1.0, 1.0, 0.5, 10.0, Vec2d{},
+                                               Vec2d{1.0, 1.0}, turned});
+    const auto* path = std::get_if<runtime::CompiledPathValue>(&turnedAxes.outputs[0]);
+    const bool tickAlong = path != nullptr && path->value != nullptr &&
+                           path->value->contours.size() == 12 &&
+                           path->value->contours[2].anchors.size() == 2;
+    expectations.expect(tickAlong &&
+                            near(path->value->contours[2].anchors[0].point.y,
+                                 path->value->contours[2].anchors[1].point.y) &&
+                            near(std::abs(path->value->contours[2].anchors[0].point.x -
+                                          path->value->contours[2].anchors[1].point.x),
+                                 10.0),
+                        "a turned space's X ticks run along its turned y axis, 10 px long");
+}
+
+} // namespace space_tests
+
 int main() {
     Expectations expectations;
     testDescriptorShapes(expectations);
@@ -651,5 +910,8 @@ int main() {
     testMalformedOperands(expectations);
     testAxes(expectations);
     testAxisTick(expectations);
+    space_tests::testDefinitions(expectations);
+    space_tests::testReadoutAndConversions(expectations);
+    space_tests::testPlotsInASpace(expectations);
     return expectations.failures() == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
 }

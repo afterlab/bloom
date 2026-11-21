@@ -117,7 +117,8 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     const auto integer = [&] { return std::holds_alternative<std::int64_t>(constant.value); };
     if (schemaKey == kScalarValueParameterSchemaKey ||
         schemaKey == kScalarOperandParameterSchemaKey ||
-        schemaKey == kStampRotationParameterSchemaKey || schemaKey == kResampleGapSchemaKey ||
+        schemaKey == kStampRotationParameterSchemaKey ||
+        schemaKey == kSpaceRotationParameterSchemaKey || schemaKey == kResampleGapSchemaKey ||
         schemaKey == kResampleDensitySchemaKey || schemaKey == kResamplePercentageSchemaKey ||
         schemaKey == kResampleStartOffsetSchemaKey || schemaKey == kWarpAmountSchemaKey ||
         schemaKey == kWarpSizeSchemaKey || schemaKey == kWarpPhaseSchemaKey ||
@@ -209,6 +210,24 @@ valueGraphConstantMatchesSchema(const std::string_view schemaKey,
     if (schemaKey == kTrimModeParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
         return stored != nullptr && selectorFromStoredValue(kTrimModes, *stored).has_value();
+    }
+    // #591 Coordinate Space's points, sizes and Y direction.
+    if (isSpaceVec2SchemaKey(schemaKey)) {
+        const auto* value = std::get_if<Vec2d>(&constant.value);
+        return value != nullptr && std::isfinite(value->x) && std::isfinite(value->y) &&
+               std::abs(value->x) <= kMaximumSpaceMagnitude &&
+               std::abs(value->y) <= kMaximumSpaceMagnitude;
+    }
+    if (schemaKey == kSpaceYUpSchemaKey)
+        return std::holds_alternative<bool>(constant.value);
+    // #591 Coordinate Space's definition and To Space / From Space's conversion.
+    if (schemaKey == kSpaceModeParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kSpaceModes, *stored).has_value();
+    }
+    if (schemaKey == kSpaceConversionParameterSchemaKey) {
+        const auto* stored = std::get_if<std::int64_t>(&constant.value);
+        return stored != nullptr && selectorFromStoredValue(kSpaceConversions, *stored).has_value();
     }
     if (schemaKey == kOffsetJoinParameterSchemaKey) {
         const auto* stored = std::get_if<std::int64_t>(&constant.value);
@@ -845,7 +864,7 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kChromaticAberrationCenterSchemaKey ||
            schemaKey == kLightRaysCenterSchemaKey || isFourColorGradientPointSchemaKey(schemaKey) ||
            schemaKey == kRollingShutterCameraOffsetSchemaKey ||
-           isWarpPointSchemaKey(schemaKey) ||
+           isWarpPointSchemaKey(schemaKey) || isSpaceVec2SchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey);
 }
@@ -878,6 +897,8 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            schemaKey == kPathSkewSchemaKey || schemaKey == kPathSkewAxisSchemaKey ||
            // #597: the morph's amount is keyed.
            schemaKey == kMorphAmountSchemaKey ||
+           // #591: a Coordinate Space turns.
+           schemaKey == kSpaceRotationParameterSchemaKey ||
            schemaKey == "bloom.transform-2d.opacity" || schemaKey == "bloom.blur.radius-y" ||
            isFourColorGradientScalarSchemaKey(schemaKey) ||
            schemaKey == "bloom.blur.red-scale" || schemaKey == "bloom.blur.green-scale" ||

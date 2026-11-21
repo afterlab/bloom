@@ -8,6 +8,7 @@
 
 #include "value_utility_support.hpp"
 
+#include <bloom/core/coordinate_space.hpp>
 #include <bloom/document/parameter.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 
@@ -16,6 +17,8 @@
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <limits>
+#include <optional>
 #include <string>
 
 namespace {
@@ -64,6 +67,8 @@ ValueUtilityOutcome axes(const ValueUtilityInvocation& invocation) {
     const double tickLength = reader.scalar(6);
     const auto origin = reader.vector2(7);
     const auto scale = reader.vector2(8);
+    // #591: a space replaces the origin and the scale.
+    const auto space = reader.space(9);
     if (reader.malformed())
         return outcome;
     if (!std::isfinite(xMin) || !std::isfinite(xMax) || !std::isfinite(yMin) ||
@@ -90,6 +95,72 @@ ValueUtilityOutcome axes(const ValueUtilityInvocation& invocation) {
     // is not, so the frame is always inside the plotted area.
     const double crossX = std::clamp(0.0, std::min(xMin, xMax), std::max(xMin, xMax));
     const double crossY = std::clamp(0.0, std::min(yMin, yMax), std::max(yMin, yMax));
+    if (space != nullptr) {
+        // #591: every point through the space, and each tick across its axis along the space's
+        // other axis there, `tickLength` pixels long whatever the space's scale.
+        const auto& map = space->toPixels;
+        const auto mapped = [&](const double x, const double y) -> std::optional<document::Vec2d> {
+            const auto pixel = core::space::mapPoint(map, {x, y});
+            return pixel ? std::optional(document::Vec2d{pixel->x, pixel->y}) : std::nullopt;
+        };
+        const auto across = [&](const double x, const double y,
+                                const bool alongY) -> std::optional<document::Vec2d> {
+            const auto axes = core::space::jacobian(map, {x, y});
+            if (!axes)
+                return std::nullopt;
+            const auto direction = alongY ? axes->yAxis : axes->xAxis;
+            const double length = std::hypot(direction.x, direction.y);
+            if (!(length > 0.0) || !std::isfinite(length))
+                return std::nullopt;
+            return document::Vec2d{direction.x / length * half, direction.y / length * half};
+        };
+        bool reached = true;
+        const auto add = [&](const std::optional<document::Vec2d> from,
+                             const std::optional<document::Vec2d> to) {
+            if (!from || !to || !finite(*from) || !finite(*to)) {
+                reached = false;
+                return;
+            }
+            value.contours.push_back(segment(*from, *to));
+        };
+        add(mapped(xMin, crossY), mapped(xMax, crossY));
+        add(mapped(crossX, yMin), mapped(crossX, yMax));
+        for (std::int64_t index = 0; index < xTicks && reached; ++index) {
+            const double x = xMin + static_cast<double>(index) * xStep;
+            const auto at = mapped(x, crossY);
+            const auto step = across(x, crossY, true);
+            if (!at || !step) {
+                reached = false;
+                break;
+            }
+            // From its end on the +y side, as the axes drawn without a space run.
+            add(document::Vec2d{at->x + step->x, at->y + step->y},
+                document::Vec2d{at->x - step->x, at->y - step->y});
+        }
+        for (std::int64_t index = 0; index < yTicks && reached; ++index) {
+            const double y = yMin + static_cast<double>(index) * yStep;
+            const auto at = mapped(crossX, y);
+            const auto step = across(crossX, y, false);
+            if (!at || !step) {
+                reached = false;
+                break;
+            }
+            add(document::Vec2d{at->x - step->x, at->y - step->y},
+                document::Vec2d{at->x + step->x, at->y + step->y});
+        }
+        if (!reached) {
+            outcome.failed = true;
+            outcome.summary = "Axes reach the space's horizon";
+            outcome.detail = "A point of the axes is at infinity in the space; narrow the range.";
+            outcome.outputs[0] = runtime::CompiledPathValue{};
+            return outcome;
+        }
+        outcome.outputs[0] =
+            runtime::CompiledPathValue{std::make_shared<document::PathValue>(std::move(value))};
+        outcome.outputs[1] = xTicks;
+        outcome.outputs[2] = yTicks;
+        return outcome;
+    }
     value.contours.push_back(segment(point(xMin, crossY), point(xMax, crossY)));
     value.contours.push_back(segment(point(crossX, yMin), point(crossX, yMax)));
     for (std::int64_t index = 0; index < xTicks; ++index) {
@@ -122,13 +193,21 @@ ValueUtilityOutcome axisTick(const ValueUtilityInvocation& invocation) {
     const auto offset = reader.vector2(7);
     const int decimals = static_cast<int>(
         std::clamp<std::int64_t>(reader.integer(8), 0, document::kMaximumAxisTickDecimals));
+    // #591: a space replaces the origin and the scale.
+    const auto space = reader.space(9);
     if (reader.malformed())
         return outcome;
     const auto count = document::axisTickCount(minimum, maximum, step);
     const double value = minimum + static_cast<double>(index) * step;
-    const document::Vec2d position =
+    document::Vec2d position =
         yAxis ? document::Vec2d{origin.x + offset.x, origin.y - value * scale.y + offset.y}
               : document::Vec2d{origin.x + value * scale.x + offset.x, origin.y + offset.y};
+    if (space != nullptr) {
+        const auto mark = core::space::mapPoint(
+            space->toPixels, yAxis ? core::space::Point2{0.0, value} : core::space::Point2{value, 0.0});
+        position = mark ? document::Vec2d{mark->x + offset.x, mark->y + offset.y}
+                        : document::Vec2d{std::numeric_limits<double>::infinity(), 0.0};
+    }
     // A tick outside the range, or on a range that has none, is not valid: its label is empty so a
     // text layer reading it shows nothing, and the numbers are the ones its index names.
     const bool valid = index >= 0 && index < count && std::isfinite(value) && finite(position);

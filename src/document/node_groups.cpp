@@ -132,10 +132,12 @@ constexpr std::array<std::string_view, 7> kTimeValues{
 constexpr std::array<std::string_view, 7> kColorValues{
     "bloom.separate-hsv", "bloom.combine-hsv",   "bloom.hue-shift",   "bloom.luminance",
     "bloom.mix-color",    "bloom.separate-rgba", "bloom.combine-rgba"};
-constexpr std::array<std::string_view, 7> kVector{
-    "bloom.vector2-math",      "bloom.vector3-math", "bloom.vector2-reduce",
-    "bloom.vector3-reduce",    "bloom.rotate-2d",    "bloom.polar-to-cartesian",
-    "bloom.cartesian-to-polar"};
+// #591's coordinate spaces sit with the other point conversions (#554 names no group for them).
+constexpr std::array<std::string_view, 12> kVector{
+    "bloom.vector2-math",      "bloom.vector3-math",     "bloom.vector2-reduce",
+    "bloom.vector3-reduce",    "bloom.rotate-2d",        "bloom.polar-to-cartesian",
+    "bloom.cartesian-to-polar", "bloom.coordinate-space", "bloom.space-readout",
+    "bloom.to-space",          "bloom.from-space",       "bloom.place-in-space"};
 // Planned: File Cache.
 constexpr std::array<std::string_view, 8> kUtilities{
     "bloom.reroute",       "bloom.separate-xy",  "bloom.combine-xy", "bloom.separate-xyz",

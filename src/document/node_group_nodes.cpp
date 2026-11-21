@@ -116,6 +116,9 @@ namespace {
     operand(kFunctionPlotOriginRole, SocketValueKind::Vector2, Vec2d{0.0, 0.0});
     operand(kFunctionPlotScaleRole, SocketValueKind::Vector2, Vec2d{100.0, 100.0});
     operand(kFunctionPlotSmoothRole, SocketValueKind::Boolean, true);
+    // #591: a space to plot in, in place of the origin and pixels per unit. An edge, with no
+    // parameter behind it: a space has no stored form.
+    definition.inputs.push_back({std::string(kFunctionPlotSpacePort), SocketValueKind::Space, false});
     return definition;
 }
 

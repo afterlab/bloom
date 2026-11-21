@@ -754,8 +754,32 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
                 return std::nullopt;
             return compiledValueFrom(declared->defaultValue);
         };
+        // A value the node's mode does not read (document::isParameterInactive) is not lowered:
+        // its curve is not compiled, so it reads as the definition's default.
+        const auto inactiveDefault =
+            [&](const std::string_view role) -> std::optional<runtime::CompiledValue> {
+            const auto* binding = runtime::detail::findParameterBinding(node, role);
+            const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+            if (parameter == nullptr ||
+                !document::isParameterInactive(*composition_, node, parameter->schemaKey))
+                return std::nullopt;
+            const auto declared = std::ranges::find(definition.parameters, role,
+                                                    &document::ParameterDefinition::role);
+            if (declared == definition.parameters.end())
+                return std::nullopt;
+            return compiledValueFrom(declared->defaultValue);
+        };
         for (const auto& declared : descriptor->operands) {
+            if (auto unread = inactiveDefault(declared.role)) {
+                operands.push_back(runtime::CompiledValueOperand{{}, *std::move(unread)});
+                continue;
+            }
             auto value = operandOf(declared.role);
+            // #591: a space input with nothing connected reads "no space".
+            if (!value.has_value() && declared.kind == runtime::SocketValueKind::Space &&
+                fixedInputEdge(node.id, declared.role) == nullptr)
+                value = runtime::CompiledValueOperand{
+                    {}, runtime::CompiledValue{runtime::CompiledSpaceValue{}}};
             if (!value.has_value() && declared.optional) {
                 if (auto fallback = unboundDefault(declared.role))
                     value = runtime::CompiledValueOperand{{}, *std::move(fallback)};
@@ -973,6 +997,13 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
             plot.origin = *std::move(origin);
             plot.scale = *std::move(scale);
             plot.smooth = *std::move(smooth);
+            // #591: the space, when one is connected; an edge that cannot be read is a failure.
+            if (fixedInputEdge(node.id, document::kFunctionPlotSpacePort) != nullptr) {
+                auto space = operandOf(document::kFunctionPlotSpacePort);
+                if (!space)
+                    return std::nullopt;
+                plot.space = *std::move(space);
+            }
             return runtime::CompiledValueKernel{std::move(plot)};
         }
         if (node.typeId == document::kWarpPathFunctionNodeType) {

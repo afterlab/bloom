@@ -46,6 +46,8 @@ inline constexpr std::string_view kFunctionPlotOriginRole = "origin";
 inline constexpr std::string_view kFunctionPlotScaleRole = "pixelsPerUnit";
 inline constexpr std::string_view kFunctionPlotSmoothRole = "smooth";
 inline constexpr std::string_view kFunctionPlotPathPort = "path";
+// #591: the optional space the plot is drawn in.
+inline constexpr std::string_view kFunctionPlotSpacePort = "space";
 inline constexpr std::int64_t kMinimumFunctionPlotSamples = 2;
 // One contour holds at most kMaximumPathAnchors, so a plot of this many samples is one contour.
 inline constexpr std::int64_t kMaximumFunctionPlotSamples = 4096;

@@ -193,6 +193,16 @@ const std::vector<Entry>& table() {
         // #509 Path Stroke's stamp rotation.
         {kStampRotationParameterSchemaKey,
          number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
+        // #591 Coordinate Space: its turn, and its points and sizes in its parent's units
+        // (composition pixels without a parent).
+        {kSpaceRotationParameterSchemaKey,
+         number(kLowest, kHighest, -360.0, 360.0, 1.0, 2, kDegrees)},
+        {kSpaceOriginSchemaKey, pixels(-kMaximumSpaceMagnitude, kMaximumSpaceMagnitude, 4096.0)},
+        {kSpacePixelsPerUnitSchemaKey,
+         pixels(-kMaximumSpaceMagnitude, kMaximumSpaceMagnitude, 1000.0)},
+        {kSpaceCenterSchemaKey, pixels(-kMaximumSpaceMagnitude, kMaximumSpaceMagnitude, 4096.0)},
+        {kSpaceSizeSchemaKey, pixels(-kMaximumSpaceMagnitude, kMaximumSpaceMagnitude, 4096.0)},
+        {kSpaceCornerSchemaKey, pixels(-kMaximumSpaceMagnitude, kMaximumSpaceMagnitude, 4096.0)},
         {kOpacityParameterSchemaKey, number(0.0, 1.0, 0.0, 1.0, 1.0, 1, kPercent, 100.0)},
         {kTimeRemapParameterSchemaKey, number(kLowest, kHighest, 0.0, 10.0, 0.01, 3, kSeconds)},
         {kBlendModeParameterSchemaKey, choice()},
@@ -428,6 +438,9 @@ constexpr std::array kChoiceSchemas{
     std::string_view("bloom.path.resample-output"),
     std::string_view("bloom.path.warp-function"),
     std::string_view("bloom.path.morph-pairing"),
+    // #591 Coordinate Space's mode and the conversions' Point or Vector.
+    std::string_view("bloom.space.mode"),
+    std::string_view("bloom.space.conversion"),
     std::string_view("bloom.loop-value.mode"),
     std::string_view("bloom.convert.radix"),
     std::string_view("bloom.integer.operation"),

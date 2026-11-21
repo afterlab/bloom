@@ -29,9 +29,9 @@ namespace bloom::runtime {
 // exhaustion and invalid numeric data are separate diagnosed failures with typed fallbacks;
 // cancellation stops the current evaluation and is never reported as a malformed plan.
 
-// No library node declares more than four outputs (Separate HSV's four channels), so the outcome
-// carries its values inline rather than allocating one vector per operation per frame.
-inline constexpr std::size_t kMaximumValueUtilityOutputs = 4;
+// No library node declares more than twelve outputs (#591 Space Readout's), so the outcome carries
+// its values inline rather than allocating one vector per operation per frame.
+inline constexpr std::size_t kMaximumValueUtilityOutputs = 12;
 inline constexpr std::size_t kDefaultValueStringBytes = std::size_t{1024} * 1024;
 inline constexpr std::size_t kDefaultValueStringScratchBytes = std::size_t{16} * 1024 * 1024;
 

@@ -139,6 +139,14 @@ enum class ValueUtilityKernel : std::uint8_t {
     WarpPath,
     // #597: one path morphed into another.
     ShapeMorph,
+    // #591 coordinate spaces (docs/architecture/coordinate-spaces.md): define a space, read its
+    // map as values, convert points and vectors between it and composition pixels, and place a
+    // layer in it.
+    CoordinateSpace,
+    SpaceReadout,
+    ToSpace,
+    FromSpace,
+    PlaceInSpace,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -231,6 +239,50 @@ inline constexpr std::string_view kRoundCornersNodeType = "bloom.round-corners";
 inline constexpr std::string_view kPathStrokeNodeType = "bloom.path-stroke";
 inline constexpr std::string_view kMaskPathNodeType = "bloom.mask-path";
 inline constexpr std::string_view kTextOutlineNodeType = "bloom.text-outline";
+inline constexpr std::string_view kCoordinateSpaceNodeType = "bloom.coordinate-space";
+inline constexpr std::string_view kSpaceReadoutNodeType = "bloom.space-readout";
+inline constexpr std::string_view kToSpaceNodeType = "bloom.to-space";
+inline constexpr std::string_view kFromSpaceNodeType = "bloom.from-space";
+inline constexpr std::string_view kPlaceInSpaceNodeType = "bloom.place-in-space";
+
+// #591: the socket a space arrives on. It has no parameter (a space has no stored form), so an
+// unconnected one is "no space": Function Plot, Axes and Axis Tick then place by their own origin
+// and pixels per unit, and a node that needs a space answers not valid.
+inline constexpr std::string_view kSpacePortName = "space";
+// How a Coordinate Space is defined (stored integers are durable): Scale places the space's origin
+// at a point with a size per unit; Range maps the range onto a rectangle; Corners maps the range's
+// four corners to four points, a projective (perspective) space.
+inline constexpr std::string_view kSpaceModeParameterSchemaKey = "bloom.space.mode";
+enum class SpaceMode : std::uint8_t { Scale = 0, Range = 1, Corners = 2 };
+inline constexpr std::array<SpaceMode, 3> kSpaceModes{SpaceMode::Scale, SpaceMode::Range,
+                                                      SpaceMode::Corners};
+// The space's turn in degrees, clockwise on screen: its own key, so both surfaces give it a dial.
+inline constexpr std::string_view kSpaceRotationParameterSchemaKey = "bloom.space.rotation";
+// Coordinate Space's other values each have their own key, so a mode's unread values are inactive
+// (parameter_activity.cpp), the points get Viewer handles, and every one of them can be keyed.
+inline constexpr std::string_view kSpaceOriginSchemaKey = "bloom.space.origin";
+inline constexpr std::string_view kSpacePixelsPerUnitSchemaKey = "bloom.space.pixels-per-unit";
+inline constexpr std::string_view kSpaceYUpSchemaKey = "bloom.space.y-up";
+inline constexpr std::string_view kSpaceCenterSchemaKey = "bloom.space.center";
+inline constexpr std::string_view kSpaceSizeSchemaKey = "bloom.space.size";
+inline constexpr std::string_view kSpaceCornerSchemaKey = "bloom.space.corner";
+// A space's numbers are finite and at most this large.
+inline constexpr double kMaximumSpaceMagnitude = 1.0e12;
+[[nodiscard]] constexpr bool isSpaceVec2SchemaKey(const std::string_view key) noexcept {
+    return key == kSpaceOriginSchemaKey || key == kSpacePixelsPerUnitSchemaKey ||
+           key == kSpaceCenterSchemaKey || key == kSpaceSizeSchemaKey ||
+           key == kSpaceCornerSchemaKey;
+}
+// What To Space and From Space convert: a point (the map) or a vector (its derivative at the
+// space's origin, which for an affine space is its linear part).
+inline constexpr std::string_view kSpaceConversionParameterSchemaKey = "bloom.space.conversion";
+enum class SpaceConversion : std::uint8_t { Point = 0, Vector = 1 };
+inline constexpr std::array<SpaceConversion, 2> kSpaceConversions{SpaceConversion::Point,
+                                                                  SpaceConversion::Vector};
+// The longest name a space may have, in bytes.
+inline constexpr std::size_t kMaximumSpaceNameBytes = 256;
+// How many parents a space may have above it.
+inline constexpr std::size_t kMaximumSpaceDepth = 16;
 
 // #344 and #530 path processing (docs/architecture/path-processing.md). A Path operand is a socket
 // whose unconnected value is the empty path; it holds a constant or a driver, never keys (keys

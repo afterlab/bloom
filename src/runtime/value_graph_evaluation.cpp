@@ -975,9 +975,14 @@ void Evaluator::evaluateFunctionPlot(const runtime::CompiledValueOperation& oper
         const auto* value = operandOf(kernel.smooth);
         return value == nullptr ? nullptr : std::get_if<bool>(value);
     }();
+    // #591: the space the plot is drawn in (null: by origin and scale).
+    const auto* spaceOperand = operandOf(kernel.space);
+    const auto* spaceValue =
+        spaceOperand == nullptr ? nullptr : std::get_if<runtime::CompiledSpaceValue>(spaceOperand);
+    const core::space::Space* space = spaceValue == nullptr ? nullptr : spaceValue->value.get();
     const auto empty = [&] { write(operation, 0, runtime::CompiledPathValue{}); };
     if (start == nullptr || end == nullptr || samples == nullptr || origin == nullptr ||
-        scale == nullptr || smooth == nullptr || kernel.body == nullptr) {
+        scale == nullptr || smooth == nullptr || kernel.body == nullptr || spaceValue == nullptr) {
         fail(operation, {}, "Function Plot input is unavailable",
              "An input of the plot is not a value the value graph computed.");
         empty();
@@ -1012,8 +1017,14 @@ void Evaluator::evaluateFunctionPlot(const runtime::CompiledValueOperation& oper
                                             static_cast<double>(count - 1);
         const auto y = body.at(x);
         body.clearDiagnostics();
-        const double px = origin->x + x * scale->x;
-        const double py = y.has_value() ? origin->y - *y * scale->y : 0.0;
+        double px = origin->x + x * scale->x;
+        double py = y.has_value() ? origin->y - *y * scale->y : 0.0;
+        if (space != nullptr && y.has_value()) {
+            // A point the space sends to infinity (a projective space's horizon) is a gap too.
+            const auto pixel = core::space::mapPoint(space->toPixels, {x, *y});
+            px = pixel ? pixel->x : std::numeric_limits<double>::infinity();
+            py = pixel ? pixel->y : 0.0;
+        }
         if (!y.has_value() || !std::isfinite(px) || !std::isfinite(py)) {
             flush();
             continue;

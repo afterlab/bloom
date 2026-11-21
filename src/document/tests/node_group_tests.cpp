@@ -58,6 +58,10 @@ void everyGroupIsNamed() {
         valueGroups += isValueSubgroup(group) ? 1 : 0;
     expect(valueGroups == 8, "eight value groups sit under the Values submenu");
     expect(!nodeGroupOf("bloom.no-such-node").has_value(), "an unknown type has no group");
+    // #591: the coordinate space nodes sit with the other point conversions.
+    for (const auto typeId : {"bloom.coordinate-space", "bloom.space-readout", "bloom.to-space",
+                              "bloom.from-space", "bloom.place-in-space"})
+        expect(nodeGroupOf(typeId) == NodeGroup::Vector, std::string(typeId) + " is in Vector");
 }
 
 // The group is presentation. Grouping must not reach the effect mask, which is part of the node's

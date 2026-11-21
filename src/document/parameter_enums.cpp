@@ -386,6 +386,12 @@ std::vector<ParameterEnumOption> parameterEnumOptions(const std::string_view sch
     if (schemaKey == kTrimModeParameterSchemaKey)
         return named(kTrimModes, {"Simultaneously", "Individually"},
                      [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kSpaceModeParameterSchemaKey)
+        return named(kSpaceModes, {"Origin and scale", "Range to rectangle", "Range to corners"},
+                     [](const auto value) { return selectorStoredValue(value); });
+    if (schemaKey == kSpaceConversionParameterSchemaKey)
+        return named(kSpaceConversions, {"Point", "Vector"},
+                     [](const auto value) { return selectorStoredValue(value); });
     if (schemaKey == kOffsetJoinParameterSchemaKey)
         return named(kOffsetJoins, {"Miter", "Round", "Bevel"},
                      [](const auto value) { return selectorStoredValue(value); });

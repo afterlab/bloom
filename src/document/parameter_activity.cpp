@@ -5,6 +5,7 @@
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
 #include <bloom/document/vignette_nodes.hpp>
 #include <bloom/document/warp_nodes.hpp>
@@ -58,6 +59,23 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
             return mode != ResampleMode::ByLength;
         if (schemaKey == kResamplePercentageSchemaKey)
             return mode != ResampleMode::Percentage;
+        return false;
+    }
+    // #591 Coordinate Space reads only what its mode defines the space by: Scale its origin and
+    // size per unit, Range its rectangle, Corners its four corners; the turn and the Y direction
+    // apply to Scale and Range.
+    if (node.typeId == kCoordinateSpaceNodeType) {
+        const auto mode = static_cast<SpaceMode>(
+            constantOf(composition, node, kModeParameterRole)
+                .value_or(selectorStoredValue(SpaceMode::Scale)));
+        if (schemaKey == kSpaceOriginSchemaKey || schemaKey == kSpacePixelsPerUnitSchemaKey)
+            return mode != SpaceMode::Scale;
+        if (schemaKey == kSpaceCenterSchemaKey || schemaKey == kSpaceSizeSchemaKey)
+            return mode != SpaceMode::Range;
+        if (schemaKey == kSpaceCornerSchemaKey)
+            return mode != SpaceMode::Corners;
+        if (schemaKey == kSpaceRotationParameterSchemaKey || schemaKey == kSpaceYUpSchemaKey)
+            return mode == SpaceMode::Corners;
         return false;
     }
     // #598 Warp Path: only Wave and Ripple travel along a cycle, so only they read the phase.

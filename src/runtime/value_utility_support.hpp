@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 
 namespace bloom::runtime::detail {
@@ -54,6 +55,12 @@ class ValueUtilityReader final {
         static const document::PathValue empty;
         const auto* value = read<CompiledPathValue>(index);
         return value == nullptr || value->value == nullptr ? empty : *value->value;
+    }
+    // #591: a space operand, shared. Null is "no space" (nothing connected); a malformed operand
+    // reads as null too, and is reported.
+    [[nodiscard]] std::shared_ptr<const core::space::Space> space(const std::size_t index) noexcept {
+        const auto* value = read<CompiledSpaceValue>(index);
+        return value == nullptr ? nullptr : value->value;
     }
     [[nodiscard]] document::Vec3d vector3(const std::size_t index) noexcept {
         const auto* value = read<document::Vec3d>(index);
@@ -138,6 +145,8 @@ class ValueUtilityReader final {
         return CompiledPathValue{};
     case document::SocketValueKind::NumberList:
         return CompiledNumberList{};
+    case document::SocketValueKind::Space:
+        return CompiledSpaceValue{};
     }
     return 0.0;
 }
@@ -233,6 +242,8 @@ evaluateScalarPrimitive(const core::primitives::ScalarPrimitive operation,
 [[nodiscard]] ValueUtilityOutcome evaluateValueNumeric(const ValueUtilityInvocation& invocation);
 // #596: Axes and Axis Tick.
 [[nodiscard]] ValueUtilityOutcome evaluateValuePlot(const ValueUtilityInvocation& invocation);
+// #591: Coordinate Space, Space Readout, To Space, From Space and Place in Space.
+[[nodiscard]] ValueUtilityOutcome evaluateValueSpace(const ValueUtilityInvocation& invocation);
 // #344 and #530: Transform Path, Trim Path, Offset Path, Boolean Paths, Merge Paths, Round Corners.
 [[nodiscard]] ValueUtilityOutcome evaluateValuePath(const ValueUtilityInvocation& invocation);
 [[nodiscard]] ValueUtilityOutcome evaluateValuePathStroke(const ValueUtilityInvocation& invocation);
