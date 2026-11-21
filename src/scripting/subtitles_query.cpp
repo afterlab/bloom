@@ -5,9 +5,12 @@
 #include <bloom/commands/subtitles_operations.hpp>
 #include <bloom/core/int128.hpp>
 #include <bloom/document/cue_markup.hpp>
+#include <bloom/document/node_definition_registry.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/host/linked_subtitle_files.hpp>
+#include <bloom/runtime/snapshot_compiler.hpp>
+#include <bloom/runtime/subtitles_layout.hpp>
 #include <bloom/subtitles/subtitles.hpp>
 
 #include <algorithm>
@@ -108,6 +111,34 @@ namespace {
         showing[index] = ends.size();
     }
     return showing;
+}
+
+// The checks of every cue (docs/architecture/subtitles.md, "Checks"), from the node as the
+// composition compiles it: its fonts, styling and layout. A node that does not reach the
+// composition's output is not compiled, and its read-back carries no checks.
+[[nodiscard]] std::vector<std::vector<runtime::SubtitleCueCheck>>
+cueChecks(const document::Snapshot& snapshot, const document::CompositionId compositionId,
+          const document::Composition& composition, const document::NodeId node,
+          const document::CueListValue& list) {
+    const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    const auto compiled = compiler.compile({snapshot, compositionId}, {});
+    if (!compiled.plan)
+        return {};
+    for (const auto& operation : compiled.plan->operations()) {
+        const auto* subtitles = std::get_if<runtime::CompiledSubtitles>(&operation);
+        if (subtitles == nullptr || subtitles->sourceNodeId != node)
+            continue;
+        const runtime::SubtitlesCheckSettings settings{
+            .maxCharactersPerLine = subtitles->settings.maxCharactersPerLine,
+            .maxReadingSpeed = subtitles->settings.maxReadingSpeed,
+            .minDuration = subtitles->settings.minDuration,
+            .minGapFrames = subtitles->settings.minGap,
+            .frameRate = composition.format().frameRate(),
+            .compositionDuration = composition.duration()};
+        return runtime::checkSubtitleCues(*subtitles, list,
+                                          runtime::subtitlesConstantStyle(*subtitles), settings);
+    }
+    return {};
 }
 
 } // namespace
@@ -239,6 +270,7 @@ SubtitlesReading readSubtitles(const document::Snapshot& snapshot,
         first = *index;
     }
     const auto showing = showingAtStart(list);
+    const auto checks = cueChecks(snapshot, query.composition, *composition, node, list);
     const auto pageSize =
         std::clamp<std::size_t>(query.pageSize, 1, kSubtitlesQueryMaximumPageSize);
     for (std::size_t index = 0; index < list.cues.size(); ++index) {
@@ -280,6 +312,9 @@ SubtitlesReading readSubtitles(const document::Snapshot& snapshot,
                                    " cues show when this one starts; a frame draws at most " +
                                    std::to_string(document::kMaximumActiveCues) +
                                    " (subtitleActiveCues)");
+        if (index < checks.size())
+            for (const auto& check : checks[index])
+                row.warnings.push_back(check.message);
         reading.cues.push_back(std::move(row));
     }
     return reading;
