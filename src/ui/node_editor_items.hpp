@@ -1191,9 +1191,12 @@ class NodeItem final : public QGraphicsObject {
                 connect(colorChip_, &kit::KColorChip::colorChanged, this,
                         [this](const kit::KColor& color) { commitColor(color); });
                 colorRowLabel_ = tr("Color");
-                // The colour row is the one row that is not a ValueRow (the chip is positioned on
-                // its own, below), so its diamond is held directly rather than in valueRows_.
+                // The swatch row heads its R/G/B/A rows in the parameter's place, as every other
+                // colour's does (#757: it used to be placed after all the rows, so a Text Source
+                // showed bare channel rows under Size and its swatch alone at the card's foot).
                 colorDiamond_ = makeCardDiamond(document::kSolidColorParameterRole);
+                valueRows_.push_back({colorRowLabel_, colorChip_, colorDiamond_,
+                                      document::kSolidColorParameterRole});
                 addColorComponentRows(document::kSolidColorParameterRole);
             } else if (role == document::kTextParameterRole) {
                 textContent_ = new kit::KLineEdit;
@@ -1316,8 +1319,6 @@ class NodeItem final : public QGraphicsObject {
             wrapPropertyRow(row.label, row.widget, row.diamond, row.componentDiamond, row.before,
                             row.after);
         }
-        if (colorChip_)
-            wrapPropertyRow(colorRowLabel_, colorChip_, colorDiamond_);
         for (std::size_t index = 0; index < readOnlyLabels_.size(); ++index)
             wrapPropertyRow(readOnlyRows_[index].first, readOnlyLabels_[index],
                             readOnlyDiamonds_[index]);
@@ -2186,13 +2187,6 @@ class NodeItem final : public QGraphicsObject {
                 }
             }
         }
-        if (colorDiamond_ != nullptr) {
-            const auto* parameter =
-                parameterForRole(node, composition, document::kSolidColorParameterRole);
-            colorDiamond_->setParameterId(parameter == nullptr ? document::ParameterId{}
-                                                               : parameter->id);
-            colorDiamond_->refresh();
-        }
 
         std::size_t readOnlyIndex = 0;
         for (const auto& binding : node.parameters) {
@@ -2414,12 +2408,6 @@ class NodeItem final : public QGraphicsObject {
                 std::max(controlColumn, static_cast<qreal>(row.widget->sizeHint().width()));
             rowHeight = std::max(rowHeight, static_cast<qreal>(row.widget->sizeHint().height()));
         }
-        if (colorChip_ != nullptr) {
-            labelColumn = std::max(labelColumn, rowMetrics.horizontalAdvance(colorRowLabel_));
-            controlColumn =
-                std::max(controlColumn, static_cast<qreal>(colorChip_->sizeHint().width()));
-            rowHeight = std::max(rowHeight, static_cast<qreal>(colorChip_->sizeHint().height()));
-        }
         for (const auto& [label, value] : readOnlyRows_) {
             labelColumn = std::max(labelColumn, rowMetrics.horizontalAdvance(label));
             controlColumn = std::max(controlColumn, valueMetrics.horizontalAdvance(value));
@@ -2435,7 +2423,7 @@ class NodeItem final : public QGraphicsObject {
                 ++hiddenRows;
         const auto rowCount =
             static_cast<qreal>(valueRows_.size() - (imageRange_ && !imageSequence_ ? 1 : 0) -
-                               hiddenRows + readOnlyRows_.size() + (colorChip_ != nullptr ? 1 : 0));
+                               hiddenRows + readOnlyRows_.size());
         // The card's own floor, measured from what it actually carries (task S1, item 2): the
         // shared label column, the narrowest usable control beside it, and the widest socket name,
         // each inside the card's padding. A persisted or dragged width never goes below it, so no
@@ -2478,9 +2466,6 @@ class NodeItem final : public QGraphicsObject {
         std::set<QString> parameterRoles;
         for (const auto& row : valueRows_)
             if (const auto role = controlRoles_.find(row.widget); role != controlRoles_.end())
-                parameterRoles.insert(role->second);
-        if (colorChip_)
-            if (const auto role = controlRoles_.find(colorChip_); role != controlRoles_.end())
                 parameterRoles.insert(role->second);
         // #543: a gradient stop's socket waits with its row, like a row a card widget keeps.
         for (const auto* socket : sockets_)
@@ -2582,10 +2567,6 @@ class NodeItem final : public QGraphicsObject {
                 continue;
             }
             placeRow(row.widget, y);
-            y += rowHeight + kCardRowGap;
-        }
-        if (colorChip_) {
-            placeRow(colorChip_, y);
             y += rowHeight + kCardRowGap;
         }
         for (auto* label : readOnlyLabels_) {
