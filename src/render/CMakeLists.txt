@@ -1385,7 +1385,10 @@ target_sources(
         native_samples.cpp
         ocio_gpu_program.cpp
         text_glyph_source.hpp
+        text_font_access.hpp
         text_raster.cpp
+        styled_text.cpp
+        unicode_text_tables.inc
         path_raster.cpp
     PUBLIC
         FILE_SET HEADERS
@@ -1396,6 +1399,7 @@ target_sources(
             include/bloom/render/display_buffer.hpp
             include/bloom/render/display_pixel_packing.hpp
             include/bloom/render/embedded_fonts.hpp
+            include/bloom/render/styled_text.hpp
             include/bloom/render/gpu_affine.hpp
             include/bloom/render/gpu_blend.hpp
             include/bloom/render/gpu_composite.hpp

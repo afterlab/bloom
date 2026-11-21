@@ -1,5 +1,6 @@
 #include <bloom/render/text_raster.hpp>
 
+#include "text_font_access.hpp"
 #include "text_glyph_source.hpp"
 
 #include <bloom/core/utf8.hpp>
@@ -46,66 +47,14 @@ constexpr std::int64_t kCoordinateBound = 1 << 24;
     return value >= -kCoordinateBound && value <= kCoordinateBound;
 }
 
-template <typename Face> [[nodiscard]] bool fontIsParsed(const Face& face) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontIsParsed(face);
-    else
-        return detail::externalFontIsParsed(face);
-}
-template <typename Face>
-[[nodiscard]] float fontScaleForEmPixelSize(const Face& face, const double size) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontScaleForEmPixelSize(face, size);
-    else
-        return detail::externalFontScaleForEmPixelSize(face, size);
-}
-template <typename Face> [[nodiscard]] auto fontVerticalMetrics(const Face& face) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontVerticalMetrics(face);
-    else
-        return detail::externalFontVerticalMetrics(face);
-}
-template <typename Face>
-[[nodiscard]] int fontGlyphIndex(const Face& face, const char32_t scalar) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontGlyphIndex(face, scalar);
-    else
-        return detail::externalFontGlyphIndex(face, scalar);
-}
-template <typename Face>
-[[nodiscard]] int fontGlyphKernAdvance(const Face& face, const int left, const int right) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontGlyphKernAdvance(face, left, right);
-    else
-        return detail::externalFontGlyphKernAdvance(face, left, right);
-}
-template <typename Face>
-[[nodiscard]] auto fontGlyphHorizontalMetrics(const Face& face, const int glyph) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontGlyphHorizontalMetrics(face, glyph);
-    else
-        return detail::externalFontGlyphHorizontalMetrics(face, glyph);
-}
-template <typename Face>
-[[nodiscard]] auto fontGlyphBitmapBox(const Face& face, const int glyph, const float scaleX,
-                                      const float scaleY, const float shiftX,
-                                      const float shiftY) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        return detail::embeddedFontGlyphBitmapBox(face, glyph, scaleX, scaleY, shiftX, shiftY);
-    else
-        return detail::externalFontGlyphBitmapBox(face, glyph, scaleX, scaleY, shiftX, shiftY);
-}
-template <typename Face>
-void fontRasterizeGlyph(const Face& face, const std::span<std::uint8_t> output, const int width,
-                        const int height, const int stride, const float scaleX, const float scaleY,
-                        const float shiftX, const float shiftY, const int glyph) noexcept {
-    if constexpr (std::is_same_v<Face, EmbeddedFace>)
-        detail::embeddedFontRasterizeGlyph(face, output, width, height, stride, scaleX, scaleY,
-                                           shiftX, shiftY, glyph);
-    else
-        detail::externalFontRasterizeGlyph(face, output, width, height, stride, scaleX, scaleY,
-                                           shiftX, shiftY, glyph);
-}
+using bloom::render::font_access::fontGlyphBitmapBox;
+using bloom::render::font_access::fontGlyphHorizontalMetrics;
+using bloom::render::font_access::fontGlyphIndex;
+using bloom::render::font_access::fontGlyphKernAdvance;
+using bloom::render::font_access::fontIsParsed;
+using bloom::render::font_access::fontRasterizeGlyph;
+using bloom::render::font_access::fontScaleForEmPixelSize;
+using bloom::render::font_access::fontVerticalMetrics;
 
 template <typename Face>
 [[nodiscard]] double measureGlyphRun(const Face& face, const std::u32string& run,

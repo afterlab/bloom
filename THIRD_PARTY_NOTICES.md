@@ -309,3 +309,13 @@ standards are licensed under the Creative Commons Attribution 4.0 International 
 incorporated into source code, as these tables are, are licensed under the BSD 3-Clause License.
 The source revisions and digests are recorded in `src/document/HTML-NAMED-REFERENCES-PROVENANCE.md`
 and `src/subtitles/WHATWG-ENCODING-PROVENANCE.md`.
+
+### Unicode Character Database
+
+Bloom embeds tables generated from the Unicode Character Database 16.0.0 for text layout (issue
+#752): the UAX #14 line break classes and the ranges of the scripts that need shaping
+(`src/render/unicode_text_tables.inc`, from `LineBreak.txt`, `UnicodeData.txt` and `Scripts.txt`
+at https://www.unicode.org/Public/16.0.0/ucd/). Copyright © 1991-2024 Unicode, Inc. Distributed
+under the Unicode License v3 (https://www.unicode.org/license.txt): permission is granted to use,
+copy, modify and distribute the data files with this copyright and permission notice. The digests
+are recorded in `src/render/UNICODE-PROVENANCE.md`.

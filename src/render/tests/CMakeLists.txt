@@ -102,6 +102,14 @@ bloom_add_test(
     LABELS unit primitives text
 )
 
+# #752: the styled layout the Subtitles node draws with (runs, UAX #14 breaks, wraps).
+add_executable(bloom_render_styled_text_test styled_text_test.cpp)
+target_link_libraries(bloom_render_styled_text_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_styled_text_test)
+bloom_enable_strict_floating_point(bloom_render_styled_text_test)
+bloom_add_test(NAME bloom.render.styled_text COMMAND bloom_render_styled_text_test
+    LABELS unit primitives text)
+
 add_executable(bloom_render_path_raster_test path_raster_test.cpp)
 target_link_libraries(bloom_render_path_raster_test PRIVATE bloom_render)
 bloom_enable_warnings(bloom_render_path_raster_test)
