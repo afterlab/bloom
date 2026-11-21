@@ -451,7 +451,9 @@ worker writes and checks them.
   format description (`CMTextFormatDescriptionCreateFromBigEndianTextDescriptionData`), the
   language code, the title as QuickTime user-data full name, `marksOutputTrackAsEnabled` off, the
   frame-rate time scale, and all tracks in one input group with no default; the cues are queued
-  as the same samples. Its reopen check reads the tracks back with FFmpeg's demuxer like every
+  as the same samples. AVAssetWriter writes no track user data into an MP4, so after it finishes
+  `ffmpeg::nameSubtitleTracks` adds each text track's user-data `name` box, as FFmpeg's muxer
+  writes a title, by rewriting the movie box at the end of the file (no sample offset moves). Its reopen check reads the tracks back with FFmpeg's demuxer like every
   other route, and `bloom.media.videotoolbox-export` reads them back again independently.
 - **Windows.** The Media Foundation generation codes only pictures; its packets, the subtitle
   tracks and the reopen check are libavformat's and the software generation's, unchanged.
