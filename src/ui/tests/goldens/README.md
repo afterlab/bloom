@@ -202,3 +202,15 @@ place of the Fill glyph's solid box. Both references were regenerated with `--up
 DPR 1 and 1.5 and visually inspected. Before approval the mean channel errors were 4.99503 (DPR 1)
 and 4.96147 (DPR 1.5), with changed fractions 0.0771801 and 0.0768632. Comparison tolerances and
 full-image coverage are unchanged; rendering identity goldens are unchanged.
+
+FILTER-SNAP approval (2026-11-21, #742, #743): the selected Background's Properties Object group
+gains Filter and Snap rows under Blending Mode (both Automatic, a new layer's defaults), and each
+Layer card in Nodes gains its Filter and Snap rows, so the fixture's compact spread layout now lets
+the Background card run under the card below it (placement of new cards counts the rows; the
+fixture's fixed spread does not). Both references were regenerated with `--update-goldens` at DPR 1
+and 1.5, run with QT_SCALE_FACTOR set directly so the 1.5 reference really is DPR 1.5, and visually
+inspected. Before approval the mean channel errors were 2.10182 (DPR 1) and 2.08269 (DPR 1.5), with
+changed fractions 0.0122405 and 0.0113312; of the DPR 1 error, Properties gave 0.89 and Nodes 0.16.
+The remaining 1.05 (Viewer text placement, the top bar, Assets) was drift already present under the
+1.2 bound before this change and is absorbed here. Comparison tolerances and full-image coverage are
+unchanged; rendering identity goldens are unchanged.
