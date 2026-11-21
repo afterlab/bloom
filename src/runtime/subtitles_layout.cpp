@@ -354,6 +354,32 @@ layoutSubtitleCues(const CompiledSubtitles& subtitles, const document::CueListVa
     return out;
 }
 
+std::variant<std::vector<SubtitlesPlacedBlock>, std::string>
+placeSubtitleCues(const CompiledSubtitles& subtitles, const document::CueListValue& list,
+                  const core::RationalTime time, const SubtitlesStyleValues& style,
+                  const render::PathCancellation& cancelled) {
+    std::vector<std::size_t> active;
+    for (std::size_t index = 0; index < list.cues.size(); ++index) {
+        const auto& cue = *list.cues[index];
+        if (time < cue.start)
+            break;
+        if (time < cue.end)
+            active.push_back(index);
+    }
+    std::vector<SubtitlesPlacedBlock> placed;
+    if (active.empty())
+        return placed;
+    auto laid = layoutSubtitleCues(subtitles, list, active, style, cancelled);
+    if (auto* message = std::get_if<std::string>(&laid))
+        return std::move(*message);
+    for (const auto& layout : std::get<std::vector<SubtitleCueLayout>>(laid))
+        placed.push_back({layout.index, layout.id,
+                          {layout.x - layout.padding, layout.y - layout.padding,
+                           layout.x + layout.block.width + layout.padding,
+                           layout.y + layout.block.height + layout.padding}});
+    return placed;
+}
+
 SubtitlesStyleValues subtitlesConstantStyle(const CompiledSubtitles& subtitles) {
     SubtitlesStyleValues style;
     const auto scalar = [](const CompiledScalarParameter& parameter, double& target) {

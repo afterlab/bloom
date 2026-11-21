@@ -68,6 +68,19 @@ layoutSubtitleCues(const CompiledSubtitles& subtitles, const document::CueListVa
                    std::span<const std::size_t> indices, const SubtitlesStyleValues& style,
                    const render::PathCancellation& cancelled = {});
 
+// #752: where each cue that shows at `time` (on the node's clock) is drawn: its block (its box
+// when the box is on), author pixels, in stacking order. What the Viewer outlines and hit-tests;
+// the same layout the frame draws. Fails as layoutSubtitleCues() does.
+struct SubtitlesPlacedBlock final {
+    std::size_t index = 0;
+    std::uint64_t id = 0;
+    render::PathBounds block;
+};
+[[nodiscard]] std::variant<std::vector<SubtitlesPlacedBlock>, std::string>
+placeSubtitleCues(const CompiledSubtitles& subtitles, const document::CueListValue& list,
+                  core::RationalTime time, const SubtitlesStyleValues& style,
+                  const render::PathCancellation& cancelled = {});
+
 // The safe area the node places cues in, author pixels.
 [[nodiscard]] render::PathBounds subtitlesSafeArea(const CompiledSubtitlesSettings& settings);
 
