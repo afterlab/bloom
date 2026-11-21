@@ -7,6 +7,7 @@
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/sha256.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_presets.hpp>
@@ -1068,9 +1069,118 @@ void testLoudnessOnTheHeadlessRoute() {
     std::error_code ignored;
     std::filesystem::remove_all(root, ignored);
 }
+// #752: a headless render of a PNG range with `subtitles` writes each Subtitles node's cues as
+// sidecar files beside the frames, lists them in the result with their size, cue count and SHA-256
+// (the digest of the file on disk), and a render without the setting writes none. Embedding in an
+// image is refused with a message that names the sidecar formats.
+void testSubtitleSidecarsOnTheHeadlessRoute() {
+    const auto root = bloom::test_support::processTempDirectory() / "bloom-render-subtitles";
+    std::filesystem::remove_all(root);
+    std::filesystem::create_directories(root);
+    auto config = runtime::TaskSchedulerConfig::defaults();
+    config.rowBandWorkerCount = runtime::kSerialRowBandWorkers;
+    runtime::TaskScheduler scheduler(config);
+    runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
+    runtime::GpuProcessFrameEvaluatorOptions options;
+    options.hostMemorySampler = bloom::test_support::fixedMemoryBudgetSample;
+    options.enabled = false;
+    const auto provider = host::GpuExportProvider::create(options);
+    auto created =
+        Session::createNew("Subtitles", "Composition", core::RationalTime::fromInteger(1));
+    expect(static_cast<bool>(created), "subtitles session");
+    if (!created)
+        return;
+    auto session = std::move(created).takeSession();
+    const auto script = parseScriptJson(
+        R"([{"op":"bloom.layer.add-subtitles","args":{"composition":1,"text":)"
+        R"("1\n00:00:00,000 --> 00:00:00,500\nHello\n\n2\n00:00:00,500 --> 00:00:01,000\nWorld\n"}}])");
+    expect(static_cast<bool>(script), "the subtitles script parses");
+    if (!script)
+        return;
+    bool added = true;
+    for (const auto& transaction : script.transactions())
+        added = session->executeJsonOperation(transaction.operation, transaction.arguments)
+                    .succeeded() &&
+                added;
+    expect(added, "the Subtitles layer is added");
+    if (!added)
+        return;
+    const auto composition = session->snapshot().project().compositions().front().id();
+    const auto render = [&](const std::string& file,
+                            const std::optional<document::ExportSubtitles>& subtitles) {
+        return Render::run(*session, scheduler, compiler,
+                           RenderRequest{.composition = composition,
+                                         .frame = std::nullopt,
+                                         .range = std::pair<std::uint64_t, std::uint64_t>{0, 23},
+                                         .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+                                         .destination = root / file,
+                                         .replaceExisting = true,
+                                         .subtitles = subtitles},
+                           root / ("scratch-" + file), provider);
+    };
+    const auto fileText = [](const std::filesystem::path& path) {
+        std::ifstream input(path, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>());
+    };
+    const auto sha256 = [&](const std::filesystem::path& path) {
+        const auto text = fileText(path);
+        core::Sha256Hasher hasher;
+        static_cast<void>(hasher.update(std::as_bytes(std::span(text.data(), text.size()))));
+        return hasher.finalize();
+    };
+
+    const auto result = render(
+        "with.png", document::ExportSubtitles{.sidecars = {document::ExportSubtitleFormat::Srt,
+                                                           document::ExportSubtitleFormat::WebVtt},
+                                              .embed = false,
+                                              .nodes = std::nullopt});
+    expect(result.succeeded, "the render with subtitles succeeds: " + result.diagnostic);
+    expect(result.publishedFrames == 24, "the frames are published");
+    expect(result.subtitles.size() == 2, "the result lists both sidecars");
+    if (result.subtitles.size() == 2) {
+        const auto& srt = result.subtitles[0];
+        const auto& vtt = result.subtitles[1];
+        expect(srt.sidecar == document::ExportSubtitleFormat::Srt &&
+                   vtt.sidecar == document::ExportSubtitleFormat::WebVtt,
+               "the sidecars come in format order");
+        for (const auto* track : {&srt, &vtt}) {
+            expect(std::filesystem::exists(track->path) && track->path.parent_path() == root &&
+                       track->path.filename().string().starts_with("with"),
+                   "the sidecar is written beside the frames: " + track->path.string());
+            expect(track->cues == 2 && track->bytes == std::filesystem::file_size(track->path),
+                   "the sidecar lists its cues and size");
+            expect(track->digest && *track->digest == sha256(track->path),
+                   "the listed digest is the SHA-256 of the file on disk");
+            expect(fileText(track->path).find("Hello") != std::string::npos,
+                   "the sidecar carries the cue text");
+        }
+        expect(srt.path.extension() == ".srt" && vtt.path.extension() == ".vtt",
+               "the sidecars carry their format's extension");
+    }
+
+    const auto without = render("without.png", std::nullopt);
+    expect(without.succeeded && without.subtitles.empty(),
+           "a render without subtitles lists none: " + without.diagnostic);
+    std::size_t sidecars = 0;
+    for (const auto& entry : std::filesystem::directory_iterator(root))
+        sidecars += entry.path().filename().string().starts_with("without") &&
+                    (entry.path().extension() == ".srt" || entry.path().extension() == ".vtt");
+    expect(sidecars == 0, "a render without subtitles writes no sidecar");
+
+    const auto embedded = render(
+        "embed.png", document::ExportSubtitles{.sidecars = {document::ExportSubtitleFormat::Srt},
+                                               .embed = true,
+                                               .nodes = std::nullopt});
+    expect(!embedded.succeeded &&
+               embedded.diagnostic.find("SRT, WebVTT or TTML sidecar files") != std::string::npos,
+           "embedding in an image is refused, naming the sidecar formats: " + embedded.diagnostic);
+    std::error_code ignored;
+    std::filesystem::remove_all(root, ignored);
+}
 } // namespace bloom::scripting
 
 int main() {
+    bloom::scripting::testSubtitleSidecarsOnTheHeadlessRoute();
     bloom::scripting::testLoudnessOnTheHeadlessRoute();
     bloom::scripting::testParity();
     bloom::scripting::testDesktopQueueMatchesHeadless();

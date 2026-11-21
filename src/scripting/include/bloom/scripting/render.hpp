@@ -46,6 +46,9 @@ struct RenderRequest final {
     // Who encodes a movie preset (document::ExportEncoderPreference); see
     // host::exportHardwareRoute.
     document::ExportEncoderPreference encoder = document::ExportEncoderPreference::Automatic;
+    // #752: the subtitle tracks to deliver with the render: sidecar files beside an image, and
+    // embedded tracks for a format whose container carries them. Absent delivers none.
+    std::optional<document::ExportSubtitles> subtitles = std::nullopt;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
@@ -86,6 +89,9 @@ struct RenderResult final {
     std::optional<host::ExportWorkerMemory> workerMemory = std::nullopt;
     // #570: the measured and delivered loudness of a normalizing render.
     std::optional<host::ExportLoudnessReport> loudness = std::nullopt;
+    // #752: every subtitle track the render delivered (a sidecar file, with its size and SHA-256,
+    // or a track embedded in the movie).
+    std::vector<host::ExportSubtitleFile> subtitles = {};
     // #751: the export log's `export.capacity.assumed` lines: a capacity admission could not
     // sample and what it assumed instead. Empty while every capacity was sampled.
     std::vector<std::string> capacityAssumptions = {};

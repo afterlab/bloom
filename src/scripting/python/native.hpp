@@ -51,7 +51,7 @@ class NativeHost final {
     [[nodiscard]] nb::dict render(std::uint64_t composition, std::uint64_t first,
                                   std::uint64_t last, bool range, const std::string& preset,
                                   const std::string& destination, std::uint64_t cancellationTask,
-                                  bool replace, bool requireDevice);
+                                  bool replace, bool requireDevice, const nb::object& subtitles);
     // #724 Scopes (scopes.cpp): `options` is bloom.scopes' complete request; `progress` is None or
     // a callable taking (frames done, frames total) that may raise to stop the read.
     [[nodiscard]] nb::dict scopes(const nb::dict& options, std::uint64_t cancellationTask,

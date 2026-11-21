@@ -249,6 +249,10 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (output.settings.includeAudio)
         output.settings.loudness = request.loudness;
     output.settings.encoder = request.encoder;
+    output.settings.subtitles = request.subtitles;
+    if (request.subtitles && request.subtitles->embed &&
+        !document::exportFormatEmbedsSubtitles(*format))
+        return failed(std::string(host::kSubtitleEmbedUnsupportedReason));
     if (*format == document::ExportFormat::Dpx)
         output.settings.codecProfile =
             request.preset == output::OutputPresetV1::DpxRgb16V1 ? "16bit" : "10bit";
@@ -396,6 +400,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.gpuDeviceOwnershipEpoch = provenance.gpuDeviceOwnershipEpoch;
             result.workerMemory = verification.workerMemory;
             result.loudness = verification.loudness;
+            result.subtitles = verification.subtitles;
         }
         if (!result.succeeded) {
             if (runner.stopped()) {

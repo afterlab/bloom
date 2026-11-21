@@ -833,12 +833,24 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .defaultValue = "ask",
           .choices = {{"ask", "Fail and name the existing file"},
                       {"replace", "Replace existing files"},
-                      {"refuse", "Fail when a file exists"}}}});
-    render.result = "{publishedFrames, preservationReport, gpuFrames|null, "
-                    "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
-                    "files:[{path, digest:\"sha256:<hex>\"}]}. The route fields say which route "
-                    "evaluated the frames and read null when none was recorded; query:render-route "
-                    "reads the Viewer's frame.";
+                      {"refuse", "Fail when a file exists"}}},
+         {.name = "subtitles",
+          .type = "object",
+          .summary =
+              "Also write the composition's subtitles as sidecar files "
+              "<name>.<language>[.<n>].<format> beside the images, frame-exact to the "
+              "range: {sidecar:[\"srt\"|\"vtt\"|\"ttml\" (each at most once)], nodes:[Subtitles "
+              "node ids] (1..256; absent means every Subtitles node with Export as track "
+              "on)}. Absent writes none.",
+          .range = "sidecar needs at least one format"}});
+    render.result =
+        "{publishedFrames, preservationReport, gpuFrames|null, "
+        "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
+        "files:[{path, digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
+        "language, title, format:\"srt\"|\"vtt\"|\"ttml\", path, cues, bytes, sha256}] "
+        "(with subtitles). The route fields say which route "
+        "evaluated the frames and read null when none was recorded; query:render-route "
+        "reads the Viewer's frame.";
     render.errors = {
         makeError("bloom.mcp.export-unavailable",
                   "the destination exists and overwrite is not replace (ask and refuse both stop)",
@@ -973,7 +985,18 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .summary = "Encoder threads in the worker. 0 is automatic. Not given uses the saved "
                      "Preferences value.",
           .range = "0..64",
-          .defaultValue = "the Preferences value (automatic)"}});
+          .defaultValue = "the Preferences value (automatic)"},
+         {.name = "subtitles",
+          .type = "object",
+          .summary =
+              "Deliver the composition's subtitles with the export: {sidecar:[\"srt\"|\"vtt\"|"
+              "\"ttml\" (each at most once)], embed:boolean (default false), nodes:[Subtitles "
+              "node ids] (1..256; absent means every Subtitles node with Export as track "
+              "on)}. Sidecar files are <name>.<language>[.<n>].<format> beside the "
+              "output; embed puts the tracks inside a MOV, MP4 or WebM movie (MXF, image "
+              "sequences and WAV carry none and refuse embed: use sidecars). Needs a "
+              "sidecar format or embed. Absent delivers none.",
+          .range = "sidecar or embed"}});
     exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
                         "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
                         "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
@@ -981,7 +1004,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
                         "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
                         "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
                         "null when none was recorded), files:[{path, "
-                        "digest:\"sha256:<hex>\"}]}";
+                        "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
+                        "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
+                        "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
+                        "sidecar)}";
     exportTool.errors = renderErrors;
     addExamples(
         exportTool,

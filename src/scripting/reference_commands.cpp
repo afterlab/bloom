@@ -792,7 +792,18 @@ void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
              {.name = "--out",
               .type = "path",
               .required = true,
-              .summary = "The output folder; created when missing."}},
+              .summary = "The output folder; created when missing."},
+             {.name = "--subtitles",
+              .type = "string",
+              .summary = "Also write the subtitles as sidecar files "
+                         "frame.<language>[.<n>].<format> beside the images: a comma list of "
+                         "srt, vtt and ttml.",
+              .range = "srt,vtt,ttml in any order, each once"},
+             {.name = "--subtitle-nodes",
+              .type = "string",
+              .summary = "The Subtitles node ids to deliver, comma separated (1..256). Needs "
+                         "--subtitles.",
+              .defaultValue = "every Subtitles node with Export as track on"}},
             "The preservation report and \"rendered N frame(s) to <out>\"; exit status 5 on a "
             "render failure.",
             "bloom-cli render --project scene.bloom --range 0-47 --preset PngRgba8SrgbV1 --out "
@@ -813,9 +824,27 @@ void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
               .summary = "Confirm replacing every existing destination that asks."},
              {.name = "--save",
               .type = "flag",
-              .summary = "Write the imports of verified results back to the project."}},
+              .summary = "Write the imports of verified results back to the project."},
+             {.name = "--subtitles",
+              .type = "string",
+              .summary = "Deliver subtitle sidecar files with every selected output, replacing "
+                         "its saved subtitles setting for this run: a comma list of srt, vtt "
+                         "and ttml. The project file is not changed.",
+              .range = "srt,vtt,ttml in any order, each once"},
+             {.name = "--embed-subtitles",
+              .type = "flag",
+              .summary = "Also embed the subtitle tracks in every MOV, MP4 and WebM output; an "
+                         "output of another format is refused with a message naming the sidecar "
+                         "formats. Alone it embeds without sidecar files."},
+             {.name = "--subtitle-nodes",
+              .type = "string",
+              .summary = "The Subtitles node ids to deliver, comma separated (1..256). Needs "
+                         "--subtitles or --embed-subtitles.",
+              .defaultValue = "every Subtitles node with Export as track on"}},
             "Export events as JSON; exit status non-zero when a job fails.",
-            "bloom-cli export --project scene.bloom --all --replace", fileEffects());
+            "bloom-cli export --project scene.bloom --all --replace --subtitles srt,vtt "
+            "--embed-subtitles",
+            fileEffects());
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -877,8 +906,13 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
     api("bloom.render", "Render a frame or a range to image files.",
         "bloom.render.frame(number, *, out, composition=None, preset=...) and "
         "bloom.render.range(first, last, *, out, ...). Output keeps alpha; the composition "
-        "background colour is not rendered.",
-        "bloom.render.frame(0, out=\"frames\")");
+        "background colour is not rendered. subtitles={\"sidecar\": [\"srt\", \"vtt\", \"ttml\"], "
+        "\"nodes\": [12]} also writes each Subtitles node's cues as sidecar files "
+        "<name>.<language>[.<n>].<format> beside the images (nodes is optional: absent means every "
+        "node with Export as track on; \"embed\" is refused for images). The result's subtitles is "
+        "a tuple of RenderSubtitle(node, language, title, format, path, cues, bytes, sha256) and "
+        "each sidecar is also in files.",
+        "bloom.render.range(0, 47, out=\"frames\", subtitles={\"sidecar\": [\"srt\", \"vtt\"]})");
     api("bloom.scopes", "Read the Scopes panel's tables, a summary or a picture of a scope.",
         "bloom.scopes.read(frame=None, *, last_frame=None, composition=None, time=None, "
         "scopes=None, signal=\"display\", axis_maximum=1, region=None, ignore_transparent=False, "

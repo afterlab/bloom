@@ -29,6 +29,33 @@ std::string digestFile(const std::filesystem::path& path) {
     return "sha256:" + std::string(hex.data(), hex.size());
 }
 
+// bloom.render hands over {"sidecar": [format, ...], "embed": bool, "nodes": [id, ...] | None}
+// (render.py normalizes and checks the user's dict); a malformed one is a ValueError here too.
+std::optional<document::ExportSubtitles> subtitleSettings(const nb::object& given) {
+    if (given.is_none())
+        return std::nullopt;
+    if (!nb::isinstance<nb::dict>(given))
+        throw nb::value_error("subtitles is a dict");
+    const auto dict = nb::cast<nb::dict>(given);
+    document::ExportSubtitles parsed;
+    if (dict.contains("sidecar"))
+        for (const auto& item : nb::cast<nb::list>(dict["sidecar"])) {
+            const auto format = document::parseExportSubtitleFormat(nb::cast<std::string>(item));
+            if (!format)
+                throw nb::value_error("subtitles sidecar formats are srt, vtt and ttml");
+            parsed.sidecars.push_back(*format);
+        }
+    if (dict.contains("embed"))
+        parsed.embed = nb::cast<bool>(dict["embed"]);
+    if (dict.contains("nodes") && !dict["nodes"].is_none()) {
+        std::vector<document::NodeId> nodes;
+        for (const auto& item : nb::cast<nb::list>(dict["nodes"]))
+            nodes.push_back(document::NodeId::fromRaw(nb::cast<std::uint64_t>(item)));
+        parsed.nodes = std::move(nodes);
+    }
+    return parsed;
+}
+
 const char* diagnosticCode(const RenderDiagnosticCode code) {
     switch (code) {
     case RenderDiagnosticCode::None:
@@ -48,7 +75,8 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
 nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t first,
                             const std::uint64_t last, const bool range, const std::string& preset,
                             const std::string& destination, const std::uint64_t cancellationTask,
-                            const bool replace, const bool requireDevice) {
+                            const bool replace, const bool requireDevice,
+                            const nb::object& subtitles) {
     output::OutputPresetV1 selected;
     if (preset == "PngRgba8SrgbV1") {
         selected = output::OutputPresetV1::PngRgba8SrgbV1;
@@ -60,6 +88,7 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
     if (first > last || last - first >= 10000 || destination.empty()) {
         throw nb::value_error("Invalid frame range or destination");
     }
+    const auto subtitleSettingsToRender = subtitleSettings(subtitles);
     auto call = retirement_->acquire(); // Covers session-lock wait and every GIL-released use.
     auto& scheduler = call.scheduler();
     const auto access = lockSession();
@@ -90,7 +119,11 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
                     return !task || runtime::isTerminal(task->state) || task->cancellationRequested;
                 },
             .replaceExisting = replace,
-            .requireDevice = requireDevice};
+            .requireDevice = requireDevice,
+            .workerLimits = {},
+            .loudness = std::nullopt,
+            .encoder = document::ExportEncoderPreference::Automatic,
+            .subtitles = subtitleSettingsToRender};
         result =
             Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {
@@ -125,7 +158,33 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
         file["digest"] = digest;
         paths.append(file);
     }
+    // Each sidecar is a published file too.
+    nb::list tracks;
+    for (const auto& track : result.subtitles) {
+        nb::dict item;
+        item["node"] = track.node.value();
+        item["language"] = track.language;
+        item["title"] = track.title;
+        item["format"] = track.sidecar
+                             ? std::string(document::exportSubtitleFormatToken(*track.sidecar))
+                             : std::string("embedded");
+        item["path"] = track.path.string();
+        item["cues"] = track.cues;
+        item["bytes"] = track.bytes;
+        std::string sha256;
+        if (track.digest) {
+            const auto hex = track.digest->toLowercaseHex();
+            sha256 = "sha256:" + std::string(hex.data(), hex.size());
+            nb::dict file;
+            file["path"] = track.path.string();
+            file["digest"] = sha256;
+            paths.append(file);
+        }
+        item["sha256"] = sha256;
+        tracks.append(item);
+    }
     row["files"] = paths;
+    row["subtitles"] = tracks;
     return row;
 }
 

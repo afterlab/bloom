@@ -222,6 +222,36 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
         json.key("sha256").string(std::string_view(hex.data(), hex.size()));
     }
     json.end('}');
+    // #752: the subtitle tracks the output delivered (a sidecar file with its size and SHA-256, or
+    // a track embedded in the movie); absent when it asked for none.
+    if (!output.subtitles.empty()) {
+        json.key("subtitles").begin('[');
+        for (const auto& track : output.subtitles) {
+            json.begin('{')
+                .key("node")
+                .number(track.node.value())
+                .key("language")
+                .string(track.language)
+                .key("title")
+                .string(track.title)
+                .key("format")
+                .string(track.sidecar ? document::exportSubtitleFormatToken(*track.sidecar)
+                                      : std::string_view("embedded"))
+                .key("path")
+                .string(track.path.generic_string())
+                .key("cues")
+                .number(track.cues);
+            if (track.sidecar) {
+                json.key("bytes").number(track.bytes);
+                if (track.digest) {
+                    const auto hex = track.digest->toLowercaseHex();
+                    json.key("sha256").string(std::string_view(hex.data(), hex.size()));
+                }
+            }
+            json.end('}');
+        }
+        json.end(']');
+    }
     json.key("provenance")
         .begin('{')
         .key("gpuFrames")
@@ -421,9 +451,22 @@ std::string exportSnapshotJson(const host::ExportQueueSnapshot& snapshot) {
                 .key("format")
                 .string(document::exportFormatToken(output.record.settings.format))
                 .key("state")
-                .string(outputState(output.state))
-                .key("destination")
-                .string(output.destination.firstPath.generic_string());
+                .string(outputState(output.state));
+            // #752: the subtitles the output is set to deliver, as the setting reads.
+            if (const auto& subtitles = output.record.settings.subtitles) {
+                json.key("subtitles").begin('{').key("sidecar").begin('[');
+                for (const auto format : subtitles->sidecars)
+                    json.string(document::exportSubtitleFormatToken(format));
+                json.end(']').key("embed").boolean(subtitles->embed);
+                if (subtitles->nodes) {
+                    json.key("nodes").begin('[');
+                    for (const auto node : *subtitles->nodes)
+                        json.number(node.value());
+                    json.end(']');
+                }
+                json.end('}');
+            }
+            json.key("destination").string(output.destination.firstPath.generic_string());
             writePreflight(json, output.preflight);
             if (output.verification) {
                 json.key("verification");

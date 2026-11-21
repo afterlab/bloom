@@ -29,8 +29,9 @@ class Host:
                            context: dict[str, str] | None = None) -> dict[str, Any]: ...
     def render(self, composition: int, first: int, last: int, range: bool,
                preset: str, destination: str, cancellation_task: int,
-               replace: bool) -> dict[str, Any]:
-        """`succeeded`; on failure `diagnostic` and `diagnostic_code` ("cancelled",
+               replace: bool, require_device: bool,
+               subtitles: dict[str, Any] | None) -> dict[str, Any]:
+        """`succeeded`; on success `subtitles` lists the delivered tracks; on failure `diagnostic` and `diagnostic_code` ("cancelled",
         "missing-processing-root" or "")."""
         ...
     def scopes(self, options: dict[str, Any], cancellation_task: int,
