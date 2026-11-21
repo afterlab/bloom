@@ -63,6 +63,11 @@ at the corners of letters such as V and W.
 box around every line (or the text's Box, when it has one). **Background color**, **Background
 padding** (in em, so it grows with the size) and **Background corner radius** (pixels) shape it.
 
+Rows that draw nothing are hidden in Properties, on the node card and in the timeline: the
+background's color, padding and corner radius while Background is Off, and the outline's color and
+join while Outline width is 0. They come back as soon as you turn Background on or set, key or
+connect an Outline width.
+
 The paint order is box, outline, fill. The layer's bounds, the Layer Bounds node and Composition >
 Align include the outline and the box, so an outlined caption aligns by what is drawn. Text Outline
 still reads the glyph outlines.

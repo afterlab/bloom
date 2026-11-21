@@ -747,11 +747,18 @@ content bounds whatever they said), so they keep `c` at the bounds centre. New T
 passing its input's through) drops `pivotX` and keeps the bounds centre.
 
 Text version 2 then appends twelve optional styling parameters (#757; `text_styling.hpp` is the
-one table the definition, validation, presentation and automation read): accent1..accent4 (Color4d),
-outlineColor (Color4d), outlineWidth (Scalar pixels, 0..256), backgroundColor (Color4d),
-backgroundPadding (Scalar em, 0..4) and backgroundRadius (Scalar pixels), which are animatable and
-socketed, then markup (Boolean), outlineJoin (Round/Miter/Bevel) and background (Off/Per line/Block)
-as constants. Schema keys are `bloom.text.<role>`. An unbound role lowers at its default, so a node
+one table the definition, validation, presentation and automation read), grouped by function in the
+order Properties, the node card and the timeline show them: markup (Boolean), accent1..accent4
+(Color4d), outlineColor (Color4d), outlineWidth (Scalar pixels, 0..256), outlineJoin
+(Round/Miter/Bevel), background (Off/Per line/Block), backgroundColor (Color4d), backgroundPadding
+(Scalar em, 0..4) and backgroundRadius (Scalar pixels). The Color4d and Scalar ones are animatable
+and each has an operand socket, in parameter order; markup, outlineJoin and background are constants
+without one, so the definition check matches every socket to its parameter by role and kind rather
+than reading the socketed parameters as a prefix. Schema keys are `bloom.text.<role>`. The activity
+rule (`document::isParameterInactive`) leaves backgroundColor, backgroundPadding and
+backgroundRadius unread while background is Off, and outlineColor and outlineJoin while outlineWidth
+is a constant 0 (neither keyed nor connected): Properties, the node card and the timeline hide those
+rows, and the compiler lowers them at their defaults without compiling their curves. An unbound role lowers at its default, so a node
 saved before them draws, and keys its cache, exactly as before. `AddTextLayer` binds all of them at
 their defaults (or the values `bloom.layer.add-text` passes); Properties offers a button that binds
 an older node's missing roles, and `bloom.node.set-parameter-value` binds one on its first edit.
