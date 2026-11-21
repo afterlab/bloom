@@ -173,10 +173,12 @@ emitFieldRasterCommand(const CompiledImageEffect& effect, const PreparedColorGra
     placement.horizontalScale = ctx.hScale;
     placement.verticalScale = ctx.vScale;
     // The slots in a row to the right of the target, or a column below it, whichever is smaller.
+    // #742: a slot a filtered read shrinks is followed by its mip levels.
     struct Slot final {
         GpuSceneCommandIndex command = kInvalidGpuSceneCommand;
         std::string key;
         render::ImageWindow window;
+        std::vector<GpuSceneMipLevel> levels;
     };
     std::vector<std::pair<std::size_t, Slot>> slots;
     std::int64_t rowWidth = placement.width;
@@ -190,7 +192,7 @@ emitFieldRasterCommand(const CompiledImageEffect& effect, const PreparedColorGra
         // An image with no pixels is an absent slot: every read is transparent.
         if (!outputWindowOf[value])
             continue;
-        Slot slot{kInvalidGpuSceneCommand, {}, *outputWindowOf[value]};
+        Slot slot{kInvalidGpuSceneCommand, {}, *outputWindowOf[value], {}};
         if (const auto error = residentFieldInput(value, operation, ctx, cancellation, emit, charge,
                                                   chargeCoverage, slot.command, slot.key, result))
             return error;
@@ -200,7 +202,33 @@ emitFieldRasterCommand(const CompiledImageEffect& effect, const PreparedColorGra
         rowHeight = std::max(rowHeight, h);
         columnWidth = std::max(columnWidth, w);
         columnHeight += h;
+        auto& placed = placement.slots[i];
+        placed.originX = slot.window.originX();
+        placed.originY = slot.window.originY();
+        placed.width = w;
+        placed.height = h;
         slots.emplace_back(i, std::move(slot));
+    }
+    // #742: the mip levels each filtered read needs, as the CPU reference builds them: the same
+    // chain of 2x box reductions, resident and keyed by the slot's source.
+    const auto needed = fieldRasterLevels(grade, placement);
+    for (auto& [index, slot] : slots) {
+        if (needed[index] == 0)
+            continue;
+        const auto descriptor = gpuSceneCommandDescriptorOf(*ctx.commands, slot.command, 0);
+        if (const auto error = emitMipLevelChain(
+                slot.command, slot.key, slot.window, needed[index],
+                descriptor ? descriptor->pixelAspect : ctx.fullPixelAspect, operation, charge, emit,
+                slot.levels))
+            return error;
+        for (const auto& level : slot.levels) {
+            const auto w = static_cast<std::int64_t>(level.window.extent().width());
+            const auto h = static_cast<std::int64_t>(level.window.extent().height());
+            rowWidth += w;
+            rowHeight = std::max(rowHeight, h);
+            columnWidth = std::max(columnWidth, w);
+            columnHeight += h;
+        }
     }
     const bool row = std::max(rowWidth, rowHeight) <= std::max(columnWidth, columnHeight);
     auto atlas = canvas;
@@ -250,6 +278,33 @@ emitFieldRasterCommand(const CompiledImageEffect& effect, const PreparedColorGra
         target.height = static_cast<std::int64_t>(slot.window.extent().height());
         target.atlasX = atlasX;
         target.atlasY = atlasY;
+        target.levels = static_cast<std::uint32_t>(slot.levels.size());
+        for (std::size_t n = 0; n < slot.levels.size(); ++n) {
+            const auto& level = slot.levels[n];
+            const auto levelX = row ? cursor : 0;
+            const auto levelY = row ? 0 : cursor;
+            cursor += row ? static_cast<std::int64_t>(level.window.extent().width())
+                          : static_cast<std::int64_t>(level.window.extent().height());
+            const auto levelPlaced = render::ImageWindow::create(
+                atlas.originX() + levelX, atlas.originY() + levelY, level.window.extent().width(),
+                level.window.extent().height());
+            if (!levelPlaced)
+                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedOperation,
+                            "A field image's mip level does not fit the atlas");
+            GpuSceneCommandIndex levelMoved = kInvalidGpuSceneCommand;
+            std::string levelMovedKey;
+            if (const auto error = emitFieldMove(
+                    level.command, level.key, level.window, *levelPlaced.value(),
+                    levelPlaced.value()->originX() - level.window.originX(),
+                    levelPlaced.value()->originY() - level.window.originY(), operation, emit,
+                    charge, levelMoved, levelMovedKey))
+                return error;
+            foregrounds.push_back(levelMoved);
+            atlasKey.add(levelMovedKey);
+            target.levelPlaces[n] = {levelX, levelY,
+                                     static_cast<std::int64_t>(level.window.extent().width()),
+                                     static_cast<std::int64_t>(level.window.extent().height())};
+        }
     }
     atlasKey.add(std::string{kGpuSourceOverSpirvSha256});
     if (const auto error =

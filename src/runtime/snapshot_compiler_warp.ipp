@@ -45,17 +45,150 @@
 }
 
 // One Image instruction reading slot `slot` at the position in register `where`; `choices` are the
-// raster's [filter, edge, selector, channel, first, second].
+// raster's [filter, edge, selector, channel, first, second] and, for a filtered read (#742), the
+// level policy. `footprint` is a filtered read's change of position per output pixel: one register
+// (a closed-form Jacobian) or two (the forward and backward one-sided differences, warpFootprint).
 int warpRead(FieldBuild& build, const int where, const std::int8_t slot,
-             std::vector<std::int64_t> choices) {
+             std::vector<std::int64_t> choices, const std::array<int, 2> footprint = {-1, -1}) {
     FieldBuild::Step step;
     step.instruction.op = static_cast<std::uint8_t>(FieldOp::Image);
     step.instruction.choices = std::move(choices);
     step.instruction.slot = slot;
     step.output = build.nextRegister++;
-    step.inputs = {where, -1, -1, -1};
+    step.inputs = {where, footprint[0], footprint[1], -1};
     build.steps.push_back(std::move(step));
     return build.steps.back().output;
+}
+
+// #742 Q4: a warp's filter as its raster reads it. Automatic is Trilinear (exactly Bilinear wherever
+// the map does not shrink the picture), or Nearest in a pixel-art composition (#743).
+[[nodiscard]] std::int64_t resolvedWarpFilter(const std::int64_t stored) const {
+    if (stored != document::kWarpFilterAutomatic)
+        return stored;
+    return composition_->pixelArt() ? document::kWarpFilterNearest
+                                    : document::kWarpFilterTrilinear;
+}
+
+[[nodiscard]] static bool filteredWarp(const std::int64_t filter) {
+    return filter == document::kWarpFilterTrilinear || filter == document::kWarpFilterAnisotropic;
+}
+
+[[nodiscard]] static bool validWarpFilter(const std::int64_t* filter) {
+    return filter != nullptr && *filter >= document::kWarpFilterBilinear &&
+           *filter <= document::kWarpFilterAutomatic;
+}
+
+// A parameter operand of a step warpPositionAt clones. A parameter is one operand of the plan, so
+// the clone reads the same value without naming the parameter: a constant or a driven value as
+// itself, and a keyed one through a value-graph pass-through of its curve, which `original` then
+// reads too (the pass-through is the curve's one reader, as a keyed literal Value node's is).
+template <typename Parameter> Parameter sharedWarpOperand(Parameter& original) {
+    if (!original.id.isValid())
+        return original;
+    if (std::holds_alternative<runtime::ValueOutputIndex>(original.source))
+        return Parameter{document::ParameterId{}, original.source};
+    using Constant = std::variant_alternative_t<0, decltype(original.source)>;
+    if (const auto* constant = std::get_if<Constant>(&original.source))
+        return Parameter{document::ParameterId{}, *constant};
+    runtime::CompiledValueOperand operand{original.id, {}};
+    std::visit(
+        [&](const auto& source) {
+            using Source = std::decay_t<decltype(source)>;
+            if constexpr (!std::is_same_v<Source, Constant> &&
+                          !std::is_same_v<Source, runtime::ValueOutputIndex>)
+                operand.source = source;
+        },
+        original.source);
+    const auto output = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
+    valueOperations_.push_back(runtime::CompiledValueOperation{
+        {}, output, 1, runtime::CompiledValuePassthrough{std::move(operand)}, false});
+    ++valueOutputCount_;
+    postImageValueOutputs_.resize(valueOutputCount_, 0);
+    original = Parameter{document::ParameterId{}, output};
+    return original;
+}
+
+// The position sub-program from coordinate register `c` to `where`, evaluated again at coordinate
+// register `at`: every step between them that depends on `c` is emitted once more with `c` replaced
+// by `at` (steps that do not, the constants, are shared). Registers grow with the steps, so the
+// steps of the sub-program are those whose output lies in (c, where].
+int warpPositionAt(FieldBuild& build, const int c, const int where, const int at) {
+    std::map<int, int> moved{{c, at}};
+    const auto count = build.steps.size();
+    for (std::size_t i = 0; i < count; ++i) {
+        auto step = build.steps[i];
+        if (step.output <= c || step.output > where)
+            continue;
+        bool depends = false;
+        for (auto& input : step.inputs)
+            if (const auto found = moved.find(input); input >= 0 && found != moved.end()) {
+                input = found->second;
+                depends = true;
+            }
+        if (!depends)
+            continue;
+        for (std::size_t k = 0; k < step.instruction.scalars.size(); ++k)
+            step.instruction.scalars[k] = sharedWarpOperand(build.steps[i].instruction.scalars[k]);
+        for (std::size_t k = 0; k < step.instruction.vectors.size(); ++k)
+            step.instruction.vectors[k] = sharedWarpOperand(build.steps[i].instruction.vectors[k]);
+        step.output = build.nextRegister++;
+        moved.insert_or_assign(build.steps[i].output, step.output);
+        build.steps.push_back(std::move(step));
+    }
+    const auto found = moved.find(where);
+    return found == moved.end() ? where : found->second;
+}
+
+// #742: the Jacobian of the Homography step that computed `where` from `c`: the same map (its
+// operands shared, sharedWarpOperand) with `choices`, whose third is 1.
+int warpJacobian(FieldBuild& build, const int c, const int where,
+                 std::vector<std::int64_t> choices) {
+    auto& map = *std::ranges::find(build.steps, where, &FieldBuild::Step::output);
+    auto step = map;
+    for (std::size_t k = 0; k < step.instruction.vectors.size(); ++k)
+        step.instruction.vectors[k] = sharedWarpOperand(map.instruction.vectors[k]);
+    step.instruction.choices = std::move(choices);
+    step.inputs = {c, -1, -1, -1};
+    step.output = build.nextRegister++;
+    build.steps.push_back(std::move(step));
+    return build.steps.back().output;
+}
+
+// #742: the footprint of the read at `where` (computed from coordinate `c`) by finite differences:
+// the position one output pixel to each side, as the forward and backward one-sided differences
+// ([dx/di, dy/di, dx/dj, dy/dj], Derivative mode Jacobian with k = strength / (2 step) = 1). The
+// read takes the shorter of each pair, so a pixel beside a seam of the map (a fold, a tile edge, a
+// map's own discontinuity) keeps the footprint of its own side.
+std::array<int, 2> warpFootprint(FieldBuild& build, const int c, const int where) {
+    const auto at = [&](const std::int64_t di, const std::int64_t dj) {
+        const auto moved =
+            fieldEmit(build, FieldOp::Offset, {c, -1, -1, -1}, {di, dj, 1}, {fieldConstant(1.0)});
+        return warpPositionAt(build, c, where, moved);
+    };
+    const auto ip = at(1, 0);
+    const auto im = at(-1, 0);
+    const auto jp = at(0, 1);
+    const auto jm = at(0, -1);
+    const auto jacobian = static_cast<std::int64_t>(core::field::FieldDerivativeMode::Jacobian);
+    const auto forward = fieldEmit(build, FieldOp::Derivative, {ip, where, jp, where}, {jacobian},
+                                   {fieldConstant(1.0), fieldConstant(2.0)});
+    const auto backward = fieldEmit(build, FieldOp::Derivative, {where, im, where, jm},
+                                    {jacobian}, {fieldConstant(1.0), fieldConstant(2.0)});
+    return {forward, backward};
+}
+
+// The read of slot `slot` at `where` (from coordinate `c`) with `filter`, edge rule `edge`, the
+// texel whole: a filtered filter reads its footprint by finite differences, as deep in the chain
+// as the footprint reaches.
+int warpFilteredRead(FieldBuild& build, const int c, const int where, const std::int8_t slot,
+                     const std::int64_t filter, const std::int64_t edge) {
+    if (!filteredWarp(filter))
+        return warpRead(build, where, slot, {filter, edge, 3, 4, 0, 1});
+    const auto footprint = warpFootprint(build, c, where);
+    return warpRead(build, where, slot,
+                    {filter, edge, 3, 4, 0, 1,
+                     static_cast<std::int64_t>(core::field::FieldLevelPolicy::WholeChain)},
+                    footprint);
 }
 
 // The field raster of `build` over `canvas`, published as the node's image.
@@ -102,7 +235,7 @@ lowerCornerPin(const document::NodeRecord& node, std::vector<runtime::CompiledOp
         }
         corners[i] = *corner;
     }
-    if (filter == nullptr || *filter < kWarpFilterBilinear || *filter > kWarpFilterBicubic) {
+    if (!validWarpFilter(filter)) {
         addTopologyFailure(node.id, "Corner Pin parameters could not be lowered.");
         return false;
     }
@@ -120,8 +253,20 @@ lowerCornerPin(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     const auto where = fieldEmit(build, FieldOp::Homography, {c, -1, -1, -1}, {0}, {},
                                  {corners[0], corners[1], corners[2], corners[3]});
     build.steps.back().instruction.slot = slot;
-    // The filter, transparent outside the input, the texel as stored (premultiplied).
-    const auto read = warpRead(build, where, slot, {*filter, 1, 3, 4, 0, 1});
+    // The filter, transparent outside the input, the texel as stored (premultiplied). A filtered
+    // read takes the map's own Jacobian (the same Homography, choice 2) as its footprint, and its
+    // levels only as deep as the pinned quad shrinks the input.
+    const auto filterValue = resolvedWarpFilter(*filter);
+    int read = 0;
+    if (filteredWarp(filterValue)) {
+        const auto jacobian = warpJacobian(build, c, where, {0, 0, 1});
+        read = warpRead(build, where, slot,
+                        {filterValue, 1, 3, 4, 0, 1,
+                         static_cast<std::int64_t>(core::field::FieldLevelPolicy::HomographyBound)},
+                        {jacobian, -1});
+    } else {
+        read = warpRead(build, where, slot, {filterValue, 1, 3, 4, 0, 1});
+    }
     const auto& format = composition_->format();
     const auto canvas = runtime::OperationIndex::fromRaw(operations.size());
     operations.emplace_back(runtime::CompiledSolid{
@@ -147,8 +292,7 @@ lowerStMap(const document::NodeRecord& node, std::vector<runtime::CompiledOperat
     const auto* edges = parameterConstant<std::int64_t>(findParameterBinding(node, "edges"));
     if (u == nullptr || v == nullptr || filter == nullptr || edges == nullptr ||
         *u < kWarpChannelRed || *u > kWarpChannelAlpha || *v < kWarpChannelRed ||
-        *v > kWarpChannelAlpha || *filter < kWarpFilterBilinear || *filter > kWarpFilterBicubic ||
-        *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror) {
+        *v > kWarpChannelAlpha || !validWarpFilter(filter) || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror) {
         addTopologyFailure(node.id, "ST Map parameters could not be lowered.");
         return false;
     }
@@ -179,8 +323,8 @@ lowerStMap(const document::NodeRecord& node, std::vector<runtime::CompiledOperat
                                  fieldConstant(0.0), fieldConstant(0.0)});
     const auto where = fieldEmit(build, FieldOp::Math, {scaled, half, -1, -1}, {1},
                                  {fieldConstant(0.1), fieldConstant(0.0)});
-    const auto read = warpRead(build, where, sourceSlot,
-                               {*filter, warpEdge(*edges), 3, 4, 0, 1});
+    const auto read = warpFilteredRead(build, c, where, sourceSlot, resolvedWarpFilter(*filter),
+                                       warpEdge(*edges));
     return finishWarp(node, build, read, *map, operations, indices);
 }
 
@@ -203,8 +347,8 @@ lowerDisplace(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
     if (xChannel == nullptr || yChannel == nullptr || filter == nullptr || edges == nullptr ||
         !xAmount || !yAmount || !midpoint || *xChannel < kDisplaceChannelNone ||
         *xChannel > kWarpChannelAlpha + 1 || *yChannel < kDisplaceChannelNone ||
-        *yChannel > kWarpChannelAlpha + 1 || *filter < kWarpFilterBilinear ||
-        *filter > kWarpFilterBicubic || *edges < kWarpEdgeTransparent ||
+        *yChannel > kWarpChannelAlpha + 1 || !validWarpFilter(filter) ||
+        *edges < kWarpEdgeTransparent ||
         *edges > kWarpEdgeMirror) {
         addTopologyFailure(node.id, "Displace parameters could not be lowered.");
         return false;
@@ -251,8 +395,8 @@ lowerDisplace(const document::NodeRecord& node, std::vector<runtime::CompiledOpe
                                     {noX ? 0.0 : 1.0, noY ? 0.0 : -1.0, 0.0, 0.0});
     const auto where = fieldEmit(build, FieldOp::Math, {c, shift, -1, -1}, {1},
                                  {fieldConstant(0.1), fieldConstant(0.0)});
-    const auto read = warpRead(build, where, sourceSlot,
-                               {*filter, warpEdge(*edges), 3, 4, 0, 1});
+    const auto read = warpFilteredRead(build, c, where, sourceSlot, resolvedWarpFilter(*filter),
+                                       warpEdge(*edges));
     return finishWarp(node, build, read, *input, operations, indices);
 }
 
@@ -277,8 +421,7 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
     const auto at = compiledVec2Parameter(findParameterBinding(node, "tracked"));
     if (mode == nullptr || filter == nullptr || edges == nullptr || !held || !at ||
         *mode < kStabilizeModeStabilize || *mode > kStabilizeModeMatchMove ||
-        *filter < kWarpFilterBilinear || *filter > kWarpFilterBicubic ||
-        *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror) {
+        !validWarpFilter(filter) || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror) {
         addTopologyFailure(node.id, "Stabilize parameters could not be lowered.");
         return false;
     }
@@ -295,7 +438,19 @@ lowerStabilize(const document::NodeRecord& node, std::vector<runtime::CompiledOp
         return false;
     const auto where = fieldEmit(build, FieldOp::Homography, {c, -1, -1, -1}, {1, *mode}, {},
                                  {*held, *at});
-    const auto read = warpRead(build, where, slot, {*filter, warpEdge(*edges), 3, 4, 0, 1});
+    // A filtered read's footprint is the move's own Jacobian (choice 2): a move alone never shrinks
+    // the picture, so it reads level 0, exactly Bilinear, and builds no levels.
+    const auto filterValue = resolvedWarpFilter(*filter);
+    int read = 0;
+    if (filteredWarp(filterValue)) {
+        const auto jacobian = warpJacobian(build, c, where, {1, *mode, 1});
+        read = warpRead(build, where, slot,
+                        {filterValue, warpEdge(*edges), 3, 4, 0, 1,
+                         static_cast<std::int64_t>(core::field::FieldLevelPolicy::HomographyBound)},
+                        {jacobian, -1});
+    } else {
+        read = warpRead(build, where, slot, {filterValue, warpEdge(*edges), 3, 4, 0, 1});
+    }
     return finishWarp(node, build, read, *input, operations, indices);
 }
 
@@ -376,8 +531,7 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
     const auto* mode = parameterConstant<std::int64_t>(findParameterBinding(node, "mode"));
     const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
     if (mode == nullptr || filter == nullptr || *mode < kTileMirrorModeTile ||
-        *mode > kTileMirrorModeKaleidoscope || *filter < kWarpFilterBilinear ||
-        *filter > kWarpFilterBicubic)
+        *mode > kTileMirrorModeKaleidoscope || !validWarpFilter(filter))
         return fail();
     // Wrap Offset's edge rule is its own: Repeat.
     std::int64_t edge = warpEdge(kWarpEdgeRepeat);
@@ -566,7 +720,13 @@ lowerTileMirror(const document::NodeRecord& node, std::vector<runtime::CompiledO
         break;
     }
     }
-    const auto read = warpRead(build, where, slot, {*filter, edge, 3, 4, 0, 1});
+    // #742: Motion Tile, Wrap Offset and Mirror move the picture without scaling it (a fold, a
+    // shift, a reflection: the footprint is one texel), so a filtered read is exactly Bilinear and
+    // reads Bilinear; Kaleidoscope's size scales it, so it reads its footprint.
+    auto filterValue = resolvedWarpFilter(*filter);
+    if (filteredWarp(filterValue) && *mode != kTileMirrorModeKaleidoscope)
+        filterValue = kWarpFilterBilinear;
+    const auto read = warpFilteredRead(build, c, where, slot, filterValue, edge);
     return finishWarp(node, build, read, canvas, operations, indices);
 }
 
@@ -625,8 +785,8 @@ lowerProceduralWarp(const document::NodeRecord& node,
     const auto filter = constant("filter");
     const auto edges = constant("edges");
     if (!mode || !filter || !edges || *mode < kProceduralWarpTwirl ||
-        *mode > kProceduralWarpLastMode || *filter < kWarpFilterBilinear ||
-        *filter > kWarpFilterBicubic || *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
+        *mode > kProceduralWarpLastMode || !validWarpFilter(&*filter) ||
+        *edges < kWarpEdgeTransparent || *edges > kWarpEdgeMirror)
         return fail();
     // The scalars in operand order, each the default of its row until the mode reads it.
     constexpr std::array<std::string_view, 25> kRoles{
@@ -838,11 +998,14 @@ lowerProceduralWarp(const document::NodeRecord& node,
         return false;
     const auto where = fieldEmit(build, FieldOp::ProceduralWarp, {c, -1, -1, -1},
                                  std::move(choices), std::move(scalars), std::move(vectors));
-    const std::vector<std::int64_t> sampling{*filter, warpEdge(*edges), 3, 4, 0, 1};
-    auto result = warpRead(build, where, slot, sampling);
+    const auto filterValue = resolvedWarpFilter(*filter);
+    auto result = warpFilteredRead(build, c, where, slot, filterValue, warpEdge(*edges));
     if (*mode == kProceduralWarpMagnify) {
-        // The plain picture, and the magnified one over it by the weight.
-        const auto plain = warpRead(build, c, slot, sampling);
+        // The plain picture, and the magnified one over it by the weight. The plain read is the
+        // picture where it lies, which never shrinks: a filtered filter reads it Bilinear (#742).
+        const auto plain = warpRead(build, c, slot,
+                                    {filteredWarp(filterValue) ? kWarpFilterBilinear : filterValue,
+                                     warpEdge(*edges), 3, 4, 0, 1});
         const auto weight = fieldSwizzle(build, where, {2, 4, 4, 4});
         result = fieldEmit(build, FieldOp::Math, {plain, result, weight, -1}, {kLerp},
                            {fieldConstant(0.1), fieldConstant(0.0)});

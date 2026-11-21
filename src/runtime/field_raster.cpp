@@ -260,6 +260,9 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         p.channel = static_cast<std::uint8_t>(choiceAt(in, 3, 4));
         p.first = static_cast<std::uint8_t>(choiceAt(in, 4, 0));
         p.second = static_cast<std::uint8_t>(choiceAt(in, 5, 1));
+        // #742: choice 6 is a filtered read's level policy (0 the whole chain, 1 as deep as the
+        // program's Homography maps shrink).
+        p.levels = enumAt<field::FieldLevelPolicy>(in, 6);
         return field::encodeImage(p);
     }
     case FieldOp::Force: {
@@ -422,6 +425,9 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         } else {
             return std::nullopt;
         }
+        // #742: choice 2 = 1 returns the map's Jacobian per output pixel (a filtered read's
+        // footprint) instead of the position.
+        p.jacobian = choiceAt(in, 2) == 1;
         return field::encodeHomography(p);
     }
     case FieldOp::ProceduralWarp: {
@@ -497,8 +503,10 @@ std::optional<std::vector<float>> encode(const FieldInstruction& in, OperandRead
         return field::encodeConstant({scalar(0), scalar(1), scalar(2), scalar(3)});
     case FieldOp::Offset: {
         const auto step = scalar(0, 1.0);
+        // #742: choice 2 = 1 moves by output pixels of the raster (a footprint's neighbours).
         return field::encodeOffset(static_cast<double>(choiceAt(in, 0)) * step,
-                                   static_cast<double>(choiceAt(in, 1)) * step);
+                                   static_cast<double>(choiceAt(in, 1)) * step,
+                                   choiceAt(in, 2) == 1);
     }
     case FieldOp::Derivative:
         return field::encodeDerivative(enumAt<field::FieldDerivativeMode>(in, 0), scalar(0, 1.0),
@@ -593,6 +601,8 @@ std::optional<std::vector<float>> fieldRasterProgramData(const PreparedColorGrad
             placement.compositionHeight, placement.horizontalScale, placement.verticalScale);
         geometry.slots[i].originX = slot.atlasX;
         geometry.slots[i].originY = slot.atlasY;
+        geometry.slots[i].levels = slot.levels;
+        geometry.slots[i].levelPlaces = slot.levelPlaces;
     }
     if (!field::applyFieldRasterGeometry(data, geometry))
         return std::nullopt;
@@ -602,6 +612,32 @@ std::optional<std::vector<float>> fieldRasterProgramData(const PreparedColorGrad
     if (!field::validFieldTable(data))
         return std::nullopt;
     return data;
+}
+
+std::array<std::uint32_t, core::field::kMaxFieldImages>
+fieldRasterLevels(const PreparedColorGrade& grade, const FieldRasterPlacement& placement) {
+    if (grade.kind != ColorGradeKind::FieldRaster || grade.data.size() < field::kFieldTableCode * 4U)
+        return {};
+    auto bare = placement;
+    for (auto& slot : bare.slots)
+        slot.levels = 0;
+    auto data = fieldRasterProgramData(grade, bare);
+    if (!data)
+        return {};
+    const auto samples = static_cast<std::uint32_t>((*data)[field::kFieldTableSampling * 4U]);
+    auto geometry = field::fieldRasterGeometry(
+        placement.originX, placement.originY, placement.width, placement.height,
+        placement.compositionWidth, placement.compositionHeight, placement.horizontalScale,
+        placement.verticalScale, samples);
+    for (std::size_t i = 0; i < placement.slots.size(); ++i) {
+        const auto& slot = placement.slots[i];
+        if (slot.width <= 0 || slot.height <= 0)
+            continue;
+        geometry.slots[i] = field::fieldImageSlot(
+            slot.originX, slot.originY, slot.width, slot.height, placement.compositionWidth,
+            placement.compositionHeight, placement.horizontalScale, placement.verticalScale);
+    }
+    return field::fieldImageLevels(*data, geometry);
 }
 
 std::string fieldRasterProgramText(const core::field::FieldOpSet operations) {
@@ -636,8 +672,9 @@ struct SlotRows final {
     std::vector<std::span<const render::Rgba32f>> rows;
     std::int64_t width = 0;
 };
+// Slot s's image is entry s; #742 its mip level n is entry s + 4 n (the kernel's level slots).
 struct SlotImages final {
-    std::array<SlotRows, field::kMaxFieldImages> slots;
+    std::array<SlotRows, field::kMaxFieldImages * (field::kMaxFieldImageLevels + 1U)> slots;
 };
 
 std::array<float, 4> fetchSlot(const void* context, const int slot, const int x, const int y) {
@@ -661,7 +698,8 @@ ImageEffectResult applyFieldRaster(const PreparedColorGrade& grade,
                                    const std::size_t budget, const CancellationToken& cancellation,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress,
-                                   CpuRowBandExecutor* const rowBands) {
+                                   CpuRowBandExecutor* const rowBands,
+                                   const std::span<const MipLevelCache> retainedLevels) {
     if (cancellation.isCancellationRequested())
         return ImageEffectResult{{}, {}, true};
     const auto& descriptor = *canvas.descriptor();
@@ -700,11 +738,62 @@ ImageEffectResult applyFieldRaster(const PreparedColorGrade& grade,
             images.slots[i].rows.push_back(*row.value());
         }
     }
+    // #742: a filtered read's mip levels, built (or found retained) before any row and charged
+    // to the budget with the output.
+    const auto needed = fieldRasterLevels(grade, placement);
+    std::array<AffineMipLevels, field::kMaxFieldImages> levels;
+    std::size_t levelBytes = 0;
+    for (std::size_t i = 0; i < slots.size() && i < field::kMaxFieldImages; ++i) {
+        if (slots[i] == nullptr || needed[i] == 0)
+            continue;
+        const auto view = slots[i]->view();
+        if (!view)
+            return failed(EvaluationDiagnosticCode::InvalidPixel, "Field image is invalid");
+        const auto available = budget - std::min(budget, levelBytes);
+        switch (AffineMipLevels::buildLevels(
+            *view.value(), needed[i], available, cancellation, levels[i],
+            i < retainedLevels.size() ? &retainedLevels[i] : nullptr)) {
+        case AffineMipLevels::Outcome::Built:
+            break;
+        case AffineMipLevels::Outcome::Cancelled:
+            return ImageEffectResult{{}, {}, true};
+        case AffineMipLevels::Outcome::OverBudget:
+            return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
+                          "Field image mip levels exceed the pixel budget");
+        case AffineMipLevels::Outcome::Invalid:
+            return failed(EvaluationDiagnosticCode::InternalInvariant,
+                          "Field image mip levels could not be built");
+        }
+        levelBytes += levels[i].bytes();
+        auto& slot = placement.slots[i];
+        slot.levels = levels[i].count();
+        for (std::uint32_t n = 1; n <= levels[i].count(); ++n) {
+            const auto* level = levels[i].image(n);
+            const auto levelView = level->view();
+            if (!levelView)
+                return failed(EvaluationDiagnosticCode::InternalInvariant,
+                              "Field image mip level is unavailable");
+            const auto levelWindow = level->descriptor()->dataWindow();
+            slot.levelPlaces[n - 1] = {
+                0, 0, static_cast<std::int64_t>(levelWindow.extent().width()),
+                static_cast<std::int64_t>(levelWindow.extent().height())};
+            auto& rows = images.slots[i + field::kMaxFieldImages * n];
+            rows.width = static_cast<std::int64_t>(levelWindow.extent().width());
+            for (auto y = levelWindow.originY(); y < levelWindow.maxYExclusive(); ++y) {
+                const auto row = levelView.value()->row(y);
+                if (!row)
+                    return failed(EvaluationDiagnosticCode::InternalInvariant,
+                                  "Field image mip level row is unavailable");
+                rows.rows.push_back(*row.value());
+            }
+        }
+    }
     const auto data = fieldRasterProgramData(grade, placement);
     if (!data)
         return failed(EvaluationDiagnosticCode::InvalidParameter,
                       "Field raster geometry cannot be represented");
-    auto builder = render::Rgba32fImageBuilder::create(descriptor, budget);
+    auto builder =
+        render::Rgba32fImageBuilder::create(descriptor, budget - std::min(budget, levelBytes));
     if (!builder)
         return failed(EvaluationDiagnosticCode::PixelStorageBudgetExceeded,
                       "Field raster output exceeds the pixel budget");

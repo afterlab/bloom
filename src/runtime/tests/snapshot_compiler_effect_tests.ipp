@@ -743,11 +743,14 @@ void testTransform2DLowering(Expectations& expectations) {
     auto& graph = composition->graph();
     const auto effectId = NodeId::fromRaw(970);
     const auto* definition = builtInNodeDefinitions().find("bloom.transform-2d", 1);
-    // Its six transform parameters, then (#484) its optional motion blur's, then skew and opacity.
+    // Its six transform parameters, then (#484) its optional motion blur's, then skew and opacity,
+    // then (#743) the optional snap.
     require(definition != nullptr &&
                 definition->parameters.size() ==
-                    6 + document::transformMotionBlurParameterDefinitions().size() + 3,
-            "Transform 2D definition has six parameters, its motion blur's, then skew and opacity");
+                    6 + document::transformMotionBlurParameterDefinitions().size() + 3 + 1 &&
+                definition->parameters.back().role == "snap",
+            "Transform 2D definition has six parameters, its motion blur's, skew and opacity, "
+            "then snap");
     std::vector<ParameterBinding> bindings;
     std::uint64_t next = 970;
     for (const auto& parameter : definition->parameters) {

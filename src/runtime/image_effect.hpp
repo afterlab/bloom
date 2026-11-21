@@ -5,6 +5,7 @@
 #include "color_grade_image_effect.hpp"
 #include "denoise_image_effect.hpp"
 #include "directional_blur_image_effect.hpp"
+#include "affine_mip_levels.hpp"
 #include "field_raster.hpp"
 #include "layer_mask_coverage.hpp"
 #include "luma_key_image_effect.hpp"
@@ -109,5 +110,7 @@ applyImageEffect(const PreparedImageEffect& effect, const render::Rgba32fImage& 
                  OperationIndex operation, const EvaluationProgressCallback& progress,
                  double horizontalScale = 1.0, double verticalScale = 1.0,
                  // ADR 0028 Image Mix mask: absent = no mask; engaged null = a zero (absent) mask.
-                 std::optional<const render::Rgba32fImage*> mask = std::nullopt);
+                 std::optional<const render::Rgba32fImage*> mask = std::nullopt,
+                 // #742: where a filtered resample's mip levels of `input` are retained.
+                 const MipLevelCache* retainedLevels = nullptr);
 } // namespace bloom::runtime::detail

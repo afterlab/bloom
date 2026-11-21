@@ -49,6 +49,7 @@
 //             offset], y down; choices continue [style, mirror, drops, seed, asymmetric]
 //   Constant  scalars [the four lanes]; Coordinate nothing
 
+#include "affine_mip_levels.hpp"
 #include "color_grade_image_effect.hpp"
 
 #include <bloom/core/field_program.hpp>
@@ -100,6 +101,10 @@ struct FieldRasterPlacement final {
         std::int64_t height = 0;
         std::int64_t atlasX = 0;
         std::int64_t atlasY = 0;
+        // #742: the mip levels built for its filtered reads, each [x, y, width, height] in the
+        // dispatched image (the atlas; 0 on the CPU).
+        std::uint32_t levels = 0;
+        std::array<std::array<std::int64_t, 4>, core::field::kMaxFieldImageLevels> levelPlaces{};
     };
     // Absent slots have width 0.
     std::array<Slot, core::field::kMaxFieldImages> slots{};
@@ -108,14 +113,21 @@ struct FieldRasterPlacement final {
 [[nodiscard]] std::optional<std::vector<float>>
 fieldRasterProgramData(const PreparedColorGrade& grade, const FieldRasterPlacement& placement);
 
+// #742: how many mip levels each slot's filtered reads need (core::field::fieldImageLevels) for the
+// placed raster; the slots' own levels are ignored.
+[[nodiscard]] std::array<std::uint32_t, core::field::kMaxFieldImages>
+fieldRasterLevels(const PreparedColorGrade& grade, const FieldRasterPlacement& placement);
+
 // The CPU reference: every pixel of `canvas`'s data window replaced by the raster; `slots` are the
-// image slots (null: no image).
+// image slots (null: no image). #742: a filtered read's mip levels of slot i are built under the
+// budget, or found in `retainedLevels[i]` (where they are kept for the next frame).
 [[nodiscard]] ImageEffectResult
 applyFieldRaster(const PreparedColorGrade& grade, const render::Rgba32fImage& canvas,
                  std::span<const render::Rgba32fImage* const> slots, double compositionWidth,
                  double compositionHeight, double horizontalScale, double verticalScale,
                  std::size_t budget, const CancellationToken&, OperationIndex,
-                 const EvaluationProgressCallback&, CpuRowBandExecutor* rowBands);
+                 const EvaluationProgressCallback&, CpuRowBandExecutor* rowBands,
+                 std::span<const MipLevelCache> retainedLevels = {});
 
 // #525 Field Sample: the program's value at field position (x, y), the operands sampled as above.
 [[nodiscard]] std::optional<std::array<float, 4>>

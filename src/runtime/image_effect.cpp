@@ -84,7 +84,8 @@ processorFailure(const color::OcioColorSpaceProcessorError error) {
 applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage& input,
                  const std::size_t pixelBudget, const CancellationToken& cancellation,
                  const OperationIndex operation, const EvaluationProgressCallback& progress,
-                 const double horizontalScale, const double verticalScale) {
+                 const double horizontalScale, const double verticalScale,
+                 const MipLevelCache* retainedLevels) {
     ImageEffectResult result;
     if (cancellation.isCancellationRequested()) {
         result.cancelled = true;
@@ -143,7 +144,7 @@ applyTransform2D(const PreparedTransform2D& prepared, const render::Rgba32fImage
     AffineMipLevels levels;
     switch (AffineMipLevels::build(*source.value(), resample.filterPlan(),
                                    pixelBudget - std::min(pixelBudget, outputBytes(window)),
-                                   cancellation, levels)) {
+                                   cancellation, levels, retainedLevels)) {
     case AffineMipLevels::Outcome::Built:
         break;
     case AffineMipLevels::Outcome::Cancelled:
@@ -300,7 +301,8 @@ PreparedImageEffect ImageEffectContext::prepare(
                                                    "parameters are not evaluable");
             return prepared;
         }
-        prepared.transform2D = PreparedTransform2D{kernel->extent, kernel->filter, *transform2D};
+        prepared.transform2D =
+            PreparedTransform2D{kernel->extent, kernel->filter, *transform2D, kernel->snap};
         OperationKey key;
         key.add(std::string("transform-2d-bilinear-v1"));
         key.add(kernel->extent);
@@ -314,6 +316,9 @@ PreparedImageEffect ImageEffectContext::prepare(
         if (values.skew != 0.0 || values.opacity != 1.0)
             for (const double value : {values.skew, values.skewAxis, values.opacity})
                 key.add(value);
+        // #743: appended only when set, like the skew above.
+        if (kernel->snap)
+            key.add(std::string("snap"));
         prepared.cacheIdentity = key.bytes();
         return prepared;
     }
@@ -547,7 +552,8 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    const OperationIndex operation,
                                    const EvaluationProgressCallback& progress,
                                    const double horizontalScale, const double verticalScale,
-                                   const std::optional<const render::Rgba32fImage*> mask) {
+                                   const std::optional<const render::Rgba32fImage*> mask,
+                                   const MipLevelCache* retainedLevels) {
     if (effect.discrete)
         return applyDiscreteImageEffect(*effect.discrete, input, pixelBudget, cancellation,
                                         operation, progress, horizontalScale, verticalScale);
@@ -580,7 +586,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
                                    cancellation, operation, progress);
     if (effect.transform2D)
         return applyTransform2D(*effect.transform2D, input, pixelBudget, cancellation, operation,
-                                progress, horizontalScale, verticalScale);
+                                progress, horizontalScale, verticalScale, retainedLevels);
     ImageEffectResult result;
     if (effect.canvas) {
         if (cancellation.isCancellationRequested()) {
@@ -708,7 +714,7 @@ ImageEffectResult applyImageEffect(const PreparedImageEffect& effect,
         AffineMipLevels levels;
         switch (AffineMipLevels::build(*source.value(), transform.filterPlan(),
                                        pixelBudget - std::min(pixelBudget, outputBytes(window)),
-                                       cancellation, levels)) {
+                                       cancellation, levels, retainedLevels)) {
         case AffineMipLevels::Outcome::Built:
             break;
         case AffineMipLevels::Outcome::Cancelled:

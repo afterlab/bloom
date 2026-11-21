@@ -129,7 +129,17 @@ lowerLayerBoundary(const document::LayerOutputBoundary& boundary, const document
             addTopologyFailure(owner, "Layer filter could not be lowered.");
             return std::nullopt;
         }
-        result.filter = runtime::resolveResampleFilter(*filter);
+        result.filter = runtime::resolveResampleFilter(*filter, composition_->pixelArt());
+    }
+    // #743: the layer's pixel snap; absent (a layer saved before it existed) does not snap.
+    if (const auto* snapBinding = bound(kLayerSnapParameterRole)) {
+        const auto* snap = parameterConstant<std::int64_t>(snapBinding);
+        if (snap == nullptr || *snap < kLayerSnapOff || *snap > kLayerSnapAutomatic) {
+            addTopologyFailure(owner, "Layer snap could not be lowered.");
+            return std::nullopt;
+        }
+        result.snap = *snap == kLayerSnapOn ||
+                      (*snap == kLayerSnapAutomatic && composition_->pixelArt());
     }
     // #642: a Vector Artwork layer whose transform its artwork's geometry draws (svg_artwork.hpp).
     if (const auto composed = artwork_.composed.find(boundary.layerId); composed != artwork_.composed.end()) {

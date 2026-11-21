@@ -355,7 +355,8 @@ std::optional<MotionPassPlan> planPath(const MotionPathBlurKernel& kernel,
                                                            {geometry.centreX, geometry.centreY},
                                                            v(7),
                                                            v(8),
-                                                           v(9)}};
+                                                           v(9)},
+                                         kernel.transform->snap};
             const auto window = render::ImageWindow::create(
                 in.x, in.y, static_cast<std::uint64_t>(in.width),
                 static_cast<std::uint64_t>(in.height));

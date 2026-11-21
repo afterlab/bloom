@@ -329,6 +329,12 @@ inline constexpr std::int64_t kResampleFilterAutomatic = 4;
 [[nodiscard]] constexpr std::int64_t resolveResampleFilter(const std::int64_t filter) noexcept {
     return filter == kResampleFilterAutomatic ? kResampleFilterTrilinear : filter;
 }
+// #743: in a pixel-art composition Automatic is Nearest instead.
+[[nodiscard]] constexpr std::int64_t resolveResampleFilter(const std::int64_t filter,
+                                                           const bool pixelArt) noexcept {
+    return filter == kResampleFilterAutomatic && pixelArt ? kResampleFilterNearest
+                                                          : resolveResampleFilter(filter);
+}
 // Constant output geometry. Resize stretches; Fit uses a physical-aspect-preserving fit/fill.
 struct ResizeFitKernel final {
     std::int64_t width = 1920;
@@ -359,6 +365,9 @@ struct Transform2DKernel final {
     CompiledScalarParameter skew{{}, 0.0};
     CompiledScalarParameter skewAxis{{}, 0.0};
     CompiledScalarParameter opacity{{}, 1.0};
+    // #743 Snap to Pixels: the composed map's translation rounds to whole pixels of the
+    // evaluation (transform_2d_geometry.hpp). A node saved before it existed does not snap.
+    bool snap = false;
     // True when skew and opacity are the constants that leave the transform as it was.
     [[nodiscard]] bool plainSkewOpacity() const noexcept {
         const auto constantIs = [](const CompiledScalarParameter& parameter, const double value) {
@@ -1779,6 +1788,10 @@ struct CompiledLayerOutput {
     // Automatic is resolved). A layer saved without one is Bilinear. Appended Bilinear: no existing
     // plan changes meaning.
     std::int64_t filter = kResampleFilterBilinear;
+    // #743: the layer's position snaps (On, or Automatic in a pixel-art composition): its final
+    // composed translation rounds to whole pixels of the evaluation, after parenting
+    // (snapLayerMatrix). A layer saved without a snap does not snap.
+    bool snap = false;
     friend bool operator==(const CompiledLayerOutput&, const CompiledLayerOutput&) = default;
 };
 

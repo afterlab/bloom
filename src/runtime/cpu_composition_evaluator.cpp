@@ -2752,6 +2752,21 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         std::shared_ptr<const render::Rgba32fImage> processImage;
         std::vector<std::string> contentHashes(plan->operations().size());
+        // #742: where a filtered read's mip levels of operation `source`'s image are retained:
+        // under its content identity in the operation cache, for a source whose image does not
+        // depend on the region of interest (an effect's, a layer's and a field's inputs have full
+        // support). Disabled without a cache.
+        const auto retainedLevelsOf = [&](const std::size_t source) {
+            detail::MipLevelCache retained;
+            if (cache == nullptr || source >= contentHashes.size() ||
+                contentHashes[source].empty() || (request.roi && !fullSupport[source]))
+                return retained;
+            retained.cache = cache;
+            retained.sourceKey = contentHashes[source];
+            retained.revision = plan->sourceRevision();
+            retained.linearPass = request.linearPass.get();
+            return retained;
+        };
         const auto releaseInputs = [&](const std::size_t index) {
             if (index == request.output.value())
                 return;
@@ -2772,6 +2787,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         // #381: each layer's matrix for its own content (with its footage pixel aspect); children
         // compose `layerMatrices`, which has none.
         std::vector<detail::LayerMatrix> contentMatrices(plan->operations().size());
+        // #743: how far a snapping layer's own drawing moved (author pixels), the same move its
+        // translate-only transform takes.
+        std::vector<document::Vec2d> snapDeltas(plan->operations().size());
 
         struct VectorChain {
             std::size_t source;
@@ -3493,6 +3511,15 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 // #642: drawn into an oversampled group, its pixels land that many times larger;
                 // its children compose its plain matrix.
                 contentMatrices[index] = content.enlarged(layer->outputScale);
+                // #743: a snapping layer draws with its final translation on whole pixels; its
+                // children compose its unsnapped matrix and snap only by their own choice.
+                if (layer->snap) {
+                    const auto before = contentMatrices[index];
+                    contentMatrices[index] = detail::snapLayerMatrix(
+                        before, resolved.horizontalScale, resolved.verticalScale);
+                    snapDeltas[index] = {contentMatrices[index].x - before.x,
+                                         contentMatrices[index].y - before.y};
+                }
             }
             const auto& operation = plan->operations()[index];
             if ((std::holds_alternative<CompiledSolid>(operation) &&
@@ -3510,9 +3537,13 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     const auto opacity = detail::resolveLayerOpacity(*layer, *plan, resolved);
                     // #642: a content scale maps its larger input back (vector sources have no
                     // pixel aspect of their own); an output scale draws into a larger group.
-                    const auto own = layer->contentScale != 1.0
-                                         ? contentMatrices[index]
-                                         : layerMatrices[index].enlarged(layer->outputScale);
+                    const auto plain = layerMatrices[index].enlarged(layer->outputScale);
+                    const auto own =
+                        layer->contentScale != 1.0
+                            ? contentMatrices[index]
+                            : (layer->snap ? detail::snapLayerMatrix(plain, resolved.horizontalScale,
+                                                                     resolved.verticalScale)
+                                           : plain);
                     vectors[index] = VectorChain{input.source, own.times(input.matrix),
                                                  opacity ? input.opacity * opacity->value : 0};
                 } else if (const auto opacity =
@@ -4399,6 +4430,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                      ++slot)
                                     fieldSlots[slot] =
                                         slots[effect.fieldImages[slot].value()].get();
+                                std::array<detail::MipLevelCache, core::field::kMaxFieldImages>
+                                    fieldLevels{};
+                                for (std::size_t slot = 0; slot < effect.fieldImages.size() &&
+                                                           slot < fieldLevels.size();
+                                     ++slot)
+                                    fieldLevels[slot] =
+                                        retainedLevelsOf(effect.fieldImages[slot].value());
+                                const auto effectLevels = retainedLevelsOf(effect.input.value());
                                 const auto gradeKind =
                                     preparedEffect->colorGrade
                                         ? std::optional{preparedEffect->colorGrade->kind}
@@ -4533,7 +4572,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                               static_cast<double>(plan->format().height()),
                                               resolved.horizontalScale, resolved.verticalScale,
                                               effectPixelBudget, cancellation, operationIndex,
-                                              progress, rowBands)
+                                              progress, rowBands,
+                                              std::span<const detail::MipLevelCache>(
+                                                  fieldLevels.data(), effect.fieldImages.size()))
                                         : detail::applyImageEffect(
                                     *preparedEffect, *slots[index],
                                     effect.secondaryInput && slots[effect.secondaryInput->value()]
@@ -4546,7 +4587,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                               const render::Rgba32fImage*>{slots[effect.maskInput
                                                                                      ->value()]
                                                                                .get()}
-                                        : std::nullopt);
+                                        : std::nullopt,
+                                    &effectLevels);
                                 if (result.cancelled) {
                                     operationCancelled = true;
                                     return;
@@ -5076,8 +5118,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 detail::boundsForWindow(window, resolved.horizontalScale,
                                                         resolved.verticalScale)
                                     .centre();
-                            authored.translationX = position->value.x - centre.x - anchor->value.x;
-                            authored.translationY = position->value.y - centre.y - anchor->value.y;
+                            // #743: a snapping layer's move lands on whole pixels, as its matrix's.
+                            authored.translationX = position->value.x - centre.x -
+                                                    anchor->value.x + snapDeltas[index].x;
+                            authored.translationY = position->value.y - centre.y -
+                                                    anchor->value.y + snapDeltas[index].y;
                             authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
                             authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
 
@@ -5150,8 +5195,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // still follow its own transform of the earlier layer's bounds.
                             std::optional<detail::ParentedLayerTransform> concatenated;
                             std::optional<render::Rgba32fImageView> chainView;
+                            // #742: the operation whose image the layer resamples.
+                            std::size_t resampledSource = layer.input.value();
                             if (const auto& chain = rasterChains[layer.input.value()];
                                 !vectors[index] && chain && slots[chain->source]) {
+                                resampledSource = chain->source;
                                 auto view = slots[chain->source]->view();
                                 const auto descriptor =
                                     view ? view.value()->descriptor() : std::nullopt;
@@ -5356,10 +5404,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                     static_cast<std::size_t>(outputWindow.extent().width()) *
                                     outputWindow.extent().height() * sizeof(render::Rgba32f);
                                 const auto available = remainingPixelBudget();
+                                const auto retained = retainedLevelsOf(resampledSource);
                                 switch (detail::AffineMipLevels::build(
                                     source, resample->filterPlan(),
                                     available - std::min(available, layerBytes), cancellation,
-                                    mipLevels)) {
+                                    mipLevels, &retained)) {
                                 case detail::AffineMipLevels::Outcome::Built:
                                     break;
                                 case detail::AffineMipLevels::Outcome::Cancelled:

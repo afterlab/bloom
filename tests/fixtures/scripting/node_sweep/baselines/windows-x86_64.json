@@ -438,8 +438,8 @@
    "route": "gpu"
   },
   "bloom.procedural-warp": {
-   "cpu": "sha256:671f33c0459df63a3304b28ded7c807a19a988b87b7cd547cc0207409a9a474a",
-   "gpu": "sha256:671f33c0459df63a3304b28ded7c807a19a988b87b7cd547cc0207409a9a474a",
+   "cpu": "sha256:d1d7b09081b2d472385544e4df25bea5452ea9e6c669191ce55fc55afb19b7cf",
+   "gpu": "sha256:d1d7b09081b2d472385544e4df25bea5452ea9e6c669191ce55fc55afb19b7cf",
    "parity": "identical",
    "route": "gpu"
   },

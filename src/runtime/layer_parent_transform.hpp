@@ -96,6 +96,24 @@ struct LayerMatrix {
     }
 };
 
+// #743 pixel snap: `matrix` with its translation rounded to whole pixels of the evaluation at scale
+// (sx, sy), halves up: the device translation sx x (sy y) of the author origin becomes the nearest
+// whole number, so a layer that only moves copies its pixels exactly and a moving one steps by whole
+// pixels (no frame resamples it by a fraction). The linear part is unchanged. Both routes snap the
+// same binary64 matrix, so they agree.
+[[nodiscard]] inline LayerMatrix snapLayerMatrix(LayerMatrix matrix, const double sx,
+                                                 const double sy) {
+    if (!(sx > 0.0) || !(sy > 0.0))
+        return matrix;
+    const double x = std::floor(matrix.x * sx + 0.5);
+    const double y = std::floor(matrix.y * sy + 0.5);
+    if (std::isfinite(x) && std::isfinite(y)) {
+        matrix.x = x / sx;
+        matrix.y = y / sy;
+    }
+    return matrix;
+}
+
 // The exact conversion from the runtime's AUTHOR-space LayerMatrix (pixel-centre + 0.5 convention)
 // to GpuAffine's source-local-0-based-pixel-centre to absolute-output-device-index convention,
 // folding the proxy scales exactly as ParentedLayerTransform::forwardMap does:

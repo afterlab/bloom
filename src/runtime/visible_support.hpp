@@ -601,6 +601,9 @@ visibleSupportWindows(const CompiledCompositionPlan& plan, const ResolvedEvaluat
         layerMatrices[index] = matrix;
         // #642: drawn into an oversampled group, its pixels land that many times larger.
         contentMatrices[index] = content.enlarged(layer->outputScale);
+        // #743: a snapping layer reads through its snapped matrix, as it draws.
+        if (layer->snap)
+            contentMatrices[index] = snapLayerMatrix(*contentMatrices[index], hScale, vScale);
     };
     for (std::size_t index = 0; index < count; ++index)
         matrixOf(index);

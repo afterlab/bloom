@@ -34,7 +34,8 @@ emitTransform2DCommand(const Transform2DKernel& kernel, const OperationIndex inp
                                        Transform2DValues{translate->value, pivot->value,
                                                          scale->value, rotation->value,
                                                          inputBounds.centre(), skew->value,
-                                                         skewAxis->value, opacity->value}};
+                                                         skewAxis->value, opacity->value},
+                                       kernel.snap};
     if (!validTransform2DValues(prepared.values))
         return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
                     "Transform 2D parameters are not finite");

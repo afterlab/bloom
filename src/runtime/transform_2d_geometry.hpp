@@ -38,6 +38,9 @@ struct PreparedTransform2D final {
     Transform2DExtent extent = Transform2DExtent::Transformed;
     std::int64_t filter = 0;
     Transform2DValues values;
+    // #743: the result's translation rounds to whole output pixels (snapLayerMatrix), on both
+    // routes through this one geometry.
+    bool snap = false;
     // Exact passthrough: no translation, unit scale and a rotation that reduces to exactly zero.
     // Clipping to the display window still runs the (exact, zero-weight) resample.
     [[nodiscard]] bool identity() const noexcept {
@@ -96,6 +99,16 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
         LayerMatrix::authored({pivot.x + values.translate.x, pivot.y + values.translate.y}, pivot,
                               values.scale, values.rotation, values.skew, values.skewAxis),
         std::nullopt, std::nullopt};
+    // #743: snapping moves the whole result by the rounding of its origin's device position, so
+    // the matrix the GPU builds and the CPU resampler below move by the same whole pixels.
+    double snapX = 0.0;
+    double snapY = 0.0;
+    if (prepared.snap) {
+        const auto snapped = snapLayerMatrix(geometry.matrix, proxyX, proxyY);
+        snapX = snapped.x - geometry.matrix.x;
+        snapY = snapped.y - geometry.matrix.y;
+        geometry.matrix = snapped;
+    }
     if (values.scale.x == 0.0 || values.scale.y == 0.0)
         return geometry;
     const auto data = source.dataWindow();
@@ -106,8 +119,8 @@ resolveTransform2DGeometry(const PreparedTransform2D& prepared,
                                   static_cast<double>(data.maxYExclusive()) / proxyY) /
                                  2.0;
     const render::LayerTransform::Authored authored{
-        .translationX = values.translate.x,
-        .translationY = values.translate.y,
+        .translationX = values.translate.x + snapX,
+        .translationY = values.translate.y + snapY,
         .anchorX = values.centre.x - bufferCentreX + values.pivot.x,
         .anchorY = values.centre.y - bufferCentreY + values.pivot.y,
         .scaleX = values.scale.x,

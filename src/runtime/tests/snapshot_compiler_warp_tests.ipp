@@ -87,7 +87,11 @@ void warpLensMap(LensFixture& fixture,
 [[nodiscard]] LensFixture
 warpFixture(const std::string_view type,
             const std::unordered_map<std::string, document::ParameterValue>& values = {}) {
-    return lensFixture(values, "image", true, type);
+    // #742: a new warp node's filter is Automatic. These cases were written for the filter they
+    // name, Bilinear unless they say otherwise; the filtered reads have cases of their own.
+    auto named = values;
+    named.try_emplace("filter", document::kWarpFilterBilinear);
+    return lensFixture(named, "image", true, type);
 }
 
 // The input without the node, at a proxy size.

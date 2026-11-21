@@ -2614,9 +2614,19 @@ lowerImageEffect(const document::NodeRecord& node,
         const auto* filter = parameterConstant<std::int64_t>(findParameterBinding(node, "filter"));
         if (translate && pivot && scale && rotation && extent && *extent >= 0 && *extent <= 2 &&
             filter && runtime::validDocumentResampleFilter(*filter)) {
-            runtime::Transform2DKernel transform{*translate, *pivot, *scale, *rotation,
-                                                 static_cast<runtime::Transform2DExtent>(*extent),
-                                                 runtime::resolveResampleFilter(*filter)};
+            runtime::Transform2DKernel transform{
+                *translate, *pivot, *scale, *rotation,
+                static_cast<runtime::Transform2DExtent>(*extent),
+                runtime::resolveResampleFilter(*filter, composition_->pixelArt())};
+            // #743: Snap to Pixels; absent (a node saved before it existed) is off.
+            if (const auto* snap = findParameterBinding(node, "snap")) {
+                const auto* value = parameterConstant<bool>(snap);
+                if (value == nullptr) {
+                    addTopologyFailure(node.id, "Transform 2D snap could not be lowered.");
+                    return std::nullopt;
+                }
+                transform.snap = *value;
+            }
             // Skew and Opacity are later additions: a node saved without them reads as none.
             bool optionalLowered = true;
             for (const auto& [role, target] :
@@ -2689,7 +2699,8 @@ lowerImageEffect(const document::NodeRecord& node,
             return runtime::CompiledImageEffect{
                 node.id, *input,
                 runtime::ResizeFitKernel{*width, *height, *numerator, *denominator,
-                                         runtime::resolveResampleFilter(*filter),
+                                         runtime::resolveResampleFilter(
+                                             *filter, composition_->pixelArt()),
                                          node.typeId == "bloom.resize" ? 0 : *policy + 1},
                 *bypass};
     }

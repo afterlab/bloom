@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace bloom::runtime::detail {
 
@@ -74,6 +75,62 @@ template <typename Charge, typename Emit>
     return std::nullopt;
 }
 
+// #742: one mip level of a source as a resident command: its command, key and window (0, 0,
+// width, height).
+struct GpuSceneMipLevel final {
+    GpuSceneCommandIndex command = kInvalidGpuSceneCommand;
+    std::string key;
+    render::ImageWindow window;
+};
+
+// #742: levels 1..count of resident `input` (window `sourceWindow`), each a Bilinear affine command
+// halving the previous level through affineMipReductionMatrix() and keyed by the previous level's
+// key, so the scene cache retains the pyramid per source identity (a layer and a field read of the
+// same source share it) and an unchanged source reuses it on the next frame. Every level is
+// charged to the frame budget. The chain stops at 1x1.
+template <typename Charge, typename Emit>
+[[nodiscard]] inline std::optional<GpuSceneLeafFailure>
+emitMipLevelChain(const GpuSceneCommandIndex input, const std::string& inputKey,
+                  const render::ImageWindow sourceWindow, const std::uint32_t count,
+                  const core::PixelAspectRatio levelPixelAspect, const OperationIndex operationIndex,
+                  Charge&& charge, Emit&& emit, std::vector<GpuSceneMipLevel>& levels) {
+    levels.clear();
+    GpuSceneCommandIndex level = input;
+    std::string levelKey = inputKey;
+    render::ImageWindow levelWindow = sourceWindow;
+    const auto reduction = render::affineMipReductionMatrix();
+    const auto deepest = render::affineMipDeepestLevel(
+        static_cast<std::uint32_t>(sourceWindow.extent().width()),
+        static_cast<std::uint32_t>(sourceWindow.extent().height()));
+    for (std::uint32_t index = 1; index <= count && index <= deepest; ++index) {
+        const auto [width, height] = render::affineMipLevelExtent(
+            static_cast<std::uint32_t>(sourceWindow.extent().width()),
+            static_cast<std::uint32_t>(sourceWindow.extent().height()), index);
+        const auto next = render::ImageWindow::create(0, 0, width, height);
+        if (!next)
+            return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
+                        "A mip level window is not representable");
+        if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
+            return error;
+        auto nextKey =
+            makeGpuSceneAffineSemanticKey(levelKey, levelWindow, reduction, 1.0F, *next.value(),
+                                          levelPixelAspect, std::string{kGpuAffineSpirvSha256});
+        level = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
+                                           .input = level,
+                                           .inputKey = levelKey,
+                                           .sourceWindow = levelWindow,
+                                           .outputWindow = *next.value(),
+                                           .matrix = reduction,
+                                           .opacity = 1.0F,
+                                           .pixelAspect = levelPixelAspect,
+                                           .semanticKey = nextKey});
+        levelKey = std::move(nextKey);
+        levelWindow = *next.value();
+        levels.push_back(GpuSceneMipLevel{level, levelKey, levelWindow});
+    }
+    return std::nullopt;
+}
+
 // #742: one composed-matrix resample of `input`. Bilinear and Nearest, and a Trilinear or
 // Anisotropic map that does not shrink the image (planAffineFilter resolves those to Bilinear),
 // emit the one affine command. A shrinking filtered map first emits the mip levels it reads, each
@@ -101,40 +158,20 @@ template <typename Charge, typename Emit>
     GpuSceneCommandIndex upper = kInvalidGpuSceneCommand;
     std::string upperKey;
     if (plan.filtered()) {
-        GpuSceneCommandIndex level = input;
-        std::string levelKey = inputKey;
-        render::ImageWindow levelWindow = sourceWindow;
-        const auto reduction = render::affineMipReductionMatrix();
-        for (std::uint32_t index = 1; index <= plan.upperLevel; ++index) {
-            const auto [width, height] = render::affineMipLevelExtent(
-                sourceWindow.extent().width(), sourceWindow.extent().height(), index);
-            const auto next = render::ImageWindow::create(0, 0, width, height);
-            if (!next)
-                return fail(PreparedGpuSceneDiagnosticCode::UnsupportedTransform,
-                            "A mip level window is not representable");
-            if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
-                return error;
-            auto nextKey =
-                makeGpuSceneAffineSemanticKey(levelKey, levelWindow, reduction, 1.0F, *next.value(),
-                                              levelPixelAspect, std::string{kGpuAffineSpirvSha256});
-            level = emit(GpuSceneAffineCommand{.sourceOperation = operationIndex,
-                                               .input = level,
-                                               .inputKey = levelKey,
-                                               .sourceWindow = levelWindow,
-                                               .outputWindow = *next.value(),
-                                               .matrix = reduction,
-                                               .opacity = 1.0F,
-                                               .pixelAspect = levelPixelAspect,
-                                               .semanticKey = nextKey});
-            levelKey = std::move(nextKey);
-            levelWindow = *next.value();
-            if (index == plan.lowerLevel) {
-                lower = level;
-                lowerKey = levelKey;
-            }
+        std::vector<GpuSceneMipLevel> levels;
+        if (const auto error =
+                emitMipLevelChain(input, inputKey, sourceWindow, plan.upperLevel, levelPixelAspect,
+                                  operationIndex, charge, emit, levels))
+            return error;
+        if (levels.size() < plan.upperLevel)
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "A filtered resample's mip levels are missing");
+        if (plan.lowerLevel > 0) {
+            lower = levels[plan.lowerLevel - 1].command;
+            lowerKey = levels[plan.lowerLevel - 1].key;
         }
-        upper = plan.upperLevel == plan.lowerLevel ? lower : level;
-        upperKey = plan.upperLevel == plan.lowerLevel ? lowerKey : levelKey;
+        upper = plan.upperLevel == plan.lowerLevel ? lower : levels[plan.upperLevel - 1].command;
+        upperKey = plan.upperLevel == plan.lowerLevel ? lowerKey : levels[plan.upperLevel - 1].key;
     }
     const auto filter = plan.filter;
     key = makeGpuSceneAffineSemanticKey(lowerKey, sourceWindow, affineMatrix, opacity, outputWindow,

@@ -1044,12 +1044,21 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             // #642: drawn into an oversampled group, its pixels land that many times larger; its
             // children compose its plain matrix.
             contentComposed = contentComposed.enlarged(layer->outputScale);
+            // #743: a snapping layer draws with its final translation on whole pixels, as on the
+            // CPU; its children compose its unsnapped matrix.
+            document::Vec2d snapDelta{};
+            auto drawnComposed = composed.enlarged(layer->outputScale);
+            if (layer->snap) {
+                const auto before = contentComposed;
+                contentComposed = detail::snapLayerMatrix(before, hScale, vScale);
+                snapDelta = {contentComposed.x - before.x, contentComposed.y - before.y};
+                drawnComposed = detail::snapLayerMatrix(drawnComposed, hScale, vScale);
+            }
             std::optional<detail::GpuSceneVectorChain> chained;
             if (inputVec.has_value()) {
                 chained = GpuSceneVectorChain{inputVec->source,
-                                              (contentScale != 1.0
-                                                   ? contentComposed
-                                                   : composed.enlarged(layer->outputScale))
+                                              (contentScale != 1.0 ? contentComposed
+                                                                   : drawnComposed)
                                                   .times(inputVec->matrix),
                                               inputVec->opacity * opacity->value};
                 vectors[index] = *chained;
@@ -1086,8 +1095,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 .rotationDegrees = rotation->value,
                 .opacity = opacity->value,
             };
-            authored.translationX = position->value.x - centre.x - anchor->value.x;
-            authored.translationY = position->value.y - centre.y - anchor->value.y;
+            // #743: a snapping layer's move lands on whole pixels, as its matrix's.
+            authored.translationX = position->value.x - centre.x - anchor->value.x + snapDelta.x;
+            authored.translationY = position->value.y - centre.y - anchor->value.y + snapDelta.y;
             authored.anchorX = centre.x - bufferCentre.x + anchor->value.x;
             authored.anchorY = centre.y - bufferCentre.y + anchor->value.y;
             if (!std::isfinite(authored.translationX * hScale) ||
