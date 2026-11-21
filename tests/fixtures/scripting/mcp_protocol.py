@@ -623,7 +623,9 @@ class Protocol(unittest.TestCase):
         TLS handshake. It once hung for ever there: OpenSSL's exit handler tore down the library
         under the transfer and the font resolver's exit-time destructor waited for it. A loopback
         proxy opens the tunnel and then never answers the client hello, so the download is held
-        in the handshake while the input closes; nothing reaches the network."""
+        in the handshake while the input closes; nothing reaches the network. The family is one no
+        cache or machine holds (the font cache is per user on macOS and Windows, whatever
+        XDG_CACHE_HOME says), so the download always starts and never completes."""
         listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         listener.bind(('127.0.0.1', 0))
         listener.listen(4)
@@ -679,7 +681,8 @@ class Protocol(unittest.TestCase):
             self.assertTrue(added['succeeded'], added)
             nodes = content(tool(3, 'query', {'kind': 'nodes', 'composition': 1}))['records']
             font = [node['parameters']['font'] for node in nodes if 'font' in node['parameters']][0]
-            google = 'source=google;family=Roboto;style=Bold;weight=700;italic=false'
+            google = ('source=google;family=Bloom Handshake Test Family;style=Bold;weight=700;'
+                      'italic=false')
             chosen = content(tool(4, 'transact', {'expectedRevision': added['revision'], 'operations': [
                 {'op': 'bloom.parameter.set-source',
                  'args': {'composition': 1, 'parameter': font, 'value': google}}]}))
