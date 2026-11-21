@@ -12,7 +12,30 @@ const auto pixel = [&](core::Color4d color) {
     return *result.value();
 };
 const auto& sourceOperation = plan->operations()[chain.source];
-if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
+if (std::holds_alternative<CompiledSubtitles>(sourceOperation)) {
+    // #752: every box, outline and fill layer of the frame the node prepared, redrawn through the
+    // chain matrix in drawing order, so a scaled or rotated layer stays crisp.
+    const auto& frame = subtitlesFrames[chain.source];
+    if (frame == nullptr) {
+        operationFailure = diagnostic(EvaluationDiagnosticCode::InternalInvariant,
+                                      "The Subtitles frame is unavailable", {}, operationSubject);
+        return;
+    }
+    for (const auto& entry : frame->layers) {
+        auto layerRaster = render::PathRaster::transformed(
+            std::span<const render::Path>(*entry.paths), entry.pathStroke,
+            {m.a, m.b, m.c, m.d, m.x, m.y}, resolved.horizontalScale, resolved.verticalScale,
+            [&] { return cancellation.isCancellationRequested(); });
+        if (!layerRaster) {
+            operationCancelled = cancellation.isCancellationRequested();
+            if (!operationCancelled)
+                operationFailure = imageDiagnostic(*layerRaster.error(), operationSubject,
+                                                   "Subtitles geometry is invalid");
+            return;
+        }
+        vectorLayers.push_back({std::move(*layerRaster.value()), entry.stroke, entry.pixel});
+    }
+} else if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     const auto size = detail::resolveParameter(shape->size, *plan, sourceResolved);
     const auto fill = detail::resolveParameter(shape->fillColor, *plan, sourceResolved);
     const auto color = detail::resolveParameter(shape->strokeColor, *plan, sourceResolved);
@@ -82,14 +105,16 @@ if (const auto* shape = std::get_if<CompiledShape>(&sourceOperation)) {
     vectorHasFill = true;
     vectorFill = pixel(color->value);
 }
-auto raster = render::PathRaster::transformed(
-    paths, stroke, {m.a, m.b, m.c, m.d, m.x, m.y}, resolved.horizontalScale, resolved.verticalScale,
-    [&] { return cancellation.isCancellationRequested(); }, clip);
-if (!raster) {
-    operationCancelled = cancellation.isCancellationRequested();
-    if (!operationCancelled)
-        operationFailure =
-            imageDiagnostic(*raster.error(), operationSubject, "Vector geometry is invalid");
-    return;
+if (!std::holds_alternative<CompiledSubtitles>(sourceOperation)) {
+    auto raster = render::PathRaster::transformed(
+        paths, stroke, {m.a, m.b, m.c, m.d, m.x, m.y}, resolved.horizontalScale,
+        resolved.verticalScale, [&] { return cancellation.isCancellationRequested(); }, clip);
+    if (!raster) {
+        operationCancelled = cancellation.isCancellationRequested();
+        if (!operationCancelled)
+            operationFailure =
+                imageDiagnostic(*raster.error(), operationSubject, "Vector geometry is invalid");
+        return;
+    }
+    vectorRaster = std::move(*raster.value());
 }
-vectorRaster = std::move(*raster.value());

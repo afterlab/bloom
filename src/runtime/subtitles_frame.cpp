@@ -282,7 +282,8 @@ prepareSubtitlesFrame(const CompiledSubtitles& subtitles, const CompiledComposit
         const auto pixel = render::solidPixelFromStraightLinearRec709Scene(straight);
         if (!pixel)
             return false;
-        auto raster = render::PathRaster::create(std::span<const render::Path>(paths), stroke,
+        auto shared = std::make_shared<const std::vector<render::Path>>(std::move(paths));
+        auto raster = render::PathRaster::create(std::span<const render::Path>(*shared), stroke,
                                                  hScale, vScale, cancel);
         if (!raster)
             return false;
@@ -298,8 +299,8 @@ prepareSubtitlesFrame(const CompiledSubtitles& subtitles, const CompiledComposit
                                          std::max(ink->bottom, bounds.bottom)};
         }
         frame.layers.push_back(
-            {std::make_shared<const render::PathRaster>(std::move(*raster.value())), isStroke,
-             *pixel.value()});
+            {std::make_shared<const render::PathRaster>(std::move(*raster.value())),
+             std::move(shared), stroke, isStroke, *pixel.value()});
         return true;
     };
     const std::span<const render::TextFont> faces(subtitles.faces.faces);

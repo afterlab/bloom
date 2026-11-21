@@ -177,7 +177,8 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
     const auto isVectorChain = [&operations](std::size_t index) {
         while (index < operations.size()) {
             if (std::holds_alternative<CompiledShape>(operations[index]) ||
-                std::holds_alternative<CompiledText>(operations[index]))
+                std::holds_alternative<CompiledText>(operations[index]) ||
+                std::holds_alternative<CompiledSubtitles>(operations[index]))
                 return true;
             const auto* layer = std::get_if<CompiledLayerOutput>(&operations[index]);
             if (layer == nullptr || layer->input.value() >= index)
@@ -211,7 +212,8 @@ gpuExecutorLivePeakBytes(const CompiledCompositionPlan& plan, const std::size_t 
     const auto heldBytes = [&](const std::size_t index) -> std::uint64_t {
         const auto& operation = operations[index];
         if (std::holds_alternative<CompiledShape>(operation) ||
-            std::holds_alternative<CompiledText>(operation))
+            std::holds_alternative<CompiledText>(operation) ||
+            std::holds_alternative<CompiledSubtitles>(operation))
             return 0;
         const document::AssetRecord* asset = nullptr;
         if (const auto* image = std::get_if<CompiledImageSource>(&operation))

@@ -175,7 +175,17 @@ struct GpuSceneEffectEmissionContext final {
     std::uint64_t allowance = 0;
     std::filesystem::path assetBaseDirectory;
     std::shared_ptr<GpuSceneCoverageCache> coverageCache;
+    // #752: each Subtitles leaf's prepared frame, for materializing one read as an image.
+    const std::vector<std::shared_ptr<const SubtitlesFrame>>* subtitlesFrames = nullptr;
 };
+
+// #752: the prepared frame of the Subtitles leaf at `source`, or null for any other leaf.
+[[nodiscard]] inline const SubtitlesFrame*
+subtitlesFrameOf(const GpuSceneEffectEmissionContext& ctx, const std::size_t source) noexcept {
+    return ctx.subtitlesFrames != nullptr && source < ctx.subtitlesFrames->size()
+               ? (*ctx.subtitlesFrames)[source].get()
+               : nullptr;
+}
 
 struct GpuSceneEffectEmission final {
     // True when the CPU evaluation of this effect is exact identity: the caller aliases the input
@@ -289,7 +299,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     chain->matrix, *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape, true))
+                    inputKey, result.consumedText, result.consumedShape, true,
+                    subtitlesFrameOf(ctx, chain->source)))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -600,7 +611,7 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 chain->matrix, *outputWindowOf[value], ctx.fullDisplayWindow, ctx.fullPixelAspect,
                 ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                 ctx.coverageCache, cancellation, emit, charge, chargeCoverage, command, key,
-                consumedText, consumedShape, true);
+                consumedText, consumedShape, true, subtitlesFrameOf(ctx, chain->source));
             if (!error)
                 consumedLeaf = chain->source;
             return error;
@@ -752,7 +763,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                     chain->matrix, sourceWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect,
                     ctx.hScale, ctx.vScale, chain->opacity, false, ctx.allowance, operationIndex,
                     ctx.coverageCache, cancellation, emit, charge, chargeCoverage, inputCommand,
-                    inputKey, result.consumedText, result.consumedShape, true))
+                    inputKey, result.consumedText, result.consumedShape, true,
+                    subtitlesFrameOf(ctx, chain->source)))
                 return error;
             result.consumedLeaf = chain->source;
         }
@@ -1121,7 +1133,8 @@ emitImageEffectCommand(const CompiledImageEffect& effect, const OperationIndex o
                 *inputWindow, ctx.fullDisplayWindow, ctx.fullPixelAspect, ctx.hScale, ctx.vScale,
                 chain.opacity, false, ctx.allowance, operationIndex, ctx.coverageCache,
                 cancellation, emit, charge, chargeCoverage, materialized, materializedKey,
-                result.consumedText, result.consumedShape, true)) {
+                result.consumedText, result.consumedShape, true,
+                subtitlesFrameOf(ctx, chain.source))) {
             return error;
         }
         result.consumedLeaf = chain.source;

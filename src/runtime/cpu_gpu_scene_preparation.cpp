@@ -599,6 +599,9 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     // that reaches the output by any other route fails closed instead of silently disappearing.
     std::vector<bool> textConsumed(operationCount, false);
     std::vector<bool> shapeConsumed(operationCount, false);
+    // #752: each Subtitles leaf's prepared frame, drawn by whatever consumes the leaf (its Layer
+    // Output redraws it through the layer matrix; an effect or a Merge reads it as its image).
+    std::vector<std::shared_ptr<const detail::SubtitlesFrame>> subtitlesFrames(operationCount);
 
     // #386: footage several layers use is uploaded and converted once per scene.
     detail::GpuSceneMediaCommandMemo mediaCommands;
@@ -779,13 +782,14 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         }
 
         if (const auto* subtitles = std::get_if<CompiledSubtitles>(&operation)) {
-            if (const auto error = detail::emitSubtitlesCommands(
-                    *subtitles, *plan, resolved, *operandTime, index, operationIndex,
-                    fullDisplayWindow, fullPixelAspect, coverageCache_, cancellation, emit,
-                    chargeTransient, chargeCoverage, commandForOperation, keyOf, outputWindowOf,
-                    bounds)) {
+            // #752: a vector leaf, as Text is: no command of its own. Its frame is prepared here
+            // (on the node's own clock) and drawn by what consumes it.
+            if (const auto error = detail::prepareSubtitlesLeaf(
+                    *subtitles, *plan, resolved, *operandTime, index, fullDisplayWindow,
+                    cancellation, outputWindowOf, bounds, subtitlesFrames)) {
                 return fail(error->code, error->message);
             }
+            vectors[index] = GpuSceneVectorChain{index, {}, 1.0};
             continue;
         }
 
@@ -874,6 +878,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 .allowance = allowance,
                 .assetBaseDirectory = media.assetBaseDirectory,
                 .coverageCache = coverageCache_,
+                .subtitlesFrames = &subtitlesFrames,
             };
             if (const auto error = detail::emitImageEffectOperation(
                     *effect, operationIndex, effectContext, ocioContext_, cancellation, emit,
@@ -982,7 +987,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                     return;
                 }
                 const auto source = inputVec->source;
-                if (std::holds_alternative<CompiledText>(plan->operations()[source])) {
+                if (std::holds_alternative<CompiledText>(plan->operations()[source]) ||
+                    std::holds_alternative<CompiledSubtitles>(plan->operations()[source])) {
                     textConsumed[source] = true;
                 } else if (std::holds_alternative<CompiledShape>(plan->operations()[source])) {
                     shapeConsumed[source] = true;
@@ -1266,7 +1272,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         vScale, inputVec->opacity * opacity->value, leafPath && nativeGrid,
                         allowance, operationIndex, coverageCache_, cancellation, emit,
                         chargeTransient, chargeCoverage, composedIndex, semanticKey,
-                        consumedTextLeaf, consumedShapeLeaf)) {
+                        consumedTextLeaf, consumedShapeLeaf, false,
+                        subtitlesFrames[chainSource].get())) {
                     return fail(error->code, error->message);
                 }
                 keyOf[index] = semanticKey;
@@ -1369,7 +1376,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                         chain->matrix, window, fullDisplayWindow, fullPixelAspect, hScale, vScale,
                         chain->opacity, false, allowance, operationIndex, coverageCache_,
                         cancellation, emit, chargeTransient, chargeCoverage, command, key,
-                        consumedText, consumedShape, true)) {
+                        consumedText, consumedShape, true, subtitlesFrames[chain->source].get())) {
                     return error;
                 }
                 textConsumed[chain->source] = textConsumed[chain->source] || consumedText;

@@ -17,6 +17,7 @@
 #include "gpu_scene_coverage.hpp"
 #include "gpu_scene_preparation_common.hpp"
 #include "gpu_scene_preparation_private.hpp"
+#include "gpu_scene_subtitles_emission.hpp"
 #include "operation_key.hpp"
 
 #include <bloom/render/image.hpp>
@@ -129,13 +130,20 @@ publishVectorLeafBounds(const CompiledOperation& operation, const CompiledCompos
         const auto& operation = plan.operations()[index];
         const auto* text = std::get_if<CompiledText>(&operation);
         const auto* shape = std::get_if<CompiledShape>(&operation);
+        // #752: a Subtitles leaf is accounted for in the text flags.
+        const auto* subtitles = std::get_if<CompiledSubtitles>(&operation);
         if ((text == nullptr || textConsumed[index]) &&
-            (shape == nullptr || shapeConsumed[index])) {
+            (shape == nullptr || shapeConsumed[index]) &&
+            (subtitles == nullptr || textConsumed[index])) {
             continue;
         }
-        std::string description = text != nullptr ? "Text source node " : "Shape source node ";
-        description +=
-            std::to_string((text != nullptr ? text->sourceNodeId : shape->sourceNodeId).value());
+        std::string description = text != nullptr        ? "Text source node "
+                                  : subtitles != nullptr ? "Subtitles source node "
+                                                         : "Shape source node ";
+        description += std::to_string((text != nullptr        ? text->sourceNodeId
+                                       : subtitles != nullptr ? subtitles->sourceNodeId
+                                                              : shape->sourceNodeId)
+                                          .value());
         for (const auto& candidate : plan.operations()) {
             const auto* layer = std::get_if<CompiledLayerOutput>(&candidate);
             if (layer != nullptr && layer->input.value() == index) {
@@ -161,10 +169,86 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
     const std::shared_ptr<GpuSceneCoverageCache>& coverageCache,
     const CancellationToken& cancellation, Emit&& emit, Charge&& charge,
     ChargeCoverage&& chargeCoverage, GpuSceneCommandIndex& composed, std::string& semanticKey,
-    bool& consumedText, bool& consumedShape, const bool leafImage = false) {
+    bool& consumedText, bool& consumedShape, const bool leafImage = false,
+    const SubtitlesFrame* subtitlesFrame = nullptr) {
     const auto* solidInput = std::get_if<CompiledSolid>(&inputOperation);
     const auto* textInput = std::get_if<CompiledText>(&inputOperation);
     const auto* shapeInput = std::get_if<CompiledShape>(&inputOperation);
+
+    // The exact integer move and layer opacity of a leaf's own image (`leafIndex` over
+    // `leafSourceWindow`) into the layer window. The move is the FULL composed matrix's
+    // translation, parents included (#430): the layer's own unparented transform would place a
+    // parented leaf outside its layer window and draw nothing.
+    const auto translateLeaf = [&](const GpuSceneCommandIndex leafIndex, const std::string& leafKey,
+                                   const render::ImageWindow leafSourceWindow)
+        -> std::optional<GpuSceneLeafFailure> {
+        const double gpuTranslationX =
+            matrix.x * hScale - (static_cast<double>(layerWindow.originX()) -
+                                 static_cast<double>(leafSourceWindow.originX()));
+        const double gpuTranslationY =
+            matrix.y * vScale - (static_cast<double>(layerWindow.originY()) -
+                                 static_cast<double>(leafSourceWindow.originY()));
+        OperationKey key;
+        key.add(std::string{"gpu-translation-opacity-v1"});
+        key.add(leafKey);
+        key.add(gpuTranslationX);
+        key.add(gpuTranslationY);
+        key.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity)));
+        addWindowToKey(key, leafSourceWindow);
+        addWindowToKey(key, layerWindow);
+        addPixelAspectToKey(key, fullPixelAspect);
+        key.add(std::string{kGpuTranslationOpacitySpirvSha256});
+        const auto translationKey = key.digest();
+        if (const auto error = charge(layerWindow.extent().width(), layerWindow.extent().height(),
+                                      sizeof(render::Rgba32f))) {
+            return error;
+        }
+        GpuSceneTranslationCommand translation{.sourceOperation = operationIndex,
+                                               .input = leafIndex,
+                                               .sourceWindow = leafSourceWindow,
+                                               .outputWindow = layerWindow,
+                                               .translationX = gpuTranslationX,
+                                               .translationY = gpuTranslationY,
+                                               .opacity = static_cast<float>(opacity),
+                                               .semanticKey = translationKey};
+        semanticKey = translationKey;
+        composed = emit(std::move(translation));
+        return std::nullopt;
+    };
+
+    // #752: a Subtitles leaf. Read as an image (by an image effect or a Merge) or on the integer
+    // grid, it is the CPU leaf's own image, moved exactly; through any other matrix its layer
+    // redraws every path, so a scaled or rotated layer stays crisp.
+    if (std::holds_alternative<CompiledSubtitles>(inputOperation)) {
+        if (subtitlesFrame == nullptr) {
+            return GpuSceneLeafFailure{PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                                       "The Subtitles frame is unavailable"};
+        }
+        consumedText = true;
+        if (nativeGrid || leafImage) {
+            GpuSceneCommandIndex leafIndex = kInvalidGpuSceneCommand;
+            std::string leafKey;
+            if (const auto error = emitSubtitlesLeafImage(
+                    *subtitlesFrame, fullDisplayWindow, fullPixelAspect, operationIndex,
+                    coverageCache, cancellation, emit, charge, chargeCoverage, leafIndex,
+                    leafKey)) {
+                return error;
+            }
+            const auto leafWindow = *subtitlesFrame->window;
+            // The node read as an image where it stands: the leaf itself, with nothing to move.
+            if (leafImage && opacity == 1.0 && matrix.a == 1 && matrix.b == 0 && matrix.c == 0 &&
+                matrix.d == 1 && matrix.x == 0 && matrix.y == 0 && layerWindow == leafWindow) {
+                composed = leafIndex;
+                semanticKey = leafKey;
+                return std::nullopt;
+            }
+            return translateLeaf(leafIndex, leafKey, leafWindow);
+        }
+        return emitSubtitlesVectorLayer(*subtitlesFrame, matrix, layerWindow, fullDisplayWindow,
+                                        fullPixelAspect, hScale, vScale, opacity, operationIndex,
+                                        coverageCache, cancellation, emit, charge, chargeCoverage,
+                                        composed, semanticKey);
+    }
 
     // A text leaf read as an image (by an image effect or a Merge) is the CPU leaf's own coverage
     // image too: the identity matrix lands it in place, exactly as the integer-grid arm does.
@@ -201,37 +285,8 @@ template <typename Emit, typename Charge, typename ChargeCoverage>
         const std::string leafKey = leafCommand.semanticKey;
         leafCommand.sourceOperation = operationIndex;
         const auto leafIndex = emit(std::move(leafCommand));
-        const double gpuTranslationX =
-            matrix.x * hScale - (static_cast<double>(layerWindow.originX()) -
-                                 static_cast<double>(leafSourceWindow.originX()));
-        const double gpuTranslationY =
-            matrix.y * vScale - (static_cast<double>(layerWindow.originY()) -
-                                 static_cast<double>(leafSourceWindow.originY()));
-        OperationKey key;
-        key.add(std::string{"gpu-translation-opacity-v1"});
-        key.add(leafKey);
-        key.add(gpuTranslationX);
-        key.add(gpuTranslationY);
-        key.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity)));
-        addWindowToKey(key, leafSourceWindow);
-        addWindowToKey(key, layerWindow);
-        addPixelAspectToKey(key, fullPixelAspect);
-        key.add(std::string{kGpuTranslationOpacitySpirvSha256});
-        const auto translationKey = key.digest();
-        if (const auto error = charge(layerWindow.extent().width(), layerWindow.extent().height(),
-                                      sizeof(render::Rgba32f))) {
+        if (const auto error = translateLeaf(leafIndex, leafKey, leafSourceWindow))
             return error;
-        }
-        GpuSceneTranslationCommand translation{.sourceOperation = operationIndex,
-                                               .input = leafIndex,
-                                               .sourceWindow = leafSourceWindow,
-                                               .outputWindow = layerWindow,
-                                               .translationX = gpuTranslationX,
-                                               .translationY = gpuTranslationY,
-                                               .opacity = static_cast<float>(opacity),
-                                               .semanticKey = translationKey};
-        semanticKey = translationKey;
-        composed = emit(std::move(translation));
         consumedText = true;
         return std::nullopt;
     }

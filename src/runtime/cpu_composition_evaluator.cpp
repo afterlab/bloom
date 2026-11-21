@@ -2842,6 +2842,10 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             double opacity = 1;
         };
         std::vector<std::optional<VectorChain>> vectors(plan->operations().size());
+        // #752: each Subtitles node's prepared frame, which a Layer Output carrying it as a vector
+        // leaf redraws through its matrix.
+        std::vector<std::shared_ptr<const detail::SubtitlesFrame>> subtitlesFrames(
+            plan->operations().size());
         // #502: a raster Layer Output's resample, expressed from the first non-layer image up its
         // chain of Layer Outputs: that image's operation, the AUTHOR-space matrix composed through
         // every layer of the chain (pixel aspect and parents included), and the product of their
@@ -3194,7 +3198,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             bool effectApplicationFailed = false;
             // #752: a Subtitles frame is prepared before its key, which holds the content of the
             // cues on screen rather than the time.
-            std::optional<detail::SubtitlesFrame> subtitlesFrame;
+            std::shared_ptr<const detail::SubtitlesFrame> subtitlesFrame;
             if (const auto* subtitles =
                     std::get_if<CompiledSubtitles>(&plan->operations()[index])) {
                 auto prepared = detail::prepareSubtitlesFrame(
@@ -3211,7 +3215,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             : "Subtitles could not be prepared",
                         failure->message, operationSubject));
                 }
-                subtitlesFrame = std::move(std::get<detail::SubtitlesFrame>(prepared));
+                subtitlesFrame = std::make_shared<const detail::SubtitlesFrame>(
+                    std::move(std::get<detail::SubtitlesFrame>(prepared)));
+                subtitlesFrames[index] = subtitlesFrame;
             }
 
             std::shared_ptr<const ProcessFrame> nestedFrame;
@@ -3591,7 +3597,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             if ((std::holds_alternative<CompiledSolid>(operation) &&
                  !std::get<CompiledSolid>(operation).gradient) ||
                 std::holds_alternative<CompiledShape>(operation) ||
-                std::holds_alternative<CompiledText>(operation))
+                std::holds_alternative<CompiledText>(operation) ||
+                // #752: a Subtitles node is a vector leaf too: its layer redraws its paths.
+                std::holds_alternative<CompiledSubtitles>(operation))
                 vectors[index] = VectorChain{index, {}, 1};
             if (const auto* effect = std::get_if<CompiledImageEffect>(&operation);
                 effect && preparedEffect.has_value() && preparedEffect->identity())
@@ -4875,7 +4883,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // #752: the frame's layers (subtitles_frame.hpp), each filled
                             // through the path coverage reference and composited source-over in
                             // order, over the cues' ink window. The content bounds are the frame.
-                            auto& frame = *subtitlesFrame;
+                            const auto& frame = *subtitlesFrame;
                             bounds[index].local = frame.bounds;
                             bounds[index].output = frame.bounds;
                             if (!frame.window)
@@ -5499,6 +5507,14 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 return;
                             }
                             std::optional<render::PathRaster> vectorRaster;
+                            // #752: a Subtitles leaf's layers, redrawn through the matrix and
+                            // composited source-over in order.
+                            struct VectorLayer final {
+                                render::PathRaster raster;
+                                bool stroke = false;
+                                render::Rgba32f pixel = render::Rgba32f::transparent();
+                            };
+                            std::vector<VectorLayer> vectorLayers;
                             render::Rgba32f vectorFill = render::Rgba32f::transparent();
                             render::Rgba32f vectorStroke = render::Rgba32f::transparent();
                             bool vectorHasFill = false, vectorHasStroke = false;
@@ -5527,8 +5543,9 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         return;
                                 }
                             }
+                            const bool vectorDrawn = vectorRaster || !vectorLayers.empty();
                             const auto vectorScratch =
-                                vectorRaster
+                                vectorDrawn
                                     ? static_cast<std::uint64_t>(layerWindow->extent().width()) *
                                           layerWindow->extent().height() *
                                           (sizeof(render::Rgba32f) + 1)
@@ -5564,7 +5581,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                             // #742: a shrinking Trilinear/Anisotropic layer reads its source's mip
                             // levels, built once before the rows and charged to the budget.
                             detail::AffineMipLevels mipLevels;
-                            if (resample != nullptr && !vectorRaster &&
+                            if (resample != nullptr && !vectorDrawn &&
                                 resample->filterPlan().filtered()) {
                                 const std::size_t layerBytes =
                                     static_cast<std::size_t>(outputWindow.extent().width()) *
@@ -5600,14 +5617,60 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 rowBands, cancellation, height, outputWindow.originY(),
                                 [&image, &source, &layerTransform, resample, outputWindow,
                                  resampleLattice, levels, &operationSubject, &vectorRaster,
-                                 vectorFill, vectorStroke, vectorHasFill, vectorHasStroke,
-                                 vectorRule, vectorOpacity,
+                                 &vectorLayers, vectorFill, vectorStroke, vectorHasFill,
+                                 vectorHasStroke, vectorRule, vectorOpacity,
                                  &cancellation](const std::int64_t y) -> RowFailure {
                                     auto outputRow = image.row(y);
                                     if (!outputRow) {
                                         return imageDiagnostic(
                                             *outputRow.error(), operationSubject,
                                             "Layer output row could not be addressed");
+                                    }
+                                    if (!vectorLayers.empty()) {
+                                        // #752: the Subtitles layers in drawing order, each its
+                                        // coverage of its color over the ones before, then the
+                                        // layer's opacity, as the leaf folds them at the frame.
+                                        auto pixels = *outputRow.value();
+                                        std::vector<std::uint8_t> coverage(pixels.size());
+                                        std::vector<render::Rgba32f> layerPixels(
+                                            pixels.size(), render::Rgba32f::transparent());
+                                        std::fill(pixels.begin(), pixels.end(),
+                                                  render::Rgba32f::transparent());
+                                        const auto cancelled = [&] {
+                                            return cancellation.isCancellationRequested();
+                                        };
+                                        for (const auto& entry : vectorLayers) {
+                                            std::fill(coverage.begin(), coverage.end(),
+                                                      std::uint8_t{0});
+                                            if (!entry.raster.coverageRow(
+                                                    outputWindow.originX(), y, coverage,
+                                                    render::PathFillRule::NonZero, entry.stroke,
+                                                    cancelled))
+                                                return std::nullopt;
+                                            if (const auto error = render::coverageSolidRow(
+                                                    coverage, entry.pixel, layerPixels))
+                                                return imageDiagnostic(*error, operationSubject,
+                                                                       "Subtitles fill failed");
+                                            if (const auto error =
+                                                    render::sourceOverLinearRec709SceneRow(
+                                                        layerPixels, pixels))
+                                                return imageDiagnostic(
+                                                    *error, operationSubject,
+                                                    "Subtitles layers do not composite");
+                                        }
+                                        for (auto& value : pixels) {
+                                            const auto faded = render::Rgba32f::fromPremultiplied(
+                                                value.red() * vectorOpacity,
+                                                value.green() * vectorOpacity,
+                                                value.blue() * vectorOpacity,
+                                                value.alpha() * vectorOpacity);
+                                            if (!faded)
+                                                return imageDiagnostic(*faded.error(),
+                                                                       operationSubject,
+                                                                       "Vector opacity failed");
+                                            value = *faded.value();
+                                        }
+                                        return std::nullopt;
                                     }
                                     if (vectorRaster) {
                                         auto pixels = *outputRow.value();

@@ -32,9 +32,14 @@ namespace bloom::runtime::detail {
 inline constexpr std::size_t kSubtitlesActiveCueLimit = 16;
 inline constexpr std::size_t kSubtitlesGlyphLimit = 8192;
 
-// One filled or stroked layer, author-space geometry rasterized at the frame's proxy scales.
+// One filled or stroked layer. `raster` is its author-space geometry rasterized at the frame's
+// proxy scales: the node's own image (the leaf, read as an image or drawn on the integer grid).
+// `paths` and `pathStroke` are that geometry itself, which a Layer Output redraws through its
+// matrix so a scaled or rotated layer stays crisp (the vector leaf, as Text is).
 struct SubtitlesLayer final {
     std::shared_ptr<const render::PathRaster> raster;
+    std::shared_ptr<const std::vector<render::Path>> paths;
+    render::PathStroke pathStroke;
     bool stroke = false;
     // The premultiplied process pixel, opacity and fade included.
     render::Rgba32f pixel = render::Rgba32f::transparent();
