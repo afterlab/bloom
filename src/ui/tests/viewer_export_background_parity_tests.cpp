@@ -430,15 +430,15 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
         for (std::size_t index = 3; index < opaque.rgba.size(); index += 4)
             allOpaque = allOpaque && opaque.rgba[index] == 255;
         checks.expect(allOpaque, prefix + "every pixel is opaque: " + path.filename().string());
-        const auto near = [](const std::uint8_t* pixel, const int r, const int g, const int b) {
+        const auto closeTo = [](const std::uint8_t* pixel, const int r, const int g, const int b) {
             return std::abs(pixel[0] - r) <= 1 && std::abs(pixel[1] - g) <= 1 &&
                    std::abs(pixel[2] - b) <= 1;
         };
-        checks.expect(near(opaque.at(1, 1), 204, 51, 26) &&
-                          near(opaque.at(kWidth - 2, kHeight - 2), 204, 51, 26),
+        checks.expect(closeTo(opaque.at(1, 1), 204, 51, 26) &&
+                          closeTo(opaque.at(kWidth - 2, kHeight - 2), 204, 51, 26),
                       prefix + "the uncovered border is the background, as the Viewer paints it");
         const auto* inside = processFrame.at(kWidth / 2, kHeight / 2);
-        checks.expect(near(opaque.at(kWidth / 2, kHeight / 2), inside[0], inside[1], inside[2]),
+        checks.expect(closeTo(opaque.at(kWidth / 2, kHeight / 2), inside[0], inside[1], inside[2]),
                       prefix + "the covered centre is the frame itself");
     }
     const Pixels unchanged = pixelsOf(viewer.displayedFrameForTest());
