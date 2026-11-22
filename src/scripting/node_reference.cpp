@@ -411,7 +411,22 @@ std::string nodeReferenceMarkdown() {
                 "bloom.layer.stroke-outline strokes the letters as a path layer. Driven by a "
                 "String input, the text becomes a counter (an animated value through Scalar To "
                 "String, with `decimals` and `padWidth`, into `text`) or a "
-                "type-on (Substring with an animated length).\n\n";
+                "type-on (Substring with an animated length). `fixedDigits` draws every digit "
+                "at the widest digit's width, so a counter holds still.\n\n";
+        // #758
+        if (definition->lowering == document::NodeLoweringKind::TextAnimator)
+            text +=
+                "Animates the Text Source on its `text` input (directly or through other Text "
+                "Animators, applied in order) per character, word or line. Up to four range "
+                "selectors (`selector1` .. `selector4`) give each cluster an amount by their "
+                "units, start, end and offset (percent or index), shape (Square, Ramp up, Ramp "
+                "down, Triangle, Round, Smooth), ease and random order, combined by Add, Subtract "
+                "or Intersect; the amount blends `opacity`, `position`, `scale`, `rotation`, "
+                "`skew`, `fillColor`, `outlineColor`, `outlineWidth` and `tracking`. "
+                "`reveal` shows the first units without laying the text out again, with an "
+                "optional blinking `cursor`. Insert it with bloom.node.insert-on-link on the "
+                "link into the text's Layer Output. Recipes (counter, type-on, word fade): "
+                "concept:text-animator.\n\n";
         if (definition->layerSlotInput)
             text += "Layer stack slots: role `" + definition->layerSlotInput->role + "`" +
                     (definition->audioLayerSlotInput

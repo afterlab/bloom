@@ -155,10 +155,50 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
         "outlines: Alpha Contour after the layer (Under, Offset = Width/2) traces the drawn image, "
         "and bloom.layer.stroke-outline strokes the letters as a path layer above it. Recipes "
         "through the String input: a counter is an animated value through Scalar To String "
-        "(decimals, padWidth) into `text`; a type-on is Substring with an animated `length`.");
+        "(decimals, padWidth) into `text`, with `fixedDigits` on so its digits hold still; a "
+        "type-on is Substring with an animated `length`, or a Text Animator's `reveal` "
+        "(concept:text-animator).");
     addRelated(text, {"bloom.layer.add-text", "bloom.layer.stroke-outline",
-                      "bloom.node.set-parameter-value"});
+                      "bloom.node.set-parameter-value", "concept:text-animator"});
     out.push_back(std::move(text));
+
+    // #758
+    auto animator = makeEntry(
+        ReferenceKind::Concept, "concept:text-animator", "concepts",
+        "The Text Animator: per-letter, per-word and per-line animation of a Text Source, a "
+        "type-on reveal, and the counter, type-on and word-fade recipes.",
+        "A Text Animator (bloom.text-animator) sits between a Text Source and its layer: its "
+        "`text` input reads the Text Source's image, directly or through other Text Animators, "
+        "and its `image` output draws that text with per-cluster changes (a cluster is one "
+        "character today). Add it with bloom.node.insert-on-link on the link into the text "
+        "layer's Layer Output (node = add-text's `layerOutputNode` output, port `image`); stack "
+        "more the same way, each applied after the one before. Up to four range selectors "
+        "(`selector1` .. `selector4`, the first on) give each cluster an amount: `selectorNUnits` "
+        "Characters, Characters excluding spaces, Words or Lines; `selectorNStart`, "
+        "`selectorNEnd` and `selectorNOffset` in percent of the units or as unit indices "
+        "(`selectorNRangeBy`); `selectorNShape` Square, Ramp up, Ramp down, Triangle, Round or "
+        "Smooth; `selectorNEaseHigh` and `selectorNEaseLow`; `selectorNAmount` (-100..100 %); "
+        "`selectorNRandomize` and `selectorNSeed` for a random order. A selector after the "
+        "first combines by `selectorNMode` Add, Subtract or Intersect. The amount blends the "
+        "properties: `opacity`, `position` (pixels), `scale`, `rotation` and `skew` "
+        "(degrees, about the letter's baseline center), `fillColor` and `outlineColor` (with "
+        "`fill` and `outline` on), `outlineWidth` (pixels added to the text's) and "
+        "`tracking` (pixels after the letter; the line keeps its alignment). With every selector "
+        "off the properties apply to the whole text. `reveal` shows the first units by "
+        "`revealBy` Percent or Count, in `revealUnits`: the text is laid out once, so revealed "
+        "letters never move; `cursor` draws `cursorCharacter` after them, blinking "
+        "`cursorBlink` times a second (0 holds it on). Every number, color and choice is "
+        "animatable or has a socket, so a value node can drive it. Recipes. Counter: a keyed "
+        "bloom.value-scalar through bloom.scalar-to-string into the Text Source's `text`, with "
+        "the Text Source's `fixedDigits` on. Type-on: key the animator's `reveal` from 0 at the "
+        "first frame to 100 at the last, `cursor` on. Word fade: `selector1Units` Words, "
+        "`selector1Shape` Ramp down, `opacity` 0, and key `selector1Offset` from -100 to 100. "
+        "Subtitles drive it too: its `progress` through bloom.map-range (toMax 100) into "
+        "`reveal` types each cue on, its `text` into the Text Source's `text`, its `index` "
+        "into a choice.");
+    addRelated(animator, {"bloom.node.insert-on-link", "bloom.node.set-parameter-value",
+                          "bloom.animation.set-keys", "bloom.node.connect", "concept:text"});
+    out.push_back(std::move(animator));
 }
 
 // ---------------------------------------------------------------------------------------------

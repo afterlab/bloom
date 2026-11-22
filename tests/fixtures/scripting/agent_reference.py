@@ -208,8 +208,13 @@ class Reference(unittest.TestCase):
                     outputs[item['name']] = item['id']
                 for op in operations:
                     if 'parameter' in op['args']:
-                        self.assertEqual(op['args']['parameter'], outputs['positionParameter'],
-                                         'the guide names a stale parameter id')
+                        # #758: a parameter an earlier call returned: the layer's Position, or a
+                        # parameter of a node the guide inserted (its "parameter.<role>" outputs).
+                        returned = [outputs['positionParameter']] + [
+                            value for name, value in outputs.items()
+                            if name.startswith('parameter.')]
+                        self.assertIn(op['args']['parameter'], returned,
+                                      'the guide names a stale parameter id')
         finally:
             fresh.tool('project.new', {'discardChanges': True, 'stopJobs': True})
 

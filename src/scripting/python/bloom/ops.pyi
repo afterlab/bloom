@@ -5157,7 +5157,7 @@ class LayerOps:
         Related: query:layers, bloom.layer.break-apart-svg, bloom.node.set-parameter-value, transact
         """
         ...
-    def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., markup: bool = ..., accent1: tuple[float, float, float, float] = ..., accent2: tuple[float, float, float, float] = ..., accent3: tuple[float, float, float, float] = ..., accent4: tuple[float, float, float, float] = ..., outlineColor: tuple[float, float, float, float] = ..., outlineWidth: float = ..., outlineJoin: str = ..., background: str = ..., backgroundColor: tuple[float, float, float, float] = ..., backgroundPadding: float = ..., backgroundRadius: float = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
+    def add_text(self, name: str, text: str, position: tuple[float, float] = ..., opacity: float = ..., size: float = ..., color: tuple[float, float, float, float] = ..., markup: bool = ..., accent1: tuple[float, float, float, float] = ..., accent2: tuple[float, float, float, float] = ..., accent3: tuple[float, float, float, float] = ..., accent4: tuple[float, float, float, float] = ..., outlineColor: tuple[float, float, float, float] = ..., outlineWidth: float = ..., outlineJoin: str = ..., background: str = ..., backgroundColor: tuple[float, float, float, float] = ..., backgroundPadding: float = ..., backgroundRadius: float = ..., fixedDigits: bool = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.layer.add-text  (operation, layer)
         Adds a text layer on top of the layer stack. Font, alignment, box and the other text parameters
         are edited afterwards with bloom.parameter.set-source; their ids are in the outputs and in
@@ -5239,6 +5239,9 @@ class LayerOps:
               The space around the text inside the box, in em (0..4). Defaults to 0.25.
           backgroundRadius  float  optional
               The box's corner radius in pixels (0..4096). Defaults to 0.
+          fixedDigits  bool  optional
+              Draws every digit at the widest digit's width, so a counter's digits and decimal point
+              hold still as it counts. Defaults to false.
 
         Effects: undoable: one undo step per transact call; marks the project unsaved.
 

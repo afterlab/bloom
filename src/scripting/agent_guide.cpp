@@ -126,6 +126,29 @@ accent, outline and background box:
 `accent1Parameter` and `outlineWidthParameter` in `outputs` are the ids to key, as in step 3.
 `help {"name":"concept:text"}` names every tag and parameter.
 
+### Type-on and word fade
+
+A Text Animator animates a text per character, word or line. Insert one on the link into the
+text's Layer Output (`layerOutputNode` from `bloom.layer.add-text`), then key its `reveal` to
+type the text on, with a cursor:
+
+```json
+{"name":"transact","arguments":{"expectedRevision":5,"label":"Type on","operations":[
+  {"op":"bloom.node.insert-on-link","args":{"composition":1,"nodeType":"bloom.text-animator","node":8,"port":"image","position":[200,0]}}]}}
+```
+
+```json
+{"name":"transact","arguments":{"expectedRevision":6,"operations":[
+  {"op":"bloom.node.set-parameter-value","args":{"composition":1,"node":9,"role":"cursor","boolean":true}},
+  {"op":"bloom.animation.set-keys","args":{"composition":1,"parameter":153,"keys":[[0,0],[48,100]]}}]}}
+```
+
+`parameter.reveal` in the first result's `outputs` is the id to key. For a word fade set
+`selector1Units` to Words (2), `selector1Shape` to Ramp down (2) and `opacity` to 0, then key
+`selector1Offset` from -100 to 100. A counter needs no animator: drive the Text Source's `text`
+from a keyed value through Scalar To String and turn on its `fixedDigits`.
+`help {"name":"concept:text-animator"}` lists every selector and property.
+
 ## 5. Save
 
 The in-app server edits the artist's open project; the artist saves it (File > Save), and the

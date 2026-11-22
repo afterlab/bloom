@@ -3142,7 +3142,11 @@ OperationRegistry OperationRegistry::builtIn() {
          maybe("backgroundPadding", ValueKind::Double, 0.25,
                "The space around the text inside the box, in em (0..4). Defaults to 0.25."),
          maybe("backgroundRadius", ValueKind::Double, 8.0,
-               "The box's corner radius in pixels (0..4096). Defaults to 0.")},
+               "The box's corner radius in pixels (0..4096). Defaults to 0."),
+         // #758
+         maybe("fixedDigits", ValueKind::Boolean, true,
+               "Draws every digit at the widest digit's width, so a counter's digits and decimal "
+               "point hold still as it counts. Defaults to false.")},
         [](const std::string& op, const Arguments& args) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = id(args, op, "composition", error);
@@ -3153,8 +3157,9 @@ OperationRegistry OperationRegistry::builtIn() {
             const auto size = number(args, op, "size", error, false);
             const auto color = color4(args, op, "color", error, false);
             commands::TextLayerStyle style;
-            if (const auto markup = boolean(args, op, "markup", error, false))
-                style.styling.emplace_back("markup", *markup);
+            for (const std::string role : {"markup", "fixedDigits"})
+                if (const auto value = boolean(args, op, role, error, false))
+                    style.styling.emplace_back(role, *value);
             for (const std::string role :
                  {"accent1", "accent2", "accent3", "accent4", "outlineColor", "backgroundColor"})
                 if (const auto value = color4(args, op, role, error, false))

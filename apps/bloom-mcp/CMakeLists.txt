@@ -127,6 +127,14 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #758: the Text Animator recipes (counter, type-on, word fade, Subtitles progress driving a
+    # reveal) through MCP, Python and bloom-cli run.
+    bloom_add_test(NAME bloom.scripting.text-animator-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/text_animator_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp
