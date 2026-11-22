@@ -478,10 +478,18 @@ encoderArgument(yyjson_val* arguments);
 // null.
 [[nodiscard]] yyjson_mut_val* loudnessValue(Json& out, const host::ExportLoudnessReport& report);
 
+// #761: [{kind: video|audio, codec, profile, width, height, frameRate: [n, d], channels,
+// sampleRate, bitrate}], the written picture and sound streams as the verifying reopen read them
+// from the file (a video stream has no channels or sampleRate, an audio stream no size or rate).
+[[nodiscard]] yyjson_mut_val*
+writtenStreamsValue(Json& out, const std::vector<host::ExportWrittenStream>& streams);
+
 struct TransientResult final {
     std::optional<host::ExportWorkerMemory> workerMemory;
     std::optional<host::ExportLoudnessReport> loudness;
     std::vector<host::ExportSubtitleFile> subtitles;
+    // #761: every movie or WAV output's written streams, in output order.
+    std::vector<host::ExportWrittenStream> streams;
     std::uint64_t job = 0;
     std::vector<host::ExportLogEntry> log;
     std::uint64_t frames = 0;

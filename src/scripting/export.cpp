@@ -222,6 +222,38 @@ void writeVerification(Json& json, const host::ExportOutputVerification& output)
         json.key("sha256").string(std::string_view(hex.data(), hex.size()));
     }
     json.end('}');
+    // #761: a published movie's or WAV's streams as the verifying reopen read them from the file;
+    // absent for an image output.
+    if (!output.streams.empty()) {
+        json.key("streams").begin('[');
+        for (const auto& stream : output.streams) {
+            const bool video = stream.kind == host::ExportStreamKind::Video;
+            json.begin('{')
+                .key("kind")
+                .string(video ? "video" : "audio")
+                .key("codec")
+                .string(stream.codec)
+                .key("profile")
+                .string(stream.profile);
+            if (video)
+                json.key("width")
+                    .number(stream.width)
+                    .key("height")
+                    .number(stream.height)
+                    .key("frameRate")
+                    .begin('[')
+                    .number(static_cast<std::uint64_t>(stream.frameRate.numerator))
+                    .number(static_cast<std::uint64_t>(stream.frameRate.denominator))
+                    .end(']');
+            else
+                json.key("channels")
+                    .number(stream.channels)
+                    .key("sampleRate")
+                    .number(stream.sampleRate);
+            json.key("bitrate").number(stream.bitrate).end('}');
+        }
+        json.end(']');
+    }
     // #752: the subtitle tracks the output delivered (a sidecar file with its size and SHA-256, or
     // a track embedded in the movie); absent when it asked for none.
     if (!output.subtitles.empty()) {
@@ -677,8 +709,29 @@ ExportCallResult ExportCalls::call(const std::string_view name, const Arguments&
                 .key("reason")
                 .string(availability.reason)
                 .key("settings")
-                .raw(host::exportSettingsToJson(preset.settings))
-                .end('}');
+                .raw(host::exportSettingsToJson(preset.settings));
+            // #761: what the file carries, stated before it is written (movie and WAV presets).
+            if (const auto codecs = host::exportDeclaredCodecs(preset.settings);
+                !codecs.container.empty()) {
+                json.key("container").string(codecs.container);
+                if (!codecs.videoCodec.empty())
+                    json.key("videoCodec")
+                        .string(codecs.videoCodec)
+                        .key("videoProfile")
+                        .string(codecs.videoProfile);
+                if (!codecs.audioCodec.empty()) {
+                    json.key("audioCodec").string(codecs.audioCodec);
+                    if (!codecs.audioProfile.empty())
+                        json.key("audioProfile").string(codecs.audioProfile);
+                    if (codecs.audioBitrateKbps)
+                        json.key("audioBitrateKbps").number(*codecs.audioBitrateKbps);
+                    json.key("audioSampleRate").number(codecs.audioSampleRate);
+                    if (codecs.pcmDeepensForDeeperSources)
+                        json.key("pcmDepth").string("16-bit, or 24-bit when a source is deeper");
+                }
+                json.key("audio").string(codecs.audioRule);
+            }
+            json.end('}');
         }
         json.end(']');
         return {true, json.take(), {}, {}};

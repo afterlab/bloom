@@ -709,6 +709,9 @@ frameRange(std::string_view value) {
         }
         std::cout << '\n';
     }
+    // #761: a movie's or WAV's streams as the verifying reopen read them from the file.
+    for (const auto& stream : result.streams)
+        std::cout << "stream " << bloom::host::exportWrittenStreamText(stream) << '\n';
     std::cout << "rendered " << result.publishedFrames << " frame(s) to " << outputDirectory
               << '\n';
     return 0;

@@ -185,6 +185,29 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
     }
     row["files"] = paths;
     row["subtitles"] = tracks;
+    // #761: a movie's or WAV's streams as the verifying reopen read them from the file.
+    nb::list streams;
+    for (const auto& stream : result.streams) {
+        nb::dict item;
+        const bool video = stream.kind == host::ExportStreamKind::Video;
+        item["kind"] = video ? "video" : "audio";
+        item["codec"] = stream.codec;
+        item["profile"] = stream.profile;
+        if (video) {
+            item["width"] = stream.width;
+            item["height"] = stream.height;
+            nb::list rate;
+            rate.append(stream.frameRate.numerator);
+            rate.append(stream.frameRate.denominator);
+            item["frame_rate"] = rate;
+        } else {
+            item["channels"] = stream.channels;
+            item["sample_rate"] = stream.sampleRate;
+        }
+        item["bitrate"] = stream.bitrate;
+        streams.append(item);
+    }
+    row["streams"] = streams;
     return row;
 }
 

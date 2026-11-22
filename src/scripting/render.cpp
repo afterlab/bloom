@@ -401,6 +401,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             result.workerMemory = verification.workerMemory;
             result.loudness = verification.loudness;
             result.subtitles = verification.subtitles;
+            result.streams = verification.streams;
         }
         if (!result.succeeded) {
             if (runner.stopped()) {

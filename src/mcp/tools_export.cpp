@@ -204,6 +204,9 @@ yyjson_mut_val* verificationValue(Json& out, const host::ExportOutputVerificatio
     // The subtitle tracks the output delivered (#752); absent when it asked for none.
     if (!verification.subtitles.empty())
         out.set(value, "subtitles", subtitleFilesValue(out, verification.subtitles));
+    // #761: a published movie's or WAV's streams as read back from the file; absent for images.
+    if (!verification.streams.empty())
+        out.set(value, "streams", writtenStreamsValue(out, verification.streams));
     // A published movie's reopen measurements (issue #424), named as in ExportReopenQuality;
     // absent for an output without a tolerance profile.
     if (const auto& quality = verification.reopenQuality) {
@@ -594,6 +597,32 @@ yyjson_mut_val* subtitleFilesValue(Json& out, const std::vector<host::ExportSubt
     return list;
 }
 
+yyjson_mut_val* writtenStreamsValue(Json& out,
+                                    const std::vector<host::ExportWrittenStream>& streams) {
+    auto* list = out.array();
+    for (const auto& stream : streams) {
+        auto* row = out.object();
+        const bool video = stream.kind == host::ExportStreamKind::Video;
+        out.set(row, "kind", out.text(video ? "video" : "audio"));
+        out.set(row, "codec", out.text(stream.codec));
+        out.set(row, "profile", out.text(stream.profile));
+        if (video) {
+            out.set(row, "width", out.number(stream.width));
+            out.set(row, "height", out.number(stream.height));
+            auto* rate = out.array();
+            out.append(rate, out.number(static_cast<std::uint64_t>(stream.frameRate.numerator)));
+            out.append(rate, out.number(static_cast<std::uint64_t>(stream.frameRate.denominator)));
+            out.set(row, "frameRate", rate);
+        } else {
+            out.set(row, "channels", out.number(stream.channels));
+            out.set(row, "sampleRate", out.number(stream.sampleRate));
+        }
+        out.set(row, "bitrate", out.number(stream.bitrate));
+        out.append(list, row);
+    }
+    return list;
+}
+
 yyjson_mut_val* loudnessValue(Json& out, const host::ExportLoudnessReport& report) {
     auto* value = out.object();
     out.set(value, "targetLufs", out.real(report.targetLufs));
@@ -841,6 +870,8 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                     result.loudness = output.verification->loudness;
                 for (const auto& file : output.verification->subtitles)
                     result.subtitles.push_back(file);
+                for (const auto& stream : output.verification->streams)
+                    result.streams.push_back(stream);
                 for (auto& file : publishedFiles(output.verification->artifacts))
                     result.files.push_back(std::move(file));
             }

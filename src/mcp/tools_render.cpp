@@ -663,6 +663,9 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         out.set(value, "loudness", loudnessValue(out, *result.loudness));
     if (subtitles)
         out.set(value, "subtitles", subtitleFilesValue(out, result.subtitles));
+    // #761: the written streams of a movie or WAV, read back from the file by the reopen.
+    if (!result.streams.empty())
+        out.set(value, "streams", writtenStreamsValue(out, result.streams));
     out.set(value, "job", out.text(std::to_string(result.job)));
     out.set(value, "log", logEntries(out, result.log));
     reportJobRoute(out, value, result);

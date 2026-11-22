@@ -92,6 +92,9 @@ struct RenderResult final {
     // #752: every subtitle track the render delivered (a sidecar file, with its size and SHA-256,
     // or a track embedded in the movie).
     std::vector<host::ExportSubtitleFile> subtitles = {};
+    // #761: a movie or WAV preset's written streams as the verifying reopen read them from the
+    // file (video first); empty for an image preset.
+    std::vector<host::ExportWrittenStream> streams = {};
     // #751: the export log's `export.capacity.assumed` lines: a capacity admission could not
     // sample and what it assumed instead. Empty while every capacity was sampled.
     std::vector<std::string> capacityAssumptions = {};
