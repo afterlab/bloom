@@ -1184,6 +1184,29 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                         out.set(row, "reason", out.text(availability.reason));
                         Parsed settings(host::exportSettingsToJson(preset.settings));
                         out.set(row, "settings", out.copy(settings.root()));
+                        // #761: what the file carries, as the scripting export.presets states it.
+                        if (const auto codecs = host::exportDeclaredCodecs(preset.settings);
+                            !codecs.container.empty()) {
+                            out.set(row, "container", out.text(codecs.container));
+                            if (!codecs.videoCodec.empty()) {
+                                out.set(row, "videoCodec", out.text(codecs.videoCodec));
+                                out.set(row, "videoProfile", out.text(codecs.videoProfile));
+                            }
+                            if (!codecs.audioCodec.empty()) {
+                                out.set(row, "audioCodec", out.text(codecs.audioCodec));
+                                if (!codecs.audioProfile.empty())
+                                    out.set(row, "audioProfile", out.text(codecs.audioProfile));
+                                if (codecs.audioBitrateKbps)
+                                    out.set(row, "audioBitrateKbps",
+                                            out.number(*codecs.audioBitrateKbps));
+                                out.set(row, "audioSampleRate",
+                                        out.number(codecs.audioSampleRate));
+                                if (codecs.pcmDeepensForDeeperSources)
+                                    out.set(row, "pcmDepth",
+                                            out.text("16-bit, or 24-bit when a source is deeper"));
+                            }
+                            out.set(row, "audio", out.text(codecs.audioRule));
+                        }
                         out.append(presets, row);
                     }
                     out.set(result, "presets", presets);
