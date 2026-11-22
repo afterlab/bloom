@@ -117,6 +117,18 @@ void expect(const bool condition, const std::string& what) {
             auto refused = registry.create(id, fromExamples);
             expect(!refused && refused.diagnostic()->code == "bloom.scripting.source-unavailable",
                    id + " refuses without a session source");
+            // #752: the example's rooted path is taken on every platform (above, it reaches the
+            // session check on Windows as well), and a relative one is refused everywhere.
+            if (id == "bloom.subtitles.write-file") {
+                auto relative = fromExamples;
+                relative.insert_or_assign("path", Value(std::string("deliveries/episode.srt")));
+                auto refusedRelative = registry.create(id, relative);
+                expect(!refusedRelative &&
+                           refusedRelative.diagnostic()->code ==
+                               "bloom.scripting.invalid-argument" &&
+                           refusedRelative.diagnostic()->argument == "path",
+                       id + " refuses a relative path on every platform");
+            }
             const auto example = bloom::scripting::exampleCall(schema);
             expect(example.starts_with("bloom.ops."), id + " has a pasteable example call");
             expect(example.ends_with(")"), id + "'s example call is complete");

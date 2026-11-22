@@ -157,6 +157,11 @@ A load or reload gives the new cues the ids of the cues they match in the curren
 and end, then the same text. Each old cue is matched at most once, and the other cues take fresh
 ids.
 
+**Paths.** The `file` of `add-subtitles` and `load` and the `path` of `write-file` are absolute, or
+rooted as `bloom.asset.import` takes them: `/deliveries/episode.srt` is accepted on every platform
+and on Windows names that folder on the current drive. A relative path (`episode.srt`, or
+`C:episode.srt` on Windows) is refused on every platform.
+
 **Refusals.** A list another node supplies, through an edge into the Cues input or a driver, is
 refused with the name of that node. A linked list is refused by every edit except load, reload and
 unlink: "These cues follow <path>. Edit the file, or Unlink to edit here." A cue id or index the

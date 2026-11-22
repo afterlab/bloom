@@ -27,6 +27,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <system_error>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -443,6 +444,23 @@ struct ReadRequest final {
         std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
 
+// The absolute file a load or write names. A rooted path such as "/deliveries/episode.srt" is
+// taken on every platform, as bloom.asset.import takes it: it is already absolute on Linux and
+// macOS, and on Windows it names that folder on the current drive. A relative path ("episode.srt",
+// or "C:episode.srt" on Windows) is refused everywhere.
+[[nodiscard]] std::optional<std::filesystem::path> absolutePathOf(const std::string& text) {
+    const auto path = pathOf(text);
+    if (path.is_absolute())
+        return path;
+    if (!path.has_root_directory())
+        return std::nullopt;
+    std::error_code error;
+    auto absolute = std::filesystem::absolute(path, error);
+    if (error || !absolute.is_absolute())
+        return std::nullopt;
+    return absolute;
+}
+
 // The load's failure as a refusal; a size refusal is the subtitleFileBytes limit.
 [[nodiscard]] OperationCreateResult loadRefusal(const std::string& op, const std::string& argument,
                                                 const subtitles::LoadFailure& failure,
@@ -528,9 +546,10 @@ readList(const std::string& op, const ReadRequest& request, const OperationConte
     const auto* file = textOf(*request.file);
     if (file == nullptr || file->empty())
         return invalid(op, "file", "expects the subtitle file's absolute path");
-    const auto path = pathOf(*file);
-    if (!path.is_absolute())
+    const auto absolute = absolutePathOf(*file);
+    if (!absolute)
         return invalid(op, "file", "expects an absolute path; \"" + *file + "\" is relative");
+    const auto& path = *absolute;
     std::filesystem::path projectDirectory;
     if (context.source)
         if (const auto source = context.source())
@@ -993,9 +1012,10 @@ OperationCreateResult writeFile(const std::string& op, const Arguments& args,
     const auto* pathText = pathValue ? textOf(*pathValue) : nullptr;
     if (pathText == nullptr || pathText->empty())
         return invalid(op, "path", "expects the file's absolute path");
-    const auto path = pathOf(*pathText);
-    if (!path.is_absolute())
+    const auto absolute = absolutePathOf(*pathText);
+    if (!absolute)
         return invalid(op, "path", "expects an absolute path; \"" + *pathText + "\" is relative");
+    const auto& path = *absolute;
     const auto* formatValue = find(args, "format");
     const auto* formatName = formatValue ? textOf(*formatValue) : nullptr;
     const auto format = formatName ? subtitles::formatFromName(*formatName) : std::nullopt;
