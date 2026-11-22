@@ -79,6 +79,12 @@ struct Context final {
     return {texel[0], texel[1], texel[2], texel[3]};
 }
 
+#if defined(_MSC_VER)
+// The IEEE binary32 divide by zero (inf/NaN) is intended: the GPU kernel defines it and this reference
+// must match. C4723 is reported where the division is inlined, so the suppression spans the kernel inclusion.
+#pragma warning(push)
+#pragma warning(disable : 4723)
+#endif
 [[maybe_unused]] inline float bfk_div(const float a, const float b) noexcept { return a / b; }
 [[maybe_unused]] inline uint bfk_bits(const float f) noexcept { return std::bit_cast<uint>(f); }
 [[maybe_unused]] inline float bfk_float(const uint u) noexcept { return std::bit_cast<float>(u); }
@@ -94,6 +100,10 @@ struct Context final {
 static_assert(BFK_OPS == kAllFieldOps, "BFK_OPS names every field operation");
 
 #include "field_kernel.glsl"
+
+#if defined(_MSC_VER)
+#pragma warning(pop)
+#endif
 
 #undef BFK_FN
 #undef BFK_P
