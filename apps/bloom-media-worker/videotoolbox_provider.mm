@@ -41,6 +41,7 @@
 #include "ffmpeg_reopen_compare.hpp"
 #include "ffmpeg_stream_color_tags.hpp"
 #include "ffmpeg_subtitle_tracks.hpp"
+#include "ffmpeg_written_streams.hpp"
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -1134,6 +1135,15 @@ provider::EncodeQcV1 Encoder::State::finish() {
             qc.audio = audioHasher.finalize();
         }
     }
+    // #761: the written streams, read back by FFmpeg's demuxer as on every other platform.
+    qc.streams = ffmpeg::readWrittenStreams(
+        path,
+        provider::Rational{static_cast<std::int64_t>(settings.frames) * settings.rate.denominator,
+                           settings.rate.numerator},
+        audioInput != nil ? provider::Rational{static_cast<std::int64_t>(settings.audioSamples),
+                                               static_cast<std::int64_t>(settings.sampleRate)}
+                          : provider::Rational{0, 1});
+    require(qc.streams.size() == (audioInput != nil ? 2U : 1U), "Reopened stream layout differs");
 
     for (const bool last : {false, true}) {
         if (last && settings.frames == 1)

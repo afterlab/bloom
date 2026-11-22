@@ -95,8 +95,10 @@ if(bloom_ffmpeg_worker)
                           PUBLIC FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
     bloom_enable_warnings(bloom_media_ffmpeg_stream_color_tags)
     # #752: embedded subtitle tracks (ASS text for FFmpeg's encoders, the reopened tracks, the MOV
-    # text track's enabled flag), for the reopen check of both provider builds.
-    add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp)
+    # text track's enabled flag), for the reopen check of both provider builds. #761: the written
+    # streams' facts (codec, profile, size, rate, channels, bit rate) for the same reopen.
+    add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp
+                ffmpeg_written_streams.cpp)
     target_include_directories(bloom_media_ffmpeg_subtitle_tracks
                                PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(bloom_media_ffmpeg_subtitle_tracks PUBLIC cxx_std_20)

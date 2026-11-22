@@ -537,6 +537,11 @@ struct Encoder::State {
         AVDictionary* options = nullptr;
         if (settings.videoCodec == "dnxhd" && video)
             av_dict_set(&options, "profile", settings.profile.c_str(), 0);
+        // #761: prores_ks takes its profile from its own option and ignores the context's: left
+        // unset it picks HQ for 4:2:2 and 4444 for 4:4:4:4, so Proxy, LT, 422 and 4444 XQ were
+        // written as HQ and 4444. The verifying reopen now reads the profile back.
+        if (settings.videoCodec == "prores_ks" && video)
+            av_dict_set_int(&options, "profile", videoProfile(settings), 0);
         if (video && hardware && hardwareCodec(settings))
             av_dict_set_int(&options, "async_depth", kVaapiAsyncDepth, 0);
         if (video && nvenc && hardwareCodec(settings)) {
@@ -1036,6 +1041,7 @@ struct Encoder::State {
             verifyVideo(qc);
             verifyAudio(qc);
             verifySubtitles(qc);
+            verifyStreams(qc);
         }
         qc.duration =
             settings.frames != 0
@@ -1098,6 +1104,9 @@ struct Encoder::State {
             qc.encoder = videoTrack.codec->codec->name;
         if (const auto* name = avcodec_profile_name(parameters.codec_id, parameters.profile))
             qc.profile = name;
+        // #761: a ProRes stream reopens with the profile it was asked for (its sample entry).
+        require(settings.videoCodec != "prores_ks" || parameters.profile == videoProfile(settings),
+                "Reopened ProRes profile differs from the requested profile");
         if (const auto* layout = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(parameters.format)))
             qc.bitDepth = static_cast<std::uint32_t>(layout->comp[0].depth);
         // #408: every HEVC encoder delivers the requested depth (Main 10 through NVENC, VA-API
@@ -1146,6 +1155,24 @@ struct Encoder::State {
         qc.subtitles = ffmpeg::readSubtitleTracks(*input.format, settings.rate);
         const auto difference = subtitleTrackDifference(settings.subtitles, qc.subtitles);
         require(difference.empty(), difference.c_str());
+    }
+    // #761: the written picture and sound streams as the file holds them, for every result surface.
+    void verifyStreams(EncodeQcV1& qc) {
+        PrivateAvio reader(file, false);
+        Input input;
+        openInput(input, reader);
+        qc.streams = ffmpeg::readWrittenStreams(
+            *input.format,
+            settings.frames != 0
+                ? rational(static_cast<std::int64_t>(settings.frames) * settings.rate.denominator,
+                           settings.rate.numerator)
+                : Rational{0, 1},
+            settings.audioSamples != 0
+                ? rational(static_cast<std::int64_t>(settings.audioSamples), settings.sampleRate)
+                : Rational{0, 1});
+        require(qc.streams.size() == (settings.videoCodec.empty() ? 0U : 1U) +
+                                         (settings.audioCodec.empty() ? 0U : 1U),
+                "Reopened stream layout differs");
     }
     void verifyAudio(EncodeQcV1& qc) {
         if (settings.audioCodec.empty())

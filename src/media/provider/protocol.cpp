@@ -340,6 +340,35 @@ void subtitleTracks(Writer& w, const std::vector<SubtitleTrackV1>& tracks) {
         }
     }
 }
+void encodedStreams(Writer& w, const std::vector<EncodedStreamV1>& streams) {
+    w.count(streams.size(), kEncodedStreamsMaximum);
+    for (const auto& stream : streams) {
+        w.enumeration(stream.kind, 1, 2);
+        w.text(stream.codec);
+        w.text(stream.profile);
+        w.number(stream.width);
+        w.number(stream.height);
+        w.rational(stream.rate);
+        w.number(stream.channels);
+        w.number(stream.sampleRate);
+        w.number(stream.bitrate);
+    }
+}
+std::vector<EncodedStreamV1> encodedStreams(Reader& r) {
+    std::vector<EncodedStreamV1> streams(r.count(kEncodedStreamsMaximum));
+    for (auto& stream : streams) {
+        stream.kind = r.enumeration<MediaKind>(1, 2);
+        stream.codec = r.text();
+        stream.profile = r.text();
+        stream.width = r.number<std::uint32_t>();
+        stream.height = r.number<std::uint32_t>();
+        stream.rate = r.rational();
+        stream.channels = r.number<std::uint32_t>();
+        stream.sampleRate = r.number<std::uint32_t>();
+        stream.bitrate = r.number<std::uint64_t>();
+    }
+    return streams;
+}
 std::vector<SubtitleTrackV1> subtitleTracks(Reader& r) {
     std::vector<SubtitleTrackV1> tracks(r.count(kSubtitleTracksMaximum));
     for (auto& track : tracks) {
@@ -421,6 +450,7 @@ void qc(Writer& w, const EncodeQcV1& v) {
     w.number(v.bitDepth);
     w.text(v.encoder);
     subtitleTracks(w, v.subtitles);
+    encodedStreams(w, v.streams);
 }
 EncodeQcV1 qc(Reader& r) {
     EncodeQcV1 v;
@@ -440,6 +470,7 @@ EncodeQcV1 qc(Reader& r) {
     v.bitDepth = r.number<std::uint32_t>();
     v.encoder = r.text();
     v.subtitles = subtitleTracks(r);
+    v.streams = encodedStreams(r);
     Writer validation;
     qc(validation, v);
     return v;

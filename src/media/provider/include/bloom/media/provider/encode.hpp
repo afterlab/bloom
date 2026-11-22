@@ -20,6 +20,22 @@ struct SubtitleTrackV1 {
     friend bool operator==(const SubtitleTrackV1&, const SubtitleTrackV1&) = default;
 };
 inline constexpr std::uint32_t kSubtitleTracksMaximum = 64;
+// #761: one picture or sound stream of a written movie or WAV, read back from the file by the
+// worker's verifying reopen. `codec` is the codec's short name ("h264", "hevc", "prores", "dnxhd",
+// "vp9", "av1", "aac", "opus", "pcm_s16le", "pcm_s24le"), `profile` its profile as the codec
+// names it ("High", "Main 10", "LC"; empty where the codec has none). A video stream has its
+// picture size and frame rate, an audio stream its channel count and sample rate. `bitrate` is
+// the stream's average over its duration, in bits per second, from the bytes of its packets.
+struct EncodedStreamV1 {
+    MediaKind kind = MediaKind::Video;
+    std::string codec, profile;
+    std::uint32_t width = 0, height = 0;
+    Rational rate{0, 1};
+    std::uint32_t channels = 0, sampleRate = 0;
+    std::uint64_t bitrate = 0;
+    friend bool operator==(const EncodedStreamV1&, const EncodedStreamV1&) = default;
+};
+inline constexpr std::uint32_t kEncodedStreamsMaximum = 2;
 inline constexpr std::uint32_t kSubtitleCueTextBytes = 16384;
 [[nodiscard]] bool valid(const SubtitleTrackV1& track, std::string_view container,
                          std::uint64_t frames);
@@ -111,6 +127,9 @@ struct EncodeQcV1 {
     // start, through the last before its end), its text as the sample holds it, the track's
     // language and title. Empty samples (the gaps between cues) are left out.
     std::vector<SubtitleTrackV1> subtitles;
+    // #761: the picture and sound streams the reopened artifact holds, in stream order (the video
+    // first), as the verifying reopen read them from the file. Empty for a still image.
+    std::vector<EncodedStreamV1> streams;
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
 // v2 compared against the reference taken through the stream's declared sample format, matrix,
