@@ -781,6 +781,9 @@ struct Controls final {
             controls.sliders.push_back({"taperEnd", operand, 0.0, 100.0, 0.0, 25.0, percent});
             controls.sliders.push_back({"dashLength", operand, 0.0, 200.0, 0.0, 50.0, pixels});
             controls.sliders.push_back({"dashGap", operand, 0.0, 200.0, 8.0, 50.0, pixels});
+            // #759: the pattern's second and third dash and gap; 0 and 0 leaves a pair unused.
+            for (const char* role : {"dash2", "gap2", "dash3", "gap3"})
+                controls.sliders.push_back({role, operand, 0.0, 200.0, 0.0, 50.0, pixels});
             controls.sliders.push_back({"dashOffset", operand, -200.0, 200.0, 0.0, 100.0, pixels});
             controls.sliders.push_back({"spacing", operand, 0.0, 200.0, 0.0, 50.0, pixels});
             controls.sliders.push_back({"wiggle", operand, 0.0, 100.0, 0.0, 25.0, pixels});
