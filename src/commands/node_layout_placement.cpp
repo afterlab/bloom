@@ -154,8 +154,9 @@ struct NodeControlsEstimate final {
         return {.sliders = 3};
     if (typeId == document::kRoundCornersNodeType)
         return {.sliders = 1};
+    // #759: Path Stroke's sixteen sliders include the dash pattern's Dash 2, Gap 2, Dash 3 and Gap 3.
     if (typeId == document::kPathStrokeNodeType)
-        return {.ranges = 1, .sliders = 12};
+        return {.ranges = 1, .sliders = 16};
     if (typeId == document::kHslQualifierNodeType)
         return {.ranges = 3, .sliders = 3};
     // #511: the pad for the mode's point and the angle dial of Mirror or Kaleidoscope (one at a time).
