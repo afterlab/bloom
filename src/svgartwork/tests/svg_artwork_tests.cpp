@@ -7,15 +7,18 @@
 #include <bloom/document/shape.hpp>
 #include <bloom/svgartwork/svg_artwork.hpp>
 #include <bloom/document/value_nodes.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/media/svg_scene.hpp>
 #include <bloom/platform/font_catalog.hpp>
 
 #include <algorithm>
 #include <cstdlib>
 #include <iostream>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 using namespace bloom;
 using namespace bloom::document;
@@ -139,8 +142,54 @@ void notesAreNamed() {
                                    [&](const std::string& note) { return note.find(text) != std::string::npos; });
     };
     expect(names("Embed"), "an unsupported element is listed by name");
-    expect(names("Dash") && names("first dash and gap"), "a three-length dash pattern names its element");
+    // #759: a pattern of up to six lengths imports exactly, so only a longer one is noted.
+    expect(!names("Dash:") && !names("first dash and gap"), "a three-length dash pattern is not noted");
     expect(names("Label") && names("generic font family"), "a generic font family is named on its text");
+}
+
+// #759: stroke-dasharray of up to six lengths is Path Stroke's three dash and gap pairs exactly (an
+// odd count repeated, as SVG reads it); a longer one keeps its first six and is noted.
+void dashPatternsImportExactly() {
+    constexpr std::string_view kDashes = R"svg(<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100">
+<line id="DashDot" x1="0" y1="10" x2="200" y2="10" stroke="#000" stroke-linecap="round" stroke-dasharray="12 4 0 4" stroke-dashoffset="3"/>
+<line id="Dotted" x1="0" y1="30" x2="200" y2="30" stroke="#000" stroke-linecap="round" stroke-dasharray="0 6"/>
+<line id="Three" x1="0" y1="50" x2="200" y2="50" stroke="#000" stroke-dasharray="4 2 1"/>
+<line id="Five" x1="0" y1="70" x2="200" y2="70" stroke="#000" stroke-dasharray="1 2 3 4 5"/></svg>)svg";
+    const auto scene = parse(kDashes);
+    const auto description = buildSvgArtwork(*scene, options(false));
+    std::vector<const SvgArtworkNode*> strokes;
+    for (const auto& node : description.nodes)
+        if (node.type == kPathStrokeNodeType)
+            strokes.push_back(&node);
+    expect(strokes.size() == 4, "each dashed line is stroked by a Path Stroke");
+    if (strokes.size() != 4)
+        return;
+    const auto number = [](const SvgArtworkNode& node, const std::string& role) -> std::optional<double> {
+        const auto found = node.values.find(role);
+        if (found == node.values.end())
+            return std::nullopt;
+        const auto* constant = std::get_if<ParameterValue>(&found->second);
+        const auto* value = constant != nullptr ? std::get_if<double>(constant) : nullptr;
+        return value != nullptr ? std::optional(*value) : std::nullopt;
+    };
+    const auto pattern = [&](const SvgArtworkNode& node) {
+        std::vector<double> lengths;
+        for (const char* role : {"dashLength", "dashGap", "dash2", "gap2", "dash3", "gap3"})
+            lengths.push_back(number(node, role).value_or(0.0));
+        return lengths;
+    };
+    expect(pattern(*strokes[0]) == std::vector<double>{12, 4, 0, 4, 0, 0} && number(*strokes[0], "dashOffset") == 3.0,
+           "12 4 0 4 imports as dash 12, gap 4, a dot and gap 4, with its offset");
+    expect(pattern(*strokes[1]) == std::vector<double>{0, 6, 0, 6, 0, 0},
+           "0 6 imports as dots every 6 (the pair repeated, so a dash of 0 is a dot, not solid)");
+    expect(pattern(*strokes[2]) == std::vector<double>{4, 2, 1, 4, 2, 1}, "an odd count is repeated, as SVG reads it");
+    expect(pattern(*strokes[3]) == std::vector<double>{1, 2, 3, 4, 5, 1}, "a longer pattern keeps its first six");
+    const auto names = [&](const std::string_view text) {
+        return std::ranges::any_of(description.notes.listed,
+                                   [&](const std::string& note) { return note.find(text) != std::string::npos; });
+    };
+    expect(names("Five") && names("10 lengths keeps its first six"), "only the pattern past six lengths is noted");
+    expect(!names("DashDot") && !names("Dotted") && !names("Three"), "a pattern of up to six lengths is not noted");
 }
 
 void fitMovesTheGeometry() {
@@ -172,6 +221,7 @@ void notesKeepTheirCap() {
 int main() {
     descriptionIsDeterministicAndOrdered();
     notesAreNamed();
+    dashPatternsImportExactly();
     fitMovesTheGeometry();
     notesKeepTheirCap();
     if (failures != 0) {

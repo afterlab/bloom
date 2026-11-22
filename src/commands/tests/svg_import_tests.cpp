@@ -336,7 +336,7 @@ constexpr const char* kLayerArtwork = R"svg(<svg xmlns="http://www.w3.org/2000/s
 <g id="Group"><rect id="Box" width="40" height="30" fill="#f00"/>
 <path id="Ring" fill="#0f0" fill-rule="evenodd" d="M60 10H100V50H60Z M70 20H90V40H70Z"/></g>
 <circle id="Dot" cx="150" cy="50" r="20" fill="url(#g)" stroke="#00f" stroke-width="4"/>
-<line id="Dash" x1="0" y1="95" x2="200" y2="95" stroke="#000" stroke-dasharray="4 2 1"/>
+<line id="Dash" x1="0" y1="95" x2="200" y2="95" stroke="#000" stroke-dasharray="4 2 1 3 5"/>
 <foreignObject id="Embed" width="10" height="10"/></svg>)svg";
 
 std::shared_ptr<const platform::FontCatalogue> noFonts() {
@@ -451,6 +451,7 @@ void bothModesNameTheSameWarnings(TestContext& test) {
     const auto named = [&](const std::string_view text) {
         return std::ranges::any_of(names, [&](const std::string& note) { return note.find(text) != std::string::npos; });
     };
+    // #759: a dash pattern past six lengths (five, repeated to ten) keeps its first six, and says so.
     test.expect(named("Embed") && named("Dash"), "what the file holds and the artwork does not take is named");
     test.expect(countNodes(shapes.main(), document::kPathValueNodeType) == 4 &&
                     countNodes(shapes.main(), document::kVectorArtworkNodeType) == 0,

@@ -695,13 +695,27 @@ class Builder final {
         overrides["path"] = driver(pathNode, std::string(kValuePortName));
         overrides["width"] = constant(std::max(0.001, shape.strokeWidth * fitScale()));
         if (!shape.dashes.empty()) {
-            overrides["dashLength"] = constant(std::max(0.0, shape.dashes[0] * fitScale()));
-            overrides["dashGap"] =
-                constant(std::max(0.0, (shape.dashes.size() > 1 ? shape.dashes[1] : shape.dashes[0]) * fitScale()));
+            // #759: up to six lengths (an odd count already repeated, as SVG reads it) are Path
+            // Stroke's three dash and gap pairs exactly; a longer pattern keeps its first six.
+            static constexpr std::array<std::string_view, 6> kRoles{"dashLength", "dashGap", "dash2",
+                                                                    "gap2",       "dash3",   "gap3"};
+            std::array<double, 6> lengths{};
+            for (std::size_t index = 0; index < std::min(shape.dashes.size(), kRoles.size()); ++index)
+                lengths[index] = std::max(0.0, shape.dashes[index] * fitScale());
+            // A pattern of one dash of 0 and a gap (dots) needs a second pair: the first alone reads a
+            // dash of 0 as solid. Repeating it is the same pattern.
+            const auto unused = [](const double v) { return v == 0.0; };
+            if (lengths[0] == 0.0 && std::all_of(lengths.begin() + 2, lengths.end(), unused)) {
+                lengths[2] = 0.0;
+                lengths[3] = lengths[1];
+            }
+            for (std::size_t index = 0; index < kRoles.size(); ++index)
+                if (index < 2 || lengths[index] != 0.0)
+                    overrides[std::string(kRoles[index])] = constant(lengths[index]);
             overrides["dashOffset"] = constant(shape.dashOffset * fitScale());
-            if (shape.dashes.size() > 2)
+            if (shape.dashes.size() > kRoles.size())
                 note(describe(shape) + ": a dash pattern of " + std::to_string(shape.dashes.size()) +
-                     " lengths keeps its first dash and gap");
+                     " lengths keeps its first six");
         }
         overrides["cap"] = constant(static_cast<std::int64_t>(shape.cap == media::SvgCap::Round    ? 1
                                                               : shape.cap == media::SvgCap::Square ? 2
