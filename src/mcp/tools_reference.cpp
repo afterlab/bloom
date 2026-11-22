@@ -57,6 +57,11 @@ const std::vector<Resource>& resources() {
         {"bloom://guide/python", "python-guide", "Scripting Bloom with Python",
          "The user guide for the bloom Python package.", "text/markdown",
          [] { return embeddedGuide("python"); }},
+        // #761: presets, containers and codecs, the streams a result lists, and the background.
+        {"bloom://guide/exporting", "exporting-guide", "Exporting video, images and audio",
+         "The user guide for exports: presets with their container and codecs, the streams "
+         "a result lists, the composition background, subtitles and loudness.",
+         "text/markdown", [] { return embeddedGuide("exporting"); }},
     };
     return list;
 }

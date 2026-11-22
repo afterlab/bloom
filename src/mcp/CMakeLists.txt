@@ -4,11 +4,12 @@ bloom_find_dependency(yyjson)
 add_library(bloom_mcp STATIC)
 
 # The user guides the resources serve, embedded so an installed server never reads the source tree.
-set(bloom_mcp_guide_names mcp scripting python)
+set(bloom_mcp_guide_names mcp scripting python exporting)
 set(bloom_mcp_guide_files
     "${PROJECT_SOURCE_DIR}/docs/user-guide/mcp.md"
     "${PROJECT_SOURCE_DIR}/docs/user-guide/scripting.md"
-    "${PROJECT_SOURCE_DIR}/docs/user-guide/python.md")
+    "${PROJECT_SOURCE_DIR}/docs/user-guide/python.md"
+    "${PROJECT_SOURCE_DIR}/docs/user-guide/exporting-video.md")
 set(bloom_mcp_guides_source "${CMAKE_CURRENT_BINARY_DIR}/embedded_guides.cpp")
 string(REPLACE ";" "|" bloom_mcp_guide_name_arg "${bloom_mcp_guide_names}")
 string(REPLACE ";" "|" bloom_mcp_guide_file_arg "${bloom_mcp_guide_files}")

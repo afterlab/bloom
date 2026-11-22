@@ -176,7 +176,8 @@ class Reference(unittest.TestCase):
         uris = {resource['uri'] for resource in listed}
         for uri in ('bloom://guide/agents', 'bloom://reference/nodes',
                     'bloom://reference/operations', 'bloom://reference/index.json',
-                    'bloom://guide/mcp', 'bloom://guide/scripting', 'bloom://guide/python'):
+                    'bloom://guide/mcp', 'bloom://guide/scripting', 'bloom://guide/python',
+                    'bloom://guide/exporting'):
             self.assertIn(uri, uris)
         for resource in listed:
             contents = self.server.send('resources/read', {'uri': resource['uri']})
@@ -185,6 +186,9 @@ class Reference(unittest.TestCase):
             self.assertEqual(contents['result']['contents'][0]['mimeType'], resource['mimeType'])
         guide = self.server.send('resources/read', {'uri': 'bloom://guide/mcp'})
         self.assertTrue(guide['result']['contents'][0]['text'].startswith('# Using Bloom'))
+        # #761: the export guide is the user guide's own text.
+        exporting = self.server.send('resources/read', {'uri': 'bloom://guide/exporting'})
+        self.assertIn('AAC-LC', exporting['result']['contents'][0]['text'])
         nodes = self.server.send('resources/read', {'uri': 'bloom://reference/nodes'})
         self.assertIn('3 Screen', nodes['result']['contents'][0]['text'])
         self.assertIn('error', self.server.send('resources/read', {'uri': 'bloom://nothing'}))
