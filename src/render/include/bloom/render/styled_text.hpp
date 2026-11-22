@@ -76,6 +76,9 @@ struct StyledTextOptions final {
     double maxWidth = 0.0;
     TextWrapMode wrap = TextWrapMode::Greedy;
     TextAlignment alignment = TextAlignment::Center;
+    // #758: every ASCII digit takes the widest digit advance of its face, drawn centered in it, and
+    // no kerning pairs a digit, so a changing number keeps its width (tabular figures).
+    bool fixedDigits = false;
 };
 
 struct StyledGlyph final {
@@ -84,6 +87,11 @@ struct StyledGlyph final {
     // The glyph's pen position from the line's left edge.
     double x = 0.0;
     double advance = 0.0;
+    // #758: the glyph's cluster, its index in the runs' text with carriage returns removed (one
+    // Unicode scalar per cluster until shaping, #345), and how far right of the pen the outline is
+    // drawn (half the difference a fixed-width digit adds, otherwise 0).
+    std::size_t cluster = 0;
+    double inset = 0.0;
 };
 
 struct StyledLine final {
@@ -94,6 +102,10 @@ struct StyledLine final {
     double offset = 0.0;
     // The number of characters (scalars) the line shows, spaces included, trailing spaces not.
     std::size_t characters = 0;
+    // #758: the clusters [firstCluster, endCluster) the line holds, its trailing spaces included and
+    // the hard break that ends it not.
+    std::size_t firstCluster = 0;
+    std::size_t endCluster = 0;
 };
 
 struct StyledTextBlock final {
@@ -128,6 +140,26 @@ struct StyledPaintOutlines final {
 styledTextOutlines(std::span<const TextFont> faces, std::span<const StyledRun> runs,
                    const StyledTextBlock& block, const StyledTextOptions& options, double x,
                    double y, const PathCancellation& cancelled = {});
+
+// #758: the per-cluster layout record. One entry per drawn glyph, in reading order: its cluster
+// (StyledGlyph::cluster), the line it is on, its run's paint, its pen position and baseline (the
+// block placed with its top left at (x, y)) and advance, and its outlines placed there: the glyph
+// and, for an underlined run, the underline under its advance up to the next glyph of the same
+// stretch. Every path of styledTextOutlines() is in exactly one entry.
+struct StyledClusterOutline final {
+    std::size_t cluster = 0;
+    std::size_t line = 0;
+    std::size_t run = 0;
+    std::uint32_t paint = 0;
+    double x = 0.0;
+    double baseline = 0.0;
+    double advance = 0.0;
+    std::vector<Path> paths;
+};
+[[nodiscard]] ImageResult<std::vector<StyledClusterOutline>>
+styledTextClusterOutlines(std::span<const TextFont> faces, std::span<const StyledRun> runs,
+                          const StyledTextBlock& block, const StyledTextOptions& options, double x,
+                          double y, const PathCancellation& cancelled = {});
 
 } // namespace bloom::render
 

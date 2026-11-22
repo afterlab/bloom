@@ -204,9 +204,77 @@ void testRefusals() {
     expect(!cancelled.hasValue(), "a cancelled layout publishes nothing");
 }
 
+// #758: the per-cluster layout record and fixed-width digits.
+void testClustersAndDigits() {
+    auto opts = options(0.0, render::TextWrapMode::Greedy);
+    opts.alignment = render::TextAlignment::Left;
+    // Clusters are scalars: a line feed and the spaces count, a carriage return does not.
+    const std::vector<render::StyledRun> runs{{U"ab c\r\nd", 0, false, 0, false},
+                                             {U"e", 0, false, 2, true}};
+    const auto block = render::layoutStyledText(kFaces, runs, opts);
+    expect(block.hasValue(), "the text lays out");
+    if (!block.hasValue())
+        return;
+    const auto& lines = block.value()->lines;
+    expect(lines.size() == 2 && lines[0].firstCluster == 0 && lines[0].endCluster == 4 &&
+               lines[1].firstCluster == 5 && lines[1].endCluster == 7,
+           "each line names the clusters it holds, the hard break in neither");
+    std::vector<std::size_t> clusterOf;
+    for (const auto& line : lines)
+        for (const auto& glyph : line.glyphs)
+            clusterOf.push_back(glyph.cluster);
+    expect(clusterOf == std::vector<std::size_t>{0, 1, 2, 3, 5, 6},
+           "every glyph names its cluster");
+    const auto clusters = render::styledTextClusterOutlines(kFaces, runs, *block.value(), opts,
+                                                            10.0, 20.0);
+    const auto grouped = render::styledTextOutlines(kFaces, runs, *block.value(), opts, 10.0, 20.0);
+    expect(clusters.hasValue() && grouped.hasValue(), "both outline forms build");
+    if (!clusters.hasValue() || !grouped.hasValue())
+        return;
+    std::size_t clusterPaths = 0;
+    for (const auto& cluster : *clusters.value())
+        clusterPaths += cluster.paths.size();
+    std::size_t groupedPaths = 0;
+    for (const auto& paint : *grouped.value())
+        groupedPaths += paint.paths.size();
+    expect(clusters.value()->size() == 6, "one record per drawn glyph");
+    // The underlined 'e' is one glyph, so its piece is the same one rectangle.
+    expect(clusterPaths == groupedPaths, "every path is in exactly one record");
+    const auto& e = clusters.value()->back();
+    const auto& d = (*clusters.value())[4];
+    expect(e.cluster == 6 && e.line == 1 && e.paint == 2 && d.paint == 0,
+           "a record names its line and paint");
+    expect(std::abs(d.x - 10.0) < 1e-12 &&
+               std::abs(d.baseline - (20.0 + block.value()->lineStep + block.value()->ascent)) <
+                   1e-12,
+           "a record's pen and baseline place the block at (x, y)");
+    // Fixed-width digits: every digit takes the widest digit advance, so "1" and "8" are as wide.
+    // Inter's default digits are proportional (DejaVu Sans's are already tabular).
+    const std::vector<render::TextFont> inter{render::EmbeddedFace::InterRegular};
+    auto fixed = opts;
+    fixed.fixedDigits = true;
+    const auto width = [&](const std::u32string& text, const render::StyledTextOptions& o) {
+        const std::vector<render::StyledRun> one{{text, 0, false, 0, false}};
+        const auto laid = render::layoutStyledText(inter, one, o);
+        return laid.hasValue() ? laid.value()->width : -1.0;
+    };
+    expect(width(U"1111", opts) < width(U"8888", opts), "the face's digits are proportional");
+    expect(std::abs(width(U"1.11", fixed) - width(U"8.88", fixed)) < 1e-9 &&
+               std::abs(width(U"10.5", fixed) - width(U"47.0", fixed)) < 1e-9,
+           "fixed-width digits keep a number's width");
+    expect(width(U"1111", opts) < width(U"1111", fixed), "a narrow digit widens");
+    const std::vector<render::StyledRun> one{{U"1.5", 0, false, 0, false}};
+    const auto laid = render::layoutStyledText(inter, one, fixed);
+    const auto plain = render::layoutStyledText(inter, one, opts);
+    expect(laid.hasValue() && plain.hasValue() && laid.value()->lines[0].glyphs[0].inset > 0.0 &&
+               plain.value()->lines[0].glyphs[0].inset == 0.0,
+           "a narrow fixed-width digit is centered in its advance");
+}
+
 } // namespace
 
 int main() {
+    testClustersAndDigits();
     testOpportunities();
     testScripts();
     testGreedyAndBalanced();

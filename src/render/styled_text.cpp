@@ -165,8 +165,14 @@ struct Measured final {
     // Added before this scalar when the previous one is on the same line: letter spacing and the
     // face's kern pair.
     double join = 0.0;
+    // #758: how far right of the pen the outline is drawn (a fixed-width digit's centering).
+    double inset = 0.0;
     Class breakClass = Class::AL;
 };
+
+[[nodiscard]] bool isAsciiDigit(const char32_t scalar) noexcept {
+    return scalar >= U'0' && scalar <= U'9';
+}
 
 [[nodiscard]] bool isTrailingSpace(const char32_t scalar) noexcept {
     return scalar == U' ' || scalar == U'\t' || scalar == U'\u3000';
@@ -331,6 +337,24 @@ ImageResult<StyledTextBlock> layoutStyledText(const std::span<const TextFont> fa
         }
     }
     const auto breaks = lineBreakOpportunities(text);
+    // #758: the widest digit advance of each face, for fixed-width digits.
+    std::vector<double> widestDigit(faces.size(), -1.0);
+    const auto widestDigitOf = [&](const std::size_t faceIndex) {
+        if (widestDigit[faceIndex] < 0.0) {
+            double widest = 0.0;
+            std::visit(
+                [&](const auto& face) {
+                    for (char32_t digit = U'0'; digit <= U'9'; ++digit)
+                        widest = std::max(
+                            widest, static_cast<double>(font_access::fontGlyphHorizontalMetrics(
+                                                            face, font_access::fontGlyphIndex(face, digit))
+                                                            .advanceWidth));
+                },
+                open[faceIndex]);
+            widestDigit[faceIndex] = widest * static_cast<double>(scales[faceIndex]);
+        }
+        return widestDigit[faceIndex];
+    };
     for (std::size_t index = 0; index < scalars.size(); ++index) {
         if (cancelled && cancelled())
             return Result::failure(codeError(ImageErrorCode::InvalidState));
@@ -347,15 +371,23 @@ ImageResult<StyledTextBlock> layoutStyledText(const std::span<const TextFont> fa
                                                            face, measured.glyph)
                                                            .advanceWidth) *
                                    scale;
+                const bool digitPair =
+                    options.fixedDigits && index > 0 &&
+                    (isAsciiDigit(measured.scalar) || isAsciiDigit(scalars[index - 1].scalar));
                 if (index > 0 && scalars[index - 1].scalar != U'\n') {
                     measured.join = options.letterSpacing;
-                    if (runs[scalars[index - 1].run].face == faceIndex)
+                    if (runs[scalars[index - 1].run].face == faceIndex && !digitPair)
                         measured.join += static_cast<double>(font_access::fontGlyphKernAdvance(
                                              face, scalars[index - 1].glyph, measured.glyph)) *
                                          scale;
                 }
             },
             open[faceIndex]);
+        if (options.fixedDigits && isAsciiDigit(measured.scalar)) {
+            const auto widest = widestDigitOf(faceIndex);
+            measured.inset = (widest - measured.advance) / 2.0;
+            measured.advance = widest;
+        }
     }
     // Prefix sums: the width of [a, e) is its advances plus every join after its first scalar.
     std::vector<double> advanceSum(scalars.size() + 1, 0.0);
@@ -494,12 +526,14 @@ ImageResult<StyledTextBlock> layoutStyledText(const std::span<const TextFont> fa
         for (auto index = begin; index < last; ++index) {
             if (index > begin)
                 pen += scalars[index].join;
-            line.glyphs.push_back(
-                {scalars[index].run, scalars[index].glyph, pen, scalars[index].advance});
+            line.glyphs.push_back({scalars[index].run, scalars[index].glyph, pen,
+                                   scalars[index].advance, index, scalars[index].inset});
             pen += scalars[index].advance;
         }
         line.width = widthOf(begin, end);
         line.characters = last - begin;
+        line.firstCluster = begin;
+        line.endCluster = end;
         block.glyphCount += line.glyphs.size();
         block.width = std::max(block.width, line.width);
         block.lines.push_back(std::move(line));
@@ -564,7 +598,7 @@ styledTextOutlines(const std::span<const TextFont> faces, const std::span<const 
             const auto scaleX = horizontal[run.face];
             const auto scaleY = vertical[run.face];
             const auto slant = run.oblique ? kSyntheticObliqueSlant : 0.0;
-            const auto penX = left + glyph.x;
+            const auto penX = left + glyph.x + glyph.inset;
             const auto map = [&](const PathPoint p) -> PathPoint {
                 return {penX + (p.x + slant * p.y) * scaleX, baseline - p.y * scaleY};
             };
@@ -604,6 +638,90 @@ styledTextOutlines(const std::span<const TextFont> faces, const std::span<const 
         }
     }
     return Result::success(std::move(paints));
+}
+
+ImageResult<std::vector<StyledClusterOutline>>
+styledTextClusterOutlines(const std::span<const TextFont> faces,
+                          const std::span<const StyledRun> runs, const StyledTextBlock& block,
+                          const StyledTextOptions& options, const double x, const double y,
+                          const PathCancellation& cancelled) {
+    using Result = ImageResult<std::vector<StyledClusterOutline>>;
+    std::vector<OpenFace> open;
+    std::vector<double> horizontal;
+    std::vector<double> vertical;
+    for (const auto& font : faces) {
+        open.push_back(openFace(font));
+        horizontal.push_back(static_cast<double>(std::visit(
+            [&](const auto& face) {
+                return font_access::fontScaleForEmPixelSize(face, options.horizontalSize);
+            },
+            open.back())));
+        vertical.push_back(static_cast<double>(std::visit(
+            [&](const auto& face) {
+                return font_access::fontScaleForEmPixelSize(face, options.verticalSize);
+            },
+            open.back())));
+    }
+    std::vector<StyledClusterOutline> clusters;
+    clusters.reserve(block.glyphCount);
+    const auto underlineOffset = 0.12 * options.verticalSize;
+    const auto underlineThickness = std::max(0.06 * options.verticalSize, 0.5);
+    for (std::size_t lineIndex = 0; lineIndex < block.lines.size(); ++lineIndex) {
+        const auto& line = block.lines[lineIndex];
+        const auto baseline = y + static_cast<double>(lineIndex) * block.lineStep + block.ascent;
+        const auto left = x + line.offset;
+        for (std::size_t index = 0; index < line.glyphs.size(); ++index) {
+            if (cancelled && cancelled())
+                return Result::failure(codeError(ImageErrorCode::InvalidState));
+            const auto& glyph = line.glyphs[index];
+            const auto& run = runs[glyph.run];
+            if (run.face >= open.size())
+                return Result::failure(codeError(ImageErrorCode::InvalidParameter));
+            StyledClusterOutline cluster;
+            cluster.cluster = glyph.cluster;
+            cluster.line = lineIndex;
+            cluster.run = glyph.run;
+            cluster.paint = run.paint;
+            cluster.x = left + glyph.x;
+            cluster.baseline = baseline;
+            cluster.advance = glyph.advance;
+            cluster.paths = std::visit(
+                [&](const auto& face) { return font_access::fontGlyphOutlines(face, glyph.glyph); },
+                open[run.face]);
+            const auto scaleX = horizontal[run.face];
+            const auto scaleY = vertical[run.face];
+            const auto slant = run.oblique ? kSyntheticObliqueSlant : 0.0;
+            const auto penX = cluster.x + glyph.inset;
+            const auto map = [&](const PathPoint p) -> PathPoint {
+                return {penX + (p.x + slant * p.y) * scaleX, baseline - p.y * scaleY};
+            };
+            for (auto& path : cluster.paths)
+                for (auto& anchor : path.anchors) {
+                    anchor.point = map(anchor.point);
+                    if (anchor.inHandle)
+                        anchor.inHandle = map(*anchor.inHandle);
+                    if (anchor.outHandle)
+                        anchor.outHandle = map(*anchor.outHandle);
+                }
+            // The underline piece: this glyph's advance, and the join to the next glyph when that
+            // one continues the same underlined stretch, so the pieces meet as one rectangle.
+            if (run.underline) {
+                auto to = cluster.x + glyph.advance;
+                if (index + 1 < line.glyphs.size() && runs[line.glyphs[index + 1].run].underline &&
+                    runs[line.glyphs[index + 1].run].paint == run.paint)
+                    to = left + line.glyphs[index + 1].x;
+                if (to > cluster.x) {
+                    auto rectangle = rectanglePath(to - cluster.x, underlineThickness);
+                    for (auto& anchor : rectangle.anchors)
+                        anchor.point = {anchor.point.x + cluster.x,
+                                        anchor.point.y + baseline + underlineOffset};
+                    cluster.paths.push_back(std::move(rectangle));
+                }
+            }
+            clusters.push_back(std::move(cluster));
+        }
+    }
+    return Result::success(std::move(clusters));
 }
 
 } // namespace bloom::render
