@@ -4,7 +4,8 @@
 // the rows run in the node's table order (four selectors, the properties, the reveal) on
 // Properties, the card and the timeline; the rows nothing reads are hidden and come back when the
 // switch that reads them is on; every number shows its unit (percent, pixels, degrees, per second,
-// never a raw factor); every color's swatch row on the card heads its R/G/B/A rows; no label is cut.
+// never a raw factor); every color's swatch row on the card heads its R/G/B/A rows; no label is cut;
+// the upstream Text Source shows exactly one Font row, the real font picker.
 // A tool, not a test: it writes 758-<surface>-dpr<d>.png to the directory given as the first
 // argument and exits non-zero when a check fails. The device pixel ratio follows QT_SCALE_FACTOR
 // (run it at 1, 1.5 and 2).
@@ -164,6 +165,36 @@ std::vector<QString> propertiesRoles(const QWidget& root) {
     for (const auto& row : rows)
         roles.push_back(row.second);
     return roles;
+}
+
+// The upstream Text Source's section (below its header) shows exactly one Font row, the registry's
+// real font picker; the old disabled "DejaVu Sans" placeholder row is gone.
+int checkUpstreamFont(const QWidget& root) {
+    int top = -1;
+    for (const auto* label : root.findChildren<QLabel*>())
+        if (label->isVisible() && label->text() == QStringLiteral("Text Source"))
+            top = label->mapTo(&root, QPoint()).y();
+    int fonts = 0;
+    bool registry = true;
+    for (const auto* label : root.findChildren<QLabel*>()) {
+        if (!label->isVisible() || label->text() != QStringLiteral("Font") ||
+            label->mapTo(&root, QPoint()).y() <= top)
+            continue;
+        ++fonts;
+        const QWidget* row = label->parentWidget();
+        while (row != nullptr && row->objectName() != QStringLiteral("propertiesRegistryRow"))
+            row = row->parentWidget();
+        registry = registry && row != nullptr;
+    }
+    const bool placeholder =
+        root.findChild<QWidget*>(QStringLiteral("propertiesUpstreamFont")) != nullptr;
+    if (top >= 0 && fonts == 1 && registry && !placeholder)
+        return 0;
+    std::cout << "upstream Text Source: " << fonts << " Font row(s)"
+              << (registry ? "" : ", one not the registry picker")
+              << (placeholder ? ", the placeholder font row is present" : "")
+              << (top < 0 ? ", no Text Source section" : "") << '\n';
+    return 1;
 }
 
 std::optional<QString> propertiesUnit(const QWidget& root, const QString& role) {
@@ -419,6 +450,7 @@ int main(int argc, char** argv) {
             settle();
             failures += truncatedLabels(properties);
             failures += checkOrder("Properties", propertiesRoles(properties), hidden);
+            failures += checkUpstreamFont(properties);
             checkUnits("Properties",
                        [&](const QString& role) { return propertiesUnit(properties, role); });
             const auto labels = properties.findChildren<QLabel*>();
