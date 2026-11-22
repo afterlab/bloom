@@ -6,6 +6,55 @@ All notable changes to Bloom are written here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-alpha.3] - 2026-11-23
+
+This alpha adds subtitles, styled and animated text, sharper scaling and Image Switch, and makes
+exports state what they wrote.
+
+### Added
+
+- Subtitles. A Subtitles node reads SRT, WebVTT, TTML and ASS files into cues (ASS and SSA are
+  read as a reported subset of their styling) and draws them. You can import or drop a subtitle
+  file as a linked layer, edit cues in Properties, the Timeline and the Viewer, and export
+  subtitles as sidecar files or as tracks embedded in MOV, MP4 and WebM. An export checks the
+  written tracks by reopening the file. Agents reach the same features from MCP, Python and
+  `bloom-cli`.
+- Styled text. Text Source takes markup for bold, italic, underline and colors, an outline with
+  joins, and a background box per line or for the whole block. Its styling rows are grouped and
+  hide when nothing reads them.
+- Text Animator. A node that animates characters, words and lines with four range selectors and
+  nine properties, reveals text without reflowing it, and has a cursor. Fixed-width digits keep
+  counters from jittering.
+- Image Switch and Channel Set Switch nodes. Eight inputs, an animatable index that clamps or
+  wraps, and a selected output. Only the chosen branch is evaluated.
+- Sharper scaling. Transform 2D, Resize, Fit, Layer and Corner Pin filter an image when they
+  shrink it, and a layer has a Filter choice. Snap and a pixel-art mode keep hard pixel edges.
+- Coordinate spaces. A space is a value that Function Plot, Axes and Axis Tick can use, with
+  handles in the Viewer. Agents can read a node's outputs as values over MCP and Python.
+- Path Stroke dash patterns of up to three dash and gap pairs, with round dots, and exact import
+  of SVG `stroke-dasharray` values of up to six lengths. Strokes are identical on every platform.
+- An export background. An export can render over a transparent background or the composition
+  color, from the Output Module, MCP, Python and `bloom-cli`.
+- Export presets state their container and codecs, and every export result lists the streams read
+  back from the written file.
+
+### Changed
+
+- Text of any length draws with per-character paint in a single pass.
+- When Bloom cannot measure the computer's capacity before an export, such as on Linux without
+  `/sys`, it says what it assumed in the export log and the Profiler instead of stalling.
+- A movie or scripted render that uses the CPU reference path now says why.
+
+### Fixed
+
+- ProRes Proxy, LT and 422 exports were written as ProRes HQ. Each profile is now written as
+  chosen.
+- Subtitle files given with an absolute path now work on Windows and macOS.
+- A GPU job no longer overwrites the Viewer's recorded need for the graphics device.
+- A crash report no longer fails to read the stack of a thread that was exiting on macOS.
+- Font downloads end before Bloom exits, and a preset that could not be saved is kept and
+  retried.
+
 ## [0.1.0-alpha.2] - 2026-11-20
 
 This alpha makes Bloom dependable for large projects and for agents that build them, and records
