@@ -8,6 +8,7 @@
 #include <bloom/subtitles/webvtt.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cmath>
 #include <string>

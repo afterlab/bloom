@@ -1,5 +1,6 @@
 #include "export_subtitles.hpp"
 
+#include <bloom/core/int128.hpp>
 #include <bloom/document/cue_markup.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/runtime/font_fetch.hpp>
@@ -103,10 +104,10 @@ constexpr std::array<std::pair<std::string_view, std::string_view>, 20> kBibliog
                                                           const media::provider::Rational rate) {
     if (time.numerator() < 0 || rate.numerator <= 0 || rate.denominator <= 0)
         return std::nullopt;
-    const auto numerator = static_cast<__int128>(time.numerator()) * rate.numerator;
-    const auto denominator = static_cast<__int128>(time.denominator()) * rate.denominator;
+    const auto numerator = static_cast<core::Int128>(time.numerator()) * rate.numerator;
+    const auto denominator = static_cast<core::Int128>(time.denominator()) * rate.denominator;
     const auto frames = (numerator + denominator - 1) / denominator;
-    if (frames > static_cast<__int128>(std::numeric_limits<std::int64_t>::max()))
+    if (frames > static_cast<core::Int128>(std::numeric_limits<std::int64_t>::max()))
         return std::nullopt;
     return static_cast<std::uint64_t>(frames);
 }

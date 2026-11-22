@@ -7,6 +7,7 @@
 #include <bloom/document/cue_markup.hpp>
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <string>
 
