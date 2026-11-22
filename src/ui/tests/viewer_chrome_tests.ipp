@@ -426,10 +426,10 @@ void testViewerMenusAreOrganisedAndShared(Expectations& expectations) {
     // Add: layers, then shapes, then Import and Add.
     auto* add = fixture.viewer.findChild<QMenu*>("viewerAddMenu");
     const auto entries = add->actions();
-    expectations.expect(entries.size() == 12 && entries[2]->isSeparator() &&
-                            entries[10]->isSeparator() &&
-                            entries[11]->objectName() == QStringLiteral("viewerImportAndAddAction"),
-                        "Add groups Solid/Text, the shapes, and Import and Add");
+    expectations.expect(entries.size() == 13 && entries[3]->isSeparator() &&
+                            entries[11]->isSeparator() &&
+                            entries[12]->objectName() == QStringLiteral("viewerImportAndAddAction"),
+                        "Add groups Solid/Text/Subtitles, the shapes, and Import and Add");
     // The canvas context menu reuses the same zoom actions and offers Add and Guides.
     fixture.viewer.findChild<QAction*>("viewerFitAction")->trigger();
     auto context = fixture.viewer.canvasContextMenuForTest(
