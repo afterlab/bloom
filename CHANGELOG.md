@@ -40,7 +40,6 @@ exports state what they wrote.
 
 ### Changed
 
-- Text of any length draws with per-character paint in a single pass.
 - When Bloom cannot measure the computer's capacity before an export, such as on Linux without
   `/sys`, it says what it assumed in the export log and the Profiler instead of stalling.
 - A movie or scripted render that uses the CPU reference path now says why.
@@ -49,7 +48,6 @@ exports state what they wrote.
 
 - ProRes Proxy, LT and 422 exports were written as ProRes HQ. Each profile is now written as
   chosen.
-- Subtitle files given with an absolute path now work on Windows and macOS.
 - A GPU job no longer overwrites the Viewer's recorded need for the graphics device.
 - A crash report no longer fails to read the stack of a thread that was exiting on macOS.
 - Font downloads end before Bloom exits, and a preset that could not be saved is kept and
