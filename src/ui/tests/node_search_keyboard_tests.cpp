@@ -686,7 +686,7 @@ void testSearchKeyboardAndMenus() {
              "Function Plot", "Axes", "Axis Tick", "Transform Path", "Trim Path", "Offset Path",
              "Boolean Paths", "Merge Paths", "Round Corners", "Path Stroke", "Mask Path",
              "Text Outline", "Resample Path", "Warp Path", "Warp Path (Function)", "Shape Morph",
-             "Subtitles"},
+             "Subtitles", "Text Animator"},
             "Text & Paths holds Text, Subtitles and the shape presets");
         hasGroup("Utilities",
                  {"Combine XY", "Combine XYZ", "Group Input", "Group Output", "Node Group", "Reroute",

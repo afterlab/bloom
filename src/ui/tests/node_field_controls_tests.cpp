@@ -73,7 +73,9 @@ bool isOpenText(const std::string_view schemaKey) {
            schemaKey == "bloom.motion-blur.vectorLayer" ||
            // #752: the Subtitles language is a BCP 47 tag the artist types (empty means the cue
            // list's own), and the export track name names a new subtitle track.
-           schemaKey == "bloom.subtitles.language" || schemaKey == "bloom.subtitles.trackName";
+           schemaKey == "bloom.subtitles.language" || schemaKey == "bloom.subtitles.trackName" ||
+           // #758: the Text Animator's cursor is any character the artist types.
+           schemaKey == "bloom.text-animator.cursorCharacter";
 }
 
 // #487: an Integer whose value is one of a closed or discoverable set (an enum, a choice such as a

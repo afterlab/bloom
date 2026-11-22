@@ -1,5 +1,6 @@
 #include <bloom/ui/node_controls_widget.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/shape_morph_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
@@ -713,6 +714,10 @@ struct Controls final {
         // #591: nothing of their own to draw. The widget is what lets the card follow activity:
         // while a space is connected it places the drawing, so Origin and Pixels Per Unit have no
         // row (a linked one still shows, so its link never dangles), as in Properties.
+    } else if (typeId == document::kTextAnimatorNodeType) {
+        // #758: nothing to draw; with it the card hides a selector's rows while it is off, Seed
+        // while Randomize order is off, the colors while Change fill or Change outline color is
+        // off and the cursor's rows while Cursor is off, as Properties and the timeline do.
     } else if (typeId == document::kTextSourceNodeType) {
         // #757: nothing of its own to draw either; with it the card hides the background's color,
         // padding and corner radius while Background is Off, and the outline's color and join while

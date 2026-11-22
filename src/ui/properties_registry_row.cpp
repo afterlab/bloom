@@ -18,6 +18,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/lens_distortion_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/rolling_shutter_nodes.hpp>
@@ -212,6 +213,10 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
     // #486 Film Grain: its table's own labels.
     if (const auto* grain = document::filmGrainParameterSpec(schemaKey); grain != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(grain->label).c_str());
+    // #758 Text Animator: its table's own labels.
+    if (const auto* animator = document::textAnimatorParameterSpec(schemaKey); animator != nullptr)
+        return QCoreApplication::translate("PropertiesRow",
+                                           std::string(animator->label).c_str());
     // #757 Text Source styling: its table's own labels.
     if (const auto* text = document::textStylingParameterSpec(schemaKey); text != nullptr)
         return QCoreApplication::translate("PropertiesRow", std::string(text->label).c_str());
