@@ -3,7 +3,8 @@
 // Output Module, opened from an output's "Output Module" link (a compositor's output module
 // settings, with only what an export output carries). Grouped like a compositor's:
 //
-//   “ProRes 422 HQ”  Format, If a file is there       | Post-render, Cached frames
+//   “ProRes 422 HQ”  Format, If a file is there,      | Post-render, Cached frames
+//                    Background (not for WAV)
 //   Quality          the format's profile or compression,| its colour space, or display and view
 //                    the look and audio
 //   Numbering        start number (image sequences)    | digits
@@ -68,6 +69,8 @@ class OutputModuleDialog final : public kit::KDialog {
     // Test seams.
     [[nodiscard]] kit::KDropdown* format() const noexcept { return format_; }
     [[nodiscard]] kit::KDropdown* overwrite() const noexcept { return overwrite_; }
+    [[nodiscard]] kit::KDropdown* background() const noexcept { return background_; }
+    [[nodiscard]] QWidget* backgroundRow() const noexcept { return backgroundRow_; }
     [[nodiscard]] kit::KDropdown* profile() const noexcept { return profile_; }
     [[nodiscard]] kit::KDropdown* compression() const noexcept { return compression_; }
     [[nodiscard]] kit::KDropdown* colourSpace() const noexcept { return colourSpace_; }
@@ -120,6 +123,8 @@ class OutputModuleDialog final : public kit::KDialog {
     kit::KIconButton* savePreset_ = nullptr;
     kit::KLabel* presetError_ = nullptr;
     kit::KDropdown* overwrite_ = nullptr;
+    kit::KDropdown* background_ = nullptr;
+    QWidget* backgroundRow_ = nullptr;
     kit::KCheckBox* import_ = nullptr;
     kit::KCheckBox* cachedFrames_ = nullptr;
     kit::KDropdown* profile_ = nullptr;

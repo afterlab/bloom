@@ -1174,6 +1174,62 @@ void bitrateRow(TestContext& context) {
                    "an output's own bit rate is shown and kept");
 }
 
+// The Background row (#760): Transparent (the default, no edit) or Composition color, for every
+// format but WAV; a loaded choice is shown and kept; switching to WAV writes Transparent.
+void backgroundRow(TestContext& context) {
+    using document::ExportBackground;
+    Rig rig;
+    auto catalogue = makeCatalogue();
+    catalogue->presets.push_back(makePreset("builtin:wav", "WAV", host::ExportPresetCategory::Audio,
+                                            document::ExportFormat::Wav));
+    catalogue->presets.push_back(makePreset("builtin:png-sequence", "PNG sequence",
+                                            host::ExportPresetCategory::VfxSequences,
+                                            document::ExportFormat::Png));
+    auto output =
+        makeOutput(11, "builtin:h264-mp4", document::ExportFormat::H264Mp4, "Exports/a.mp4");
+    {
+        ep::OutputModuleDialog dialog(output, catalogue, {}, *rig.editor);
+        context.expect(dialog.shows(dialog.backgroundRow()) &&
+                           dialog.background()->currentData().toInt() ==
+                               static_cast<int>(ExportBackground::Transparent) &&
+                           !dialog.edit().has_value(),
+                       "a movie shows Background at Transparent, which is no edit");
+        context.expect(dialog.background()->accessibleName() == "Background" &&
+                           dialog.background()->toolTip().contains("opaque") &&
+                           dialog.background()->count() == 2,
+                       "Background has an accessible name, a tooltip and two choices");
+        dialog.background()->chooseIndex(
+            dialog.background()->findData(static_cast<int>(ExportBackground::CompositionColor)));
+        const auto edit = dialog.edit();
+        context.expect(edit.has_value() && edit->settings.has_value() &&
+                           edit->settings->background == ExportBackground::CompositionColor &&
+                           !edit->presetId.has_value() && !edit->destination.has_value(),
+                       "Composition color is one settings edit");
+    }
+    {
+        auto loaded = output;
+        loaded.record.settings.background = ExportBackground::CompositionColor;
+        ep::OutputModuleDialog dialog(loaded, catalogue, {}, *rig.editor);
+        context.expect(dialog.background()->currentData().toInt() ==
+                               static_cast<int>(ExportBackground::CompositionColor) &&
+                           !dialog.edit().has_value(),
+                       "a loaded Composition color is shown and is no edit");
+        dialog.format()->chooseIndex(dialog.format()->findData(QStringLiteral("builtin:wav")));
+        QApplication::processEvents();
+        const auto edit = dialog.edit();
+        context.expect(!dialog.shows(dialog.backgroundRow()) && edit.has_value() &&
+                           edit->settings.has_value() &&
+                           edit->settings->background == ExportBackground::Transparent,
+                       "WAV hides Background and writes Transparent");
+    }
+    {
+        auto still = makeOutput(12, "builtin:png-sequence", document::ExportFormat::Png, "Exports/b");
+        ep::OutputModuleDialog dialog(still, catalogue, {}, *rig.editor);
+        context.expect(dialog.shows(dialog.backgroundRow()),
+                       "an image sequence shows Background");
+    }
+}
+
 // The Subtitles row (#752): SRT, WebVTT and TTML sidecars and an embedded track; the track only for
 // a format whose container carries one; the node list set elsewhere is kept and shown.
 void subtitlesRow(TestContext& context) {
@@ -1917,6 +1973,7 @@ int main(int argc, char** argv) {
     everyFormatIsOffered(context);
     bitrateRow(context);
     subtitlesRow(context);
+    backgroundRow(context);
     addAndRemoveOutputs(context);
     quickPickMenus(context);
     replaceConfirm(context);

@@ -141,6 +141,17 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     overwrite_->addItem(tr("Replace"), static_cast<int>(document::ExportOverwritePolicy::Replace));
     overwrite_->addItem(tr("Don't render"), static_cast<int>(document::ExportOverwritePolicy::Refuse));
     (void)mainLeft->addRow(tr("If a file is there"), fieldRow(this, {overwrite_}));
+    // #760: what every frame is composited over before the output transform.
+    background_ = dropdown(this, QStringLiteral("exportBackground"), tr("Background"));
+    background_->addItem(tr("Transparent"), static_cast<int>(document::ExportBackground::Transparent));
+    background_->addItem(tr("Composition color"),
+                         static_cast<int>(document::ExportBackground::CompositionColor));
+    background_->setToolTip(
+        tr("Transparent keeps alpha. Composition color composites every frame over the "
+           "composition's Background Color, so the output is opaque; a nested composition never "
+           "draws its own."));
+    backgroundRow_ = fieldRow(this, {background_});
+    (void)mainLeft->addRow(tr("Background"), backgroundRow_);
     import_ = check(this, QStringLiteral("exportImportIntoAssets"), tr("Add to Assets when done"));
     (void)mainRight->addCheckRow(tr("Post-render"), *import_, tr("Add to Assets when done"));
     cachedFrames_ = check(this, QStringLiteral("exportUseCachedFrames"), tr("Use cached frames"));
@@ -473,6 +484,8 @@ void OutputModuleDialog::showSettings(const document::ExportOutputSettings& sett
         static_cast<std::uint32_t>(defaultBitrateKbps(format))));
     qualityLeft_->setRowVisible(compressionRow_, !description.compressions.empty());
     qualityLeft_->setRowVisible(lookRow_, format != ExportFormat::Wav);
+    mainLeft_->setRowVisible(backgroundRow_, format != ExportFormat::Wav);
+    background_->setCurrentIndex(background_->findData(static_cast<int>(settings.background)));
     qualityLeft_->setRowVisible(audioRow_, movie);
     qualityRight_->setRowVisible(colourSpaceRow_, sceneReferred);
     qualityRight_->setRowVisible(displayRow_, displayReferred);
@@ -556,8 +569,13 @@ document::ExportOutputSettings OutputModuleDialog::settings() const {
         settings.displayName = display_->currentData().toString().toStdString();
         settings.viewName = view_->currentData().toString().toStdString();
     }
-    if (format != ExportFormat::Wav)
+    if (format != ExportFormat::Wav) {
         settings.bakeLook = bakeLook_->isChecked();
+        settings.background =
+            static_cast<document::ExportBackground>(background_->currentData().toInt());
+    } else {
+        settings.background = document::ExportBackground::Transparent;
+    }
     if (isMovie(format))
         settings.includeAudio = includeAudio_->isChecked();
     settings.useCachedFrames = cachedFrames_->isChecked();

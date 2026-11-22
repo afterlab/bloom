@@ -247,6 +247,11 @@ int main(int argc, char** argv) {
     prores->subtitlesEmbed()->setChecked(true);
     settle();
     shot("output-module-subtitles", prores);
+    // Background (#760): Composition color chosen.
+    prores->background()->chooseIndex(prores->background()->findData(
+        static_cast<int>(document::ExportBackground::CompositionColor)));
+    settle();
+    shot("output-module-background", prores);
     prores->reject();
     settle();
     auto* exr = editor->openOutputModule(document::ExportJobId::fromRaw(1), document::ExportOutputId::fromRaw(12));

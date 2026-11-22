@@ -1,5 +1,5 @@
 // Issue #447. The composition background colour is Viewer presentation only (docs/ux/ui-grammar.md,
-// "Viewer canvas and empty state"). This test evaluates one composition with a non-black opaque
+// "Viewer canvas and empty state") unless an export asks for it (#760). This test evaluates one composition with a non-black opaque
 // background through the real Viewer preview path and through the real still export route and
 // proves that
 //   * the Viewer's process frame (its packed display product) equals the exported PNG still: RGB
@@ -7,7 +7,10 @@
 //   * the background never enters that frame (the uncovered region stays zero alpha and colour,
 //     and an edit of the background re-presents without changing the frame); and
 //   * the Viewer adds the background only when it paints/presents: the uncovered region of the
-//     widget shows the background colour while the covered region shows the frame.
+//     widget shows the background colour while the covered region shows the frame; and
+//   * #760: an export that asks for the background (a still and a sequence) is opaque, the
+//     background where the Viewer paints it and the frame where the layer covers it, while the
+//     Viewer's process frame stays byte-identical.
 //
 // The CPU reference half always runs (CPU preview pipeline against the CPU export provider). The
 // GPU half runs the GPU-prepared packed preview product the Viewer paints against the GPU export
@@ -22,6 +25,8 @@
 #include <bloom/core/color.hpp>
 #include <bloom/core/rational_time.hpp>
 #include <bloom/document/document.hpp>
+#include <bloom/document/export_queue.hpp>
+#include <bloom/host/frame_range_runner.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/output_analysis.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
@@ -380,6 +385,65 @@ void exerciseRoute(Expectations& checks, const Route& route, const std::filesyst
     checks.expect(framesMatch(processFrame, exported),
                   prefix + "the Viewer process frame matches the exported still (RGB within one "
                            "code, exact alpha)");
+
+    // #760: asked for, the export composites the frame over the background in the working space:
+    // the still and a two-frame sequence are opaque, the background where the layer leaves the
+    // frame uncovered, the frame itself where it covers it, on the same route.
+    const auto backedStill = workDir / (std::string(route.name) + "-background.png");
+    const auto backed = scripting::Render::run(
+        *authored->scripting, exportScheduler, exportCompiler,
+        {.composition = authored->composition,
+         .frame = 0,
+         .range = std::nullopt,
+         .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+         .destination = backedStill,
+         .background = document::ExportBackground::CompositionColor},
+        {}, provider);
+    checks.expect(backed.succeeded, prefix + "the background still publishes: " + backed.diagnostic);
+    checks.expect(backed.gpuEvaluatedFrames == (route.gpu ? 1U : 0U),
+                  prefix + "the background still ran on the route's own evaluator");
+    checks.expect(backed.preservationReport.find("opaque over composition background") !=
+                      std::string::npos,
+                  prefix + "the preservation report says the output is opaque over the "
+                           "composition background: " + backed.preservationReport);
+    const auto backedSequence = workDir / (std::string(route.name) + "-background-seq.png");
+    const auto sequence = scripting::Render::run(
+        *authored->scripting, exportScheduler, exportCompiler,
+        {.composition = authored->composition,
+         .frame = std::nullopt,
+         .range = std::pair<std::uint64_t, std::uint64_t>{0, 1},
+         .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+         .destination = backedSequence,
+         .background = document::ExportBackground::CompositionColor},
+        {}, provider);
+    checks.expect(sequence.succeeded && sequence.publishedFrames == 2,
+                  prefix + "the background sequence publishes two frames: " + sequence.diagnostic);
+    for (const auto& path :
+         {backedStill, host::FrameRangeRunnerV1::sequenceFramePath(backedSequence, 0, 1),
+          host::FrameRangeRunnerV1::sequenceFramePath(backedSequence, 1, 1)}) {
+        const Pixels opaque = decodePng(path);
+        checks.expect(opaque.ok && opaque.width == kWidth && opaque.height == kHeight,
+                      prefix + "the background frame decodes: " + path.filename().string());
+        if (!opaque.ok || opaque.width != kWidth || opaque.height != kHeight)
+            continue;
+        bool allOpaque = true;
+        for (std::size_t index = 3; index < opaque.rgba.size(); index += 4)
+            allOpaque = allOpaque && opaque.rgba[index] == 255;
+        checks.expect(allOpaque, prefix + "every pixel is opaque: " + path.filename().string());
+        const auto near = [](const std::uint8_t* pixel, const int r, const int g, const int b) {
+            return std::abs(pixel[0] - r) <= 1 && std::abs(pixel[1] - g) <= 1 &&
+                   std::abs(pixel[2] - b) <= 1;
+        };
+        checks.expect(near(opaque.at(1, 1), 204, 51, 26) &&
+                          near(opaque.at(kWidth - 2, kHeight - 2), 204, 51, 26),
+                      prefix + "the uncovered border is the background, as the Viewer paints it");
+        const auto* inside = processFrame.at(kWidth / 2, kHeight / 2);
+        checks.expect(near(opaque.at(kWidth / 2, kHeight / 2), inside[0], inside[1], inside[2]),
+                      prefix + "the covered centre is the frame itself");
+    }
+    const Pixels unchanged = pixelsOf(viewer.displayedFrameForTest());
+    checks.expect(unchanged.ok && unchanged.rgba == processFrame.rgba,
+                  prefix + "a background export leaves the Viewer's process frame byte-identical");
     checks.expect(provider->shutdownAndWait(10s), prefix + "the export provider retires");
 
     // The Viewer adds the background at paint only.
