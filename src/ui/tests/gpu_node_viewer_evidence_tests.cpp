@@ -1041,11 +1041,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
 
     const auto composition = nodeList(*session.composition());
     const auto cold = present("scene");
-    verify(cold, "scene");
     checks.expect(cold.frame == nullptr || cold.dispatches > 0U,
                   "the cold viewer frame performed real native dispatches");
 
-    // Warm identical refresh: the content cache serves it, with no new native work.
+    // Warm identical refresh: the content cache serves it, with no new native work. It follows the
+    // cold frame at once, as an application refresh does: after idleTrimDelay (one second) with no
+    // preview work the owner gives the scene cache back by design (#539, gpu-backend.md "Idle
+    // means small") and the next frame re-creates it, so the CPU oracle, which takes longer than
+    // that for a heavy node, is compared after the warm refresh, against the frame it shows.
     const auto beforeWarm = service.status().counters;
     const auto presentBefore = viewer->gpuPresentAcceptedCountForTest();
     controller.requestRefresh();
@@ -1054,8 +1057,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     });
     const auto afterWarm = service.status().counters;
     checks.expect(warm, "the warm viewer refresh re-presented");
+    checks.expect(afterWarm.idleTrims == beforeWarm.idleTrims,
+                  "no idle trim fell between the cold frame and its warm refresh");
     checks.expect(afterWarm.nativeDispatches == beforeWarm.nativeDispatches,
                   "the warm viewer refresh performed zero additional native dispatches");
+    if (const auto shown = controller.state().frame; shown != nullptr)
+        verify(Shown{shown, 0}, "scene");
+    else
+        verify(cold, "scene");
 
     if (options.cold)
         checks.expect(ocioResolver->counters().resolves == 1,
