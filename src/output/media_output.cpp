@@ -188,6 +188,16 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
             std::string(vp9 ? "VP9" : "AV1") + " web delivery — not for archival";
     using F = OutputFacetIdV1;
     using S = OutputPreservationStateV1;
+    // #761: the audio codec the output writes, by name, and whether it is lossy (AAC in MP4 and
+    // MOV, Opus in WebM); PCM is named with its sample depth.
+    const auto& audioCodec = result.settings.audioCodec;
+    const bool lossyAudio = audioCodec == "aac" || audioCodec == "opus";
+    const std::string audioText =
+        audioCodec == "aac"         ? "AAC-LC audio, lossy"
+        : audioCodec == "opus"      ? "Opus audio at 48 kHz, lossy"
+        : audioCodec == "pcm_s16le" ? "PCM 16-bit audio"
+        : audioCodec == "pcm_s24le" ? "PCM 24-bit audio"
+                                    : audioCodec + " audio";
     const bool alpha =
         prores && (result.settings.profile == "4444" || result.settings.profile == "4444xq");
     result.facets = {
@@ -200,10 +210,14 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
           pcm ? "No picture" : "sRGB transfer; Rec.709 primaries and matrix; limited YUV"},
          {F::AlphaAssociation, alpha ? S::Approximated : S::Omitted,
           alpha ? "Straight alpha retained by ProRes 4444" : "Alpha omitted"},
-         {F::Channels, result.settings.audioCodec.empty() ? S::Omitted : S::Equivalent,
-          pcm                                  ? "PCM channel layout retained"
+         {F::Channels,
+          result.settings.audioCodec.empty() ? S::Omitted
+          : lossyAudio                       ? S::Approximated
+                                             : S::Equivalent,
+          pcm                                  ? audioText + "; channel layout retained"
           : result.settings.audioCodec.empty() ? "RGB to codec YUV; audio omitted"
-                                               : "RGB to codec YUV; PCM channel layout retained"},
+                                               : "RGB to codec YUV; " + audioText +
+                                                     "; channel layout retained"},
          {F::DataWindow, S::Exact, "Origin at zero required"},
          {F::DisplayWindow, S::Exact, "Equal data and display windows required"},
          {F::PixelAspect, S::Exact, "Square pixels required"},

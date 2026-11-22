@@ -213,15 +213,17 @@ int main() {
                   report.display->processor().identity().canonicalBytes().size() == 224,
               "identity record sizes pinned");
 #else
-        check(recordBytes == 759 &&
+        check(recordBytes == 773 &&
                   report.display->processor().identity().canonicalBytes().size() == 224,
               "identity record sizes pinned");
         // Independent Python byte oracle: domain + 04 + frozen settings hash (EncodeSettingsV1
         // version 2) + eleven explicit (facet byte,state byte,NUL-terminated UTF-8 description)
-        // tuples: 759 bytes. See tests/color5_identity_oracle.py. Issue #424: the settings hash
-        // binds video tolerance profile v3 (6fcfd3e3...; v2's 7e8bea87... gave 1253f309...).
+        // tuples: 773 bytes. See docs/architecture/color5-identity-oracle.md. Issue #424: the
+        // settings hash binds video tolerance profile v3 (6fcfd3e3...; v2's 7e8bea87... gave
+        // 1253f309...). #761: the Channels facet names the audio codec (759 bytes and 2d6eeb23...
+        // before).
         check(std::string(hex.data(), hex.size()) ==
-                  "2d6eeb234758d5328c33943f27c9faaf5ee63f80befd73650bed22d95c60b350",
+                  "d211585ceddec400a14be0ec96a46435466825ae680116feb56e3f704213680b",
               "media analysis frozen oracle");
 #endif
         check(report.implementationNote.starts_with(p::kProResExportNote) &&
@@ -247,6 +249,9 @@ int main() {
         check(pcm.determinism == p::MediaDeterminismV1::ByteExact &&
                   pcm.toleranceProfile == p::Digest{},
               "PCM byte-exact identity");
+        check(pcm.facets[4].description == "PCM 16-bit audio; channel layout retained" &&
+                  pcm.facets[4].preservation == o::OutputPreservationStateV1::Equivalent,
+              "a WAV names its PCM depth in the Channels facet");
         s.bwfDescription = "BWF metadata";
         check(analyze(o::OutputPresetV1::PcmWavV1, s).digest != pcm.digest,
               "BWF metadata binds approval");
@@ -281,7 +286,27 @@ int main() {
         av1.videoCodec = "av1";
         av1.container = "mp4";
         av1.audioCodec = "aac";
-        (void)analyze(o::OutputPresetV1::Av1Mp4V1, av1);
+        const auto av1Mp4 = analyze(o::OutputPresetV1::Av1Mp4V1, av1);
+        // #761: the Channels facet names the audio codec it writes and says lossy where it is;
+        // it never says PCM for AAC or Opus.
+        const auto channels = [](const o::MediaOutputAnalysisV1& analysis) {
+            return analysis.facets[4];
+        };
+        check(channels(av1Mp4).description ==
+                      "RGB to codec YUV; AAC-LC audio, lossy; channel layout retained" &&
+                  channels(av1Mp4).preservation == o::OutputPreservationStateV1::Approximated,
+              "AAC is named and lossy in the Channels facet");
+        check(channels(vp9).description ==
+                      "RGB to codec YUV; Opus audio at 48 kHz, lossy; channel layout retained" &&
+                  channels(vp9).preservation == o::OutputPreservationStateV1::Approximated,
+              "Opus is named and lossy in the Channels facet");
+        check(channels(review).description ==
+                      "RGB to codec YUV; PCM 16-bit audio; channel layout retained" &&
+                  channels(review).preservation == o::OutputPreservationStateV1::Equivalent,
+              "PCM in a movie is named with its depth");
+        for (const auto* analysis : {&av1Mp4, &vp9})
+            check(channels(*analysis).description.find("PCM") == std::string::npos,
+                  "a lossy codec is never called PCM");
         for (const auto& [preset, settings, why] :
              {std::tuple{o::OutputPresetV1::Av1Mp4V1, web, "AV1 MP4 refuses VP9 in WebM"},
               std::tuple{o::OutputPresetV1::Av1WebmV1, av1, "AV1 WebM refuses an MP4 container"}}) {

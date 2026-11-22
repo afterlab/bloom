@@ -43,7 +43,7 @@ facets = [
     (2, 3, "Float32 to RGBA16 and codec sample precision"),
     (3, 3, "display: srgb_rec709_display; view: srgb_rec709_display; OCIO: " + revision),
     (4, 4, "Alpha omitted"),
-    (5, 2, "RGB to codec YUV; PCM channel layout retained"),
+    (5, 2, "RGB to codec YUV; PCM 16-bit audio; channel layout retained"),
     (6, 1, "Origin at zero required"),
     (7, 1, "Equal data and display windows required"),
     (8, 1, "Square pixels required"),
@@ -53,7 +53,7 @@ facets = [
 ]
 analysis_record = (
     b"BloomMediaOutputAnalysisV1\x04"
-    + bytes.fromhex("7e8bea8770830d7257eba98ee80d465a1d0106bbc3e06665f8d171d99b1baa2f")
+    + bytes.fromhex("6fcfd3e3caf0e2287d6ec7dc63863e17086f3a12f885b4090743dba236c0783f")
     + b"".join(bytes((facet, state)) + description.encode("utf-8") + b"\0" for facet, state, description in facets)
 )
 records = {

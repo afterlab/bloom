@@ -3033,8 +3033,12 @@ fixture record (video tolerance profile v3) is 166 bytes and independently deriv
 
 Media analysis binds the frozen preset byte (4 = ProRes, 5 = DNxHR, 6 = PCM, 7 = H.264 review), settings digest and
 all eleven ordered preservation facets. COLOR-5 binds the chosen display/view identity and look
-effect count. Its HQ/PCM fixture advances from 579 to 759 bytes and independently derives
-`1253f309292cb3999ba7f1f81b46b38e3260d59c64dd37bac17a5b70dfb47b9d`.
+effect count. Its HQ/PCM fixture advanced from 579 to 759 bytes (deriving
+`1253f309292cb3999ba7f1f81b46b38e3260d59c64dd37bac17a5b70dfb47b9d` under the v2 settings digest
+and `2d6eeb234758d5328c33943f27c9faaf5ee63f80befd73650bed22d95c60b350` under v3). #761 names the
+audio codec in the Channels facet ("RGB to codec YUV; PCM 16-bit audio; channel layout retained";
+AAC and Opus say lossy and are Approximated), so the record is 773 bytes and independently derives
+`d211585ceddec400a14be0ec96a46435466825ae680116feb56e3f704213680b`.
 The neutral display record remains 224 bytes, SHA-256
 `b473d0289aa343bc89b1465c4779c557c687e3ee724d5aae337d9829f8e949b1`.
 The [COLOR-5 identity oracle](color5-identity-oracle.md) constructs these records independently.
