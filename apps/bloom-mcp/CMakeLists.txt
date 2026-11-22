@@ -127,6 +127,14 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #759: Path Stroke dash patterns through MCP, Python and bloom-cli run: one transact sets a
+    # three-pair pattern, it reads back and renders, and help describes the dash-dot recipe.
+    bloom_add_test(NAME bloom.scripting.path-stroke-dash-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/path_stroke_dash_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     # #758: the Text Animator recipes (counter, type-on, word fade, Subtitles progress driving a
     # reveal) through MCP, Python and bloom-cli run.
     bloom_add_test(NAME bloom.scripting.text-animator-parity

@@ -162,6 +162,30 @@ void addConcepts(std::vector<ReferenceEntry>& out) {
                       "bloom.node.set-parameter-value", "concept:text-animator"});
     out.push_back(std::move(text));
 
+    // #759
+    auto dashes = makeEntry(
+        ReferenceKind::Concept, "concept:dash-patterns", "concepts",
+        "Path Stroke dash patterns: up to three dash and gap pairs, dots, and the dash-dot and "
+        "dotted recipes.",
+        "Path Stroke (bloom.path-stroke) cuts its stroke by a pattern of up to three dash and gap "
+        "pairs, in pixels along the path: `dashLength` and `dashGap`, then `dash2` and `gap2`, "
+        "then `dash3` and `gap3`; `dashOffset` slides the whole pattern, so keying it runs the "
+        "pattern along the path. A pair at 0 and 0 is unused. The first pair alone keeps its "
+        "meaning: a `dashLength` of 0 is solid. A later pair set makes a pattern even when "
+        "`dashLength` is 0, and a dash of 0 then draws the dot its cap makes: a disc the width "
+        "across with `cap` Round, a square of the width's side turned with the path with `cap` "
+        "Square, nothing with `cap` Butt. A negative length makes the stroke solid. Dashes "
+        "follow trims, tapers, wiggle and closed contours, and a stroke made only of them is "
+        "still filled by Shape Source on the GPU. Recipes. Dash-dot: `cap` Round, `dashLength` "
+        "12, `dashGap` 6, `dash2` 0, `gap2` 6 (keep the gaps wider than the width, or the caps "
+        "close them). Dotted: `cap` Round, `dashLength` 0, `dashGap` 10, `dash2` 0, `gap2` 10. "
+        "Dash-dot-dot: `cap` Round, `dashLength` 16, `dashGap` 5, `dash2` 0, `gap2` 5, "
+        "`dash3` 0, `gap3` 5. Set them in one transact with bloom.node.set-parameter-value per "
+        "role. SVG import maps a stroke-dasharray of up to six lengths to these pairs exactly.");
+    addRelated(dashes, {"bloom.node.set-parameter-value", "bloom.animation.set-keys",
+                        "bloom.layer.stroke-outline"});
+    out.push_back(std::move(dashes));
+
     // #758
     auto animator = makeEntry(
         ReferenceKind::Concept, "concept:text-animator", "concepts",

@@ -10,6 +10,7 @@
 #include <bloom/document/parameter_enums.hpp>
 #include <bloom/document/parameter_presentation.hpp>
 #include <bloom/document/path_value.hpp>
+#include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/scripting/node_reference.hpp>
 
 #include <algorithm>
@@ -413,6 +414,16 @@ std::string nodeReferenceMarkdown() {
                 "String, with `decimals` and `padWidth`, into `text`) or a "
                 "type-on (Substring with an animated length). `fixedDigits` draws every digit "
                 "at the widest digit's width, so a counter holds still.\n\n";
+        // #759
+        if (definition->key.typeId == document::kPathStrokeNodeType)
+            text +=
+                "Dash pattern: up to three dash and gap pairs (`dashLength` and `dashGap`, "
+                "`dash2` and `gap2`, `dash3` and `gap3`, pixels) slid by `dashOffset`; a pair at "
+                "0 and 0 is unused, and a `dashLength` of 0 alone is solid. With a later pair "
+                "set, a dash of 0 is a dot of the cap's shape (Round or Square; Butt draws "
+                "none). Dash-dot: `cap` Round, `dashLength` 12, `dashGap` 6, `dash2` 0, "
+                "`gap2` 6. Dotted: `cap` Round, `dashLength` 0, `dashGap` 10, `dash2` 0, "
+                "`gap2` 10. help concept:dash-patterns has the rest.\n\n";
         // #758
         if (definition->lowering == document::NodeLoweringKind::TextAnimator)
             text +=
