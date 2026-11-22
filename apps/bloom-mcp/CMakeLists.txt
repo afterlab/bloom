@@ -150,6 +150,14 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #531: the Image Switch through MCP, Python and bloom-cli run: the index chooses, clamps and
+    # wraps; the node reference lists both switches.
+    bloom_add_test(NAME bloom.scripting.image-switch-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/image_switch_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     if(BLOOM_GPU_SHADER_TOOLS_AVAILABLE)
         bloom_add_test(
             NAME bloom.gpu.shader-tools-verify-mcp
