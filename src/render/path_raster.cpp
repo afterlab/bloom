@@ -525,6 +525,14 @@ PathBounds PathRaster::bounds(bool fill, bool stroke) const noexcept {
             include(outline);
     return bounds;
 }
+PathBounds PathRaster::pixelBounds(bool fill, bool stroke) const noexcept {
+    const auto b = bounds(fill, stroke);
+    const auto x0 = b.left * scaleX_;
+    const auto x1 = b.right * scaleX_;
+    const auto y0 = b.top * scaleY_;
+    const auto y1 = b.bottom * scaleY_;
+    return {std::min(x0, x1), std::min(y0, y1), std::max(x0, x1), std::max(y0, y1)};
+}
 bool PathRaster::coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,
                              PathFillRule rule, bool stroke,
                              const PathCancellation& cancelled) const {

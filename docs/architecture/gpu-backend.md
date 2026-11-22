@@ -96,7 +96,11 @@ Native render primitives. Their public headers are Qt-free and Vulkan-free with 
 CPU-unavailable stubs. `GpuSolid` runs `SolidV1` and the covered arm `CoveredSolidV1` (a host-built
 premultiplied palette from the existing CPU coverage primitive, bit-exact on readback). The same
 kernel fills an indexed image (`beginIndexed`): the host supplies up to 256 exact pixels and one
-index byte per pixel. A Solid whose authored size ends inside a pixel at a proxy scale is emitted
+index byte per pixel. `PaintedCoverageV1` (#758, `beginPainted`) draws many coverage layers that
+differ only in paint in one dispatch: the host concatenates their coverage spans tagged by paint
+with 17 pixels per paint, and the kernel counts each paint's samples and folds the paints
+source-over in order, as the CPU reference folds the layers; an animated text's per-cluster paints
+use it. A Solid whose authored size ends inside a pixel at a proxy scale is emitted
 that way, with its interior, right-edge, bottom-edge and corner pixels computed as the CPU
 computes them, so its partly covered last column and row match the CPU reference bit for bit at
 any scale (#641); a Solid that ends on whole pixels keeps `SolidV1`. `GpuImage`

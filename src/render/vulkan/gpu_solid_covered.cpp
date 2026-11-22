@@ -7,8 +7,10 @@
 
 #include <bloom/render/cpu_image_primitives.hpp>
 #include <bloom/render/gpu_path_coverage.hpp>
+#include <bloom/render/painted_coverage.hpp>
 
 #include "shaders/solid_covered_spirv.inc"
+#include "shaders/solid_painted_spirv.inc"
 
 #include <algorithm>
 #include <array>
@@ -150,23 +152,26 @@ void packCoverageLittleEndian(const std::span<const std::uint8_t> coverage,
 
 } // namespace
 
-bool GpuSolid::Impl::createCoveredPipeline() {
-    covered.attempted = true;
-    covered.ready = false;
+bool GpuSolid::Impl::createCoveredPipeline(GpuSolidCoveredResources& target,
+                                           const std::span<const std::uint32_t> code,
+                                           const std::string_view operation) {
+    target.attempted = true;
+    target.ready = false;
+    const std::string name(operation);
     const VkDevice rawDevice = static_cast<VkDevice>(*control->device);
     const auto* dispatcher = control->device.getDispatcher();
 
     vk::ShaderModuleCreateInfo shaderInfo{};
-    shaderInfo.codeSize = vulkan_detail::kSolidCoveredSpirvByteCount;
-    shaderInfo.pCode = vulkan_detail::kSolidCoveredSpirvCode;
+    shaderInfo.codeSize = code.size_bytes();
+    shaderInfo.pCode = code.data();
     VkShaderModule rawShader = VK_NULL_HANDLE;
     if (dispatcher->vkCreateShaderModule(
             rawDevice, reinterpret_cast<const VkShaderModuleCreateInfo*>(&shaderInfo), nullptr,
             &rawShader) != VK_SUCCESS) {
-        covered.reason = "the embedded CoveredSolidV1 shader module was rejected";
+        target.reason = "the embedded " + name + " shader module was rejected";
         return false;
     }
-    covered.shaderModule = vk::raii::ShaderModule(control->device, rawShader);
+    target.shaderModule = vk::raii::ShaderModule(control->device, rawShader);
 
     std::array<vk::DescriptorSetLayoutBinding, 3> bindings{};
     bindings[0].binding = 0;
@@ -188,16 +193,16 @@ bool GpuSolid::Impl::createCoveredPipeline() {
     if (dispatcher->vkCreateDescriptorSetLayout(
             rawDevice, reinterpret_cast<const VkDescriptorSetLayoutCreateInfo*>(&layoutInfo),
             nullptr, &rawLayout) != VK_SUCCESS) {
-        covered.reason = "the CoveredSolidV1 descriptor set layout was rejected";
+        target.reason = "the " + name + " descriptor set layout was rejected";
         return false;
     }
-    covered.descriptorSetLayout = vk::raii::DescriptorSetLayout(control->device, rawLayout);
+    target.descriptorSetLayout = vk::raii::DescriptorSetLayout(control->device, rawLayout);
 
     vk::PushConstantRange pushRange{};
     pushRange.stageFlags = vk::ShaderStageFlagBits::eCompute;
     pushRange.offset = 0;
     pushRange.size = static_cast<std::uint32_t>(sizeof(CoveredPushConstants));
-    const vk::DescriptorSetLayout setLayout = *covered.descriptorSetLayout;
+    const vk::DescriptorSetLayout setLayout = *target.descriptorSetLayout;
     vk::PipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.setLayoutCount = 1;
     pipelineLayoutInfo.pSetLayouts = &setLayout;
@@ -207,25 +212,25 @@ bool GpuSolid::Impl::createCoveredPipeline() {
     if (dispatcher->vkCreatePipelineLayout(
             rawDevice, reinterpret_cast<const VkPipelineLayoutCreateInfo*>(&pipelineLayoutInfo),
             nullptr, &rawPipelineLayout) != VK_SUCCESS) {
-        covered.reason = "the CoveredSolidV1 pipeline layout was rejected";
+        target.reason = "the " + name + " pipeline layout was rejected";
         return false;
     }
-    covered.pipelineLayout = vk::raii::PipelineLayout(control->device, rawPipelineLayout);
+    target.pipelineLayout = vk::raii::PipelineLayout(control->device, rawPipelineLayout);
 
     vk::ComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.stage.stage = vk::ShaderStageFlagBits::eCompute;
-    pipelineInfo.stage.module = *covered.shaderModule;
+    pipelineInfo.stage.module = *target.shaderModule;
     pipelineInfo.stage.pName = "main";
-    pipelineInfo.layout = *covered.pipelineLayout;
+    pipelineInfo.layout = *target.pipelineLayout;
     VkPipeline rawPipeline = VK_NULL_HANDLE;
     if (dispatcher->vkCreateComputePipelines(
             rawDevice, vulkan_detail::pipelineCacheForCreation(*control), 1,
             reinterpret_cast<const VkComputePipelineCreateInfo*>(&pipelineInfo), nullptr,
             &rawPipeline) != VK_SUCCESS) {
-        covered.reason = "the embedded CoveredSolidV1 compute pipeline was rejected";
+        target.reason = "the embedded " + name + " compute pipeline was rejected";
         return false;
     }
-    covered.pipeline = vk::raii::Pipeline(control->device, rawPipeline);
+    target.pipeline = vk::raii::Pipeline(control->device, rawPipeline);
 
     std::array<vk::DescriptorPoolSize, 2> poolSizes{};
     poolSizes[0] = vk::DescriptorPoolSize{vk::DescriptorType::eStorageImage, 1};
@@ -239,25 +244,25 @@ bool GpuSolid::Impl::createCoveredPipeline() {
     if (dispatcher->vkCreateDescriptorPool(
             rawDevice, reinterpret_cast<const VkDescriptorPoolCreateInfo*>(&poolInfo), nullptr,
             &rawPool) != VK_SUCCESS) {
-        covered.reason = "the CoveredSolidV1 descriptor pool could not be created";
+        target.reason = "the " + name + " descriptor pool could not be created";
         return false;
     }
-    covered.descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
+    target.descriptorPool = vk::raii::DescriptorPool(control->device, rawPool);
 
     vk::DescriptorSetAllocateInfo allocateInfo{};
-    allocateInfo.descriptorPool = *covered.descriptorPool;
+    allocateInfo.descriptorPool = *target.descriptorPool;
     allocateInfo.descriptorSetCount = 1;
     allocateInfo.pSetLayouts = &setLayout;
     VkDescriptorSet rawSet = VK_NULL_HANDLE;
     if (dispatcher->vkAllocateDescriptorSets(
             rawDevice, reinterpret_cast<const VkDescriptorSetAllocateInfo*>(&allocateInfo),
             &rawSet) != VK_SUCCESS) {
-        covered.reason = "the CoveredSolidV1 descriptor set could not be allocated";
+        target.reason = "the " + name + " descriptor set could not be allocated";
         return false;
     }
-    covered.descriptorSet =
-        vk::raii::DescriptorSet(control->device, rawSet, *covered.descriptorPool);
-    covered.ready = true;
+    target.descriptorSet =
+        vk::raii::DescriptorSet(control->device, rawSet, *target.descriptorPool);
+    target.ready = true;
     return true;
 }
 
@@ -265,9 +270,16 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     const GpuSolidParameters& base, const std::span<const std::uint8_t> hostCoverage,
     const float opacity, const std::uint64_t byteBudget, const VkBuffer residentMaskBuffer,
     const std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner,
-    const std::span<const Rgba32f> explicitPalette) {
+    const std::span<const Rgba32f> explicitPalette, const PathPaintedCoverage* const painted) {
     Impl& impl = *this;
     const bool usingResident = residentMaskBuffer != VK_NULL_HANDLE;
+    // #758: PaintedCoverageV1 binds its own palette (17 pixels per paint) and its host geometry
+    // (the ranges, then the tagged spans) where the covered fill binds its palette and mask.
+    GpuSolidCoveredResources& resources = painted != nullptr ? impl.paintedResources : impl.covered;
+    const std::uint64_t paletteBytes =
+        painted != nullptr
+            ? static_cast<std::uint64_t>(painted->palette.size()) * sizeof(Rgba32f)
+            : kPaletteBytes;
     if (!impl.onOwnerThread()) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::WrongThread,
                                   "beginCovered must run on the device owner thread");
@@ -292,7 +304,7 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
                                   "the data window is empty");
     }
     const std::uint64_t pixels = static_cast<std::uint64_t>(width) * height;
-    if (!usingResident && hostCoverage.size() != pixels) {
+    if (!usingResident && painted == nullptr && hostCoverage.size() != pixels) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                   "the coverage byte count must equal width*height");
     }
@@ -309,18 +321,23 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
                                   "the resident image exceeds the requested byte budget");
     }
-    const std::uint64_t maskBytes = ((pixels + 3ULL) / 4ULL) * 4ULL;
+    const std::uint64_t maskBytes =
+        painted != nullptr
+            ? static_cast<std::uint64_t>(painted->rows.size()) * sizeof(PathRasterCoverageRange) +
+                  static_cast<std::uint64_t>(painted->spans.size()) * sizeof(PathPaintedCoverageSpan)
+            : ((pixels + 3ULL) / 4ULL) * 4ULL;
     if (usingResident && residentMaskBytes != maskBytes) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::InvalidArgument,
                                   "the resident coverage mask does not match the data window");
     }
-    const std::uint64_t retained = imageBytes + maskBytes + kPaletteBytes;
+    const std::uint64_t retained = imageBytes + maskBytes + paletteBytes;
     if (retained < imageBytes || retained > byteBudget) {
         return gpuSolidDiagnostic(
             GpuSolidDiagnosticCode::OverBudget,
             "the image plus coverage mask and palette exceed the requested byte budget");
     }
-    if (maskBytes == 0 || maskBytes > impl.control->maxStorageBufferRange) {
+    if (maskBytes == 0 || maskBytes > impl.control->maxStorageBufferRange ||
+        paletteBytes > impl.control->maxStorageBufferRange) {
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::OverBudget,
                                   "the coverage mask exceeds the device storage buffer range");
     }
@@ -361,8 +378,10 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     // O(256) host metadata: the entire coverage result space, built from the
     // existing CPU primitive. A failed palette means some coverage sample is not
     // representable, so the CPU vector arm must handle this layer instead.
-    std::vector<Rgba32f> palette(kPaletteEntries, Rgba32f::transparent());
-    if (!explicitPalette.empty()) {
+    std::vector<Rgba32f> palette(painted != nullptr ? 0U : kPaletteEntries, Rgba32f::transparent());
+    if (painted != nullptr) {
+        palette = painted->palette;
+    } else if (!explicitPalette.empty()) {
         // The caller's exact pixels by index; the entries past them stay transparent.
         std::copy(explicitPalette.begin(), explicitPalette.end(), palette.begin());
     } else if (const auto status = buildCoveredPalette(base.pixel, opacity, palette)) {
@@ -384,18 +403,28 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     GpuImageImpl* const residentRaw = resident.get();
     impl.residentImage = std::make_unique<GpuImage>(makeGpuImage(std::move(resident)));
 
-    if (!impl.covered.ready) {
-        if (impl.covered.attempted) {
+    if (!resources.ready) {
+        if (resources.attempted) {
             impl.releaseResident();
-            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported, impl.covered.reason);
+            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported, resources.reason);
         }
-        if (!impl.createCoveredPipeline()) {
+        const bool created =
+            painted != nullptr
+                ? impl.createCoveredPipeline(
+                      resources,
+                      {vulkan_detail::kSolidPaintedSpirvCode, vulkan_detail::kSolidPaintedSpirvWordCount},
+                      "PaintedCoverageV1")
+                : impl.createCoveredPipeline(
+                      resources,
+                      {vulkan_detail::kSolidCoveredSpirvCode, vulkan_detail::kSolidCoveredSpirvWordCount},
+                      "CoveredSolidV1");
+        if (!created) {
             impl.releaseResident();
-            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported, impl.covered.reason);
+            return gpuSolidDiagnostic(GpuSolidDiagnosticCode::Unsupported, resources.reason);
         }
     }
 
-    if (!createHostStorageBuffer(*impl.control, kPaletteBytes, impl.coveredPalette)) {
+    if (!createHostStorageBuffer(*impl.control, paletteBytes, impl.coveredPalette)) {
         impl.releaseResident();
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
                                   "the covered palette buffer could not be allocated");
@@ -426,7 +455,7 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
         return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
                                   "a covered input buffer could not be mapped");
     }
-    std::memcpy(paletteInfo.pMappedData, palette.data(), static_cast<std::size_t>(kPaletteBytes));
+    std::memcpy(paletteInfo.pMappedData, palette.data(), static_cast<std::size_t>(paletteBytes));
     if (!usingResident) {
         VmaAllocationInfo maskInfo{};
         vmaGetAllocationInfo(impl.control->allocator, impl.coveredMask.allocation, &maskInfo);
@@ -437,9 +466,18 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
             return gpuSolidDiagnostic(GpuSolidDiagnosticCode::AllocationFailed,
                                       "a covered input buffer could not be mapped");
         }
-        packCoverageLittleEndian(
-            hostCoverage, std::span<std::uint8_t>(static_cast<std::uint8_t*>(maskInfo.pMappedData),
-                                                  static_cast<std::size_t>(maskBytes)));
+        if (painted != nullptr) {
+            auto* const target = static_cast<std::uint8_t*>(maskInfo.pMappedData);
+            const auto rangeBytes = painted->rows.size() * sizeof(PathRasterCoverageRange);
+            std::memcpy(target, painted->rows.data(), rangeBytes);
+            if (!painted->spans.empty())
+                std::memcpy(target + rangeBytes, painted->spans.data(),
+                            painted->spans.size() * sizeof(PathPaintedCoverageSpan));
+        } else {
+            packCoverageLittleEndian(
+                hostCoverage, std::span<std::uint8_t>(static_cast<std::uint8_t*>(maskInfo.pMappedData),
+                                                      static_cast<std::size_t>(maskBytes)));
+        }
     }
     if (vmaFlushAllocation(impl.control->allocator, impl.coveredPalette.allocation, 0,
                            VK_WHOLE_SIZE) != VK_SUCCESS ||
@@ -491,23 +529,23 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
     vk::DescriptorBufferInfo paletteDescriptor{};
     paletteDescriptor.buffer = impl.coveredPalette.buffer;
     paletteDescriptor.offset = 0;
-    paletteDescriptor.range = kPaletteBytes;
+    paletteDescriptor.range = paletteBytes;
     vk::DescriptorBufferInfo maskDescriptor{};
     maskDescriptor.buffer = impl.coveredMask.buffer;
     maskDescriptor.offset = 0;
     maskDescriptor.range = maskBytes;
     std::array<vk::WriteDescriptorSet, 3> writes{};
-    writes[0].dstSet = *impl.covered.descriptorSet;
+    writes[0].dstSet = *resources.descriptorSet;
     writes[0].dstBinding = 0;
     writes[0].descriptorCount = 1;
     writes[0].descriptorType = vk::DescriptorType::eStorageImage;
     writes[0].pImageInfo = &imageDescriptor;
-    writes[1].dstSet = *impl.covered.descriptorSet;
+    writes[1].dstSet = *resources.descriptorSet;
     writes[1].dstBinding = 1;
     writes[1].descriptorCount = 1;
     writes[1].descriptorType = vk::DescriptorType::eStorageBuffer;
     writes[1].pBufferInfo = &paletteDescriptor;
-    writes[2].dstSet = *impl.covered.descriptorSet;
+    writes[2].dstSet = *resources.descriptorSet;
     writes[2].dstBinding = 2;
     writes[2].descriptorCount = 1;
     writes[2].descriptorType = vk::DescriptorType::eStorageBuffer;
@@ -564,15 +602,15 @@ GpuSolidDiagnostic GpuSolid::Impl::beginCoveredJob(
         rawCommandBuffer, inputSourceStage, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, 0, 0, nullptr,
         static_cast<std::uint32_t>(inputBarriers.size()), inputBarriers.data(), 0, nullptr);
 
-    impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *impl.covered.pipeline);
+    impl.commandBuffer.bindPipeline(vk::PipelineBindPoint::eCompute, *resources.pipeline);
     impl.commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-                                          *impl.covered.pipelineLayout, 0,
-                                          {*impl.covered.descriptorSet}, {});
+                                          *resources.pipelineLayout, 0,
+                                          {*resources.descriptorSet}, {});
     CoveredPushConstants push{};
     push.width = width;
     push.height = height;
     impl.commandBuffer.pushConstants(
-        *impl.covered.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
+        *resources.pipelineLayout, vk::ShaderStageFlagBits::eCompute, 0,
         static_cast<std::uint32_t>(sizeof(CoveredPushConstants)), &push);
     const std::uint64_t groupCount =
         (static_cast<std::uint64_t>(width) + kWorkgroupSizeX - 1U) / kWorkgroupSizeX;

@@ -116,6 +116,14 @@ bloom_enable_warnings(bloom_render_path_raster_test)
 bloom_enable_strict_floating_point(bloom_render_path_raster_test)
 bloom_add_test(NAME bloom.render.path_raster COMMAND bloom_render_path_raster_test LABELS unit primitives)
 
+# #758: CPU-only exactness test for PaintedCoverageV1's builder, oracle and shader walk. No device.
+add_executable(bloom_render_painted_coverage_test painted_coverage_tests.cpp)
+target_link_libraries(bloom_render_painted_coverage_test PRIVATE bloom_render)
+bloom_enable_warnings(bloom_render_painted_coverage_test)
+bloom_enable_strict_floating_point(bloom_render_painted_coverage_test)
+bloom_add_test(NAME bloom.render.painted_coverage COMMAND bloom_render_painted_coverage_test
+    LABELS unit primitives text)
+
 # CPU-only exactness test for PathRasterCoverageGeometry: reconstructs the uint8 mask from the
 # integer sample spans with exactly the GPU shader's arithmetic and asserts byte-identity to
 # coverageRow over every shape, rule, stroke, clip, transform, proxy and adversarial case. No device.
@@ -789,6 +797,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_image_reclamation.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_covered.cpp"
+        "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_painted.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_solid_retirement.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage.cpp"
         "${CMAKE_CURRENT_SOURCE_DIR}/../vulkan/gpu_path_coverage_lifecycle.cpp"

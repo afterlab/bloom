@@ -20,6 +20,8 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <span>
+#include <string_view>
 #include <thread>
 
 namespace bloom::render {
@@ -159,19 +161,24 @@ struct GpuSolid::Impl final {
     void resetPipelineResources() noexcept;
     [[nodiscard]] bool createPipeline();
     [[nodiscard]] bool createCheckerPipeline();
-    // Builds the CoveredSolidV1 shader module, descriptor layout, pipeline
-    // layout, pipeline, descriptor pool, and descriptor set.
-    [[nodiscard]] bool createCoveredPipeline();
+    // Builds the shader module, descriptor layout, pipeline layout, pipeline, descriptor pool, and
+    // descriptor set of CoveredSolidV1 or PaintedCoverageV1 (#758), which bind the same three
+    // resources: the output image, a palette buffer and a mask or geometry buffer.
+    [[nodiscard]] bool createCoveredPipeline(GpuSolidCoveredResources& resources,
+                                             std::span<const std::uint32_t> code,
+                                             std::string_view operation);
     // Shared implementation of the covered fill. `hostCoverage` is non-empty for
     // the ordinary path and the CPU float mask is uploaded; otherwise the
     // already-resident `residentMaskBuffer` (owned by `residentOwner`) is bound
     // directly with no host roundtrip. A non-empty `explicitPalette` replaces the
-    // coverage palette built from `base.pixel` and `opacity` (beginIndexed).
+    // coverage palette built from `base.pixel` and `opacity` (beginIndexed). A non-null `painted`
+    // runs PaintedCoverageV1 over that host geometry and palette instead (beginPainted).
     [[nodiscard]] GpuSolidDiagnostic
     beginCoveredJob(const GpuSolidParameters& base, std::span<const std::uint8_t> hostCoverage,
                     float opacity, std::uint64_t byteBudget, VkBuffer residentMaskBuffer,
                     std::uint64_t residentMaskBytes, std::shared_ptr<void> residentOwner,
-                    std::span<const Rgba32f> explicitPalette = {});
+                    std::span<const Rgba32f> explicitPalette = {},
+                    const PathPaintedCoverage* painted = nullptr);
     // Bounded owner-thread drain. Returns true when the submission is proved
     // retired.
     [[nodiscard]] bool drainAndRetire() noexcept;
@@ -201,6 +208,8 @@ struct GpuSolid::Impl final {
 
     // CoveredSolidV1 resources, created lazily.
     GpuSolidCoveredResources covered;
+    // PaintedCoverageV1 resources (#758), created lazily.
+    GpuSolidCoveredResources paintedResources;
     // Per-job covered inputs, retained until the submission is proved retired.
     GpuSolidUploadBuffer coveredPalette;
     GpuSolidUploadBuffer coveredMask;

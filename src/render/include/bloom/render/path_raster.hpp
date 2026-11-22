@@ -89,6 +89,8 @@ class PathRaster final {
                 double scaleY, const PathCancellation& cancelled = {},
                 std::optional<PathBounds> clip = std::nullopt);
     [[nodiscard]] PathBounds bounds(bool fill, bool stroke) const noexcept;
+    // #758: bounds() at the raster's scales, in the output pixels coverageRow() addresses.
+    [[nodiscard]] PathBounds pixelBounds(bool fill, bool stroke) const noexcept;
     // The polyline create() stroked and filled, for a raster of one contour.
     [[nodiscard]] std::span<const PathPoint> flattenedContour() const noexcept { return fill_; }
     [[nodiscard]] bool coverageRow(std::int64_t x, std::int64_t y, std::span<std::uint8_t> row,

@@ -1,0 +1,30 @@
+{
+  "schema": "bloom.gpu.shader.manifest.v1",
+  "generator": "tools/gpu-shaders compile/validate/embed recipe (reused, not reimplemented)",
+  "generatorRevision": 1,
+  "operation": "PaintedCoverageV1",
+  "entrypoint": "main",
+  "shader": {
+    "language": "GLSL_460",
+    "stage": "compute",
+    "sha256": "ef64beba6e195d9a51c35012bb0e4e6857740964788a8c013bebcc3d5b0977c5",
+    "spirvSha256": "b94a2a5dade39694e097bc942a53d357f5a93d46bb47e4bafcd6da35f77e2a3c",
+    "localSizeX": 256,
+    "textures": 0,
+    "uniforms": 0
+  },
+  "bindings": [
+    {"set": 0, "binding": 0, "kind": "storage-image", "access": "writeonly", "format": "rgba32f", "role": "resident-premultiplied-rgba32f-output"},
+    {"set": 0, "binding": 1, "kind": "storage-buffer", "access": "readonly", "format": "vec4-17-per-paint", "role": "host-built-painted-coverage-palette"},
+    {"set": 0, "binding": 2, "kind": "storage-buffer", "access": "readonly", "format": "uint32-ranges-then-tagged-spans", "role": "immutable-painted-coverage-geometry"}
+  ],
+  "pushConstant": {"byteCount": 8, "fields": [
+    {"name": "width", "type": "uint32"},
+    {"name": "height", "type": "uint32"}
+  ]},
+  "contracts": {
+    "numeric": "palette-selection-then-source-over-fma",
+    "alphaPreserved": true,
+    "note": "host precomputes each paint's 17 coverageSolidRow results; the shader counts covered samples per paint with integer overlap and folds the selected entries with the source_over.comp arithmetic (exact endpoints, fma), gated at 2e-6 as SourceOverV1"
+  }
+}

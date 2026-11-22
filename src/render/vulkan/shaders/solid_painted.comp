@@ -1,0 +1,106 @@
+#version 460
+// Bloom PaintedCoverageV1 compute shader. Offline-generated/embedded; do not edit at runtime.
+//
+// Operation: PaintedCoverageV1 (#758), one dispatch for a frame of many painted coverage layers (an
+// animated text's per-cluster fill and outline colors and opacities). The host has resolved every
+// layer's PathRasterCoverageGeometry (the same spans GpuPathCoverage counts) and concatenated them
+// per sub-scanline, each span tagged with its layer's paint index, in drawing order. For every
+// paint it has materialized the 17 possible results of the CPU arm as a premultiplied RGBA32F
+// palette: palette[paint * 17 + n] is coverageSolidRow() for the coverage byte (n * 255 + 8) / 16
+// that n covered samples of the 4 x 4 grid quantize to, so the shader does NO coverage arithmetic.
+//
+// Per pixel it walks the paints present in its row in ascending order, counts each paint's covered
+// samples with the exact integer overlap of path_coverage.comp, and composites that paint's palette
+// entry source-over the accumulated pixel with the arithmetic of source_over.comp (the CPU
+// sourceOverLinearRec709SceneRow(): exact endpoints, then fma(1 - as, d, s)). That is the CPU
+// reference's per-layer fold (coverage row, coverageSolidRow, source-over, layer after layer) in
+// one pass: a pixel no span of a paint covers takes no part in that paint's step, exactly as its
+// zero coverage gives the CPU a transparent pixel that source-over skips.
+//
+// The host refuses a palette whose summed magnitude could overflow, so the fold stays finite.
+layout(local_size_x = 256, local_size_y = 1, local_size_z = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform writeonly image2D bloom_painted_output;
+
+// paints * 17 premultiplied lin_rec709_scene RGBA32F values.
+layout(set = 0, binding = 1, std430) readonly buffer BloomPaintedPalette {
+    vec4 bloom_painted_palette[];
+};
+
+// height * 4 (offset, count) pairs, one per (row * 4 + sy) sub-scanline, followed by the spans as
+// (first, last, paint) triples: inclusive sample indices within the row (sample = pixel * 4 + sx)
+// and the paint index. Within one sub-scanline the spans ascend by paint.
+layout(set = 0, binding = 2, std430) readonly buffer BloomPaintedGeometry {
+    uint bloom_painted_words[];
+};
+
+layout(push_constant) uniform BloomPaintedPushConstants {
+    uint width;  // data-window width in pixels
+    uint height; // data-window height in pixels
+} bloom_painted_push;
+
+const uint kNoPaint = 0xFFFFFFFFu;
+const uint kLevels = 17u;
+
+uint bloom_paint(uint span, uint base)
+{
+    return bloom_painted_words[base + span * 3u + 2u];
+}
+
+void main()
+{
+    const uvec2 index = gl_GlobalInvocationID.xy;
+    if (index.x >= bloom_painted_push.width || index.y >= bloom_painted_push.height) {
+        return;
+    }
+    const uint base = bloom_painted_push.height * 8u;
+    const uint lo = index.x << 2u;
+    const uint hi = lo + 3u;
+    uint cursor[4];
+    uint end[4];
+    for (uint sy = 0u; sy < 4u; ++sy) {
+        const uint range = ((index.y << 2u) + sy) << 1u;
+        cursor[sy] = bloom_painted_words[range];
+        end[sy] = cursor[sy] + bloom_painted_words[range + 1u];
+    }
+    vec4 destination = vec4(0.0);
+    while (true) {
+        uint paint = kNoPaint;
+        for (uint sy = 0u; sy < 4u; ++sy) {
+            if (cursor[sy] < end[sy]) {
+                paint = min(paint, bloom_paint(cursor[sy], base));
+            }
+        }
+        if (paint == kNoPaint) {
+            break;
+        }
+        uint count = 0u;
+        for (uint sy = 0u; sy < 4u; ++sy) {
+            while (cursor[sy] < end[sy] && bloom_paint(cursor[sy], base) == paint) {
+                const uint span = base + cursor[sy] * 3u;
+                const uint first = max(bloom_painted_words[span], lo);
+                const uint last = min(bloom_painted_words[span + 1u], hi);
+                if (first <= last) {
+                    count += last - first + 1u;
+                }
+                ++cursor[sy];
+            }
+        }
+        const vec4 source = bloom_painted_palette[paint * kLevels + min(count, 16u)];
+        // source_over.comp's endpoints, exact: a transparent source leaves the pixel; an opaque
+        // source, or an empty pixel, takes the source unchanged.
+        if (source.a == 0.0) {
+            continue;
+        }
+        if (source.a == 1.0 || destination.a == 0.0) {
+            destination = source;
+            continue;
+        }
+        const float inverseSourceAlpha = 1.0 - source.a;
+        destination = vec4(fma(inverseSourceAlpha, destination.x, source.x),
+                           fma(inverseSourceAlpha, destination.y, source.y),
+                           fma(inverseSourceAlpha, destination.z, source.z),
+                           fma(inverseSourceAlpha, destination.w, source.w));
+    }
+    imageStore(bloom_painted_output, ivec2(index), destination);
+}

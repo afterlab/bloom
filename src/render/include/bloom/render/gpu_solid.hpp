@@ -39,6 +39,7 @@
 namespace bloom::render {
 
 class GpuPathCoverage;
+struct PathPaintedCoverage;
 
 enum class GpuSolidJobState : std::uint8_t { Idle, Pending, Ready, Failure };
 enum class GpuSolidPollResult : std::uint8_t { Pending, Ready, Failure, WrongThread };
@@ -163,6 +164,16 @@ class GpuSolid final {
     [[nodiscard]] GpuSolidDiagnostic beginCoveredResident(const GpuSolidParameters& base,
                                                           const GpuPathCoverage& coverage,
                                                           float opacity, std::uint64_t byteBudget);
+
+    // PaintedCoverageV1 (#758, painted_coverage.hpp): one dispatch draws every layer of
+    // `coverage` (its host-resolved spans tagged by paint) and folds them source-over in paint
+    // order, each paint's pixel taken from its 17-entry palette. `base.pixel` is not used; the
+    // geometry must match the data window, every range must address its spans and every span a
+    // paint of the palette. The geometry and palette are copied before this call returns.
+    // Rejections, ownership and cancellation are those of beginCovered.
+    [[nodiscard]] GpuSolidDiagnostic beginPainted(const GpuSolidParameters& base,
+                                                  const PathPaintedCoverage& coverage,
+                                                  std::uint64_t byteBudget);
 
     // Non-blocking fence query. Pending/Ready/Failure; WrongThread from a foreign
     // thread.

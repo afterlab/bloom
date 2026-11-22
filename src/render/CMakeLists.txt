@@ -1221,6 +1221,60 @@ else()
         "solid_covered.comp digest is still enforced.")
 endif()
 
+# --- Fixed PaintedCoverageV1 shader (#758): source pin and regeneration check --------------------
+#
+# Offline artifact from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
+# The checked-in .comp is pinned here, the manifest must bind that source digest, and, when the
+# locked glslangValidator/spirv-val are present, configure recompiles it and confirms the SPIR-V
+# digest embedded in solid_painted_spirv.inc. Runtime code never compiles or loads a shader.
+set(BLOOM_SOLID_PAINTED_COMP "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_painted.comp")
+set(BLOOM_SOLID_PAINTED_MANIFEST "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_painted.manifest")
+set(BLOOM_SOLID_PAINTED_INC "${CMAKE_CURRENT_SOURCE_DIR}/vulkan/shaders/solid_painted_spirv.inc")
+set(BLOOM_SOLID_PAINTED_COMP_SHA256
+    "ef64beba6e195d9a51c35012bb0e4e6857740964788a8c013bebcc3d5b0977c5")
+set(BLOOM_SOLID_PAINTED_SPV_SHA256
+    "b94a2a5dade39694e097bc942a53d357f5a93d46bb47e4bafcd6da35f77e2a3c")
+
+file(SHA256 "${BLOOM_SOLID_PAINTED_COMP}" bloom_solid_painted_comp_sha256)
+if(NOT bloom_solid_painted_comp_sha256 STREQUAL BLOOM_SOLID_PAINTED_COMP_SHA256)
+    message(FATAL_ERROR
+        "solid_painted.comp SHA-256 mismatch: measured ${bloom_solid_painted_comp_sha256}, pinned "
+        "${BLOOM_SOLID_PAINTED_COMP_SHA256}. Regenerate only through the tools/gpu-shaders recipe and "
+        "update the pin and the embedded SPIR-V together.")
+endif()
+file(READ "${BLOOM_SOLID_PAINTED_MANIFEST}" bloom_solid_painted_manifest_text)
+if(NOT bloom_solid_painted_manifest_text MATCHES "${BLOOM_SOLID_PAINTED_COMP_SHA256}")
+    message(FATAL_ERROR "solid_painted.manifest does not bind the pinned solid_painted.comp SHA-256.")
+endif()
+if(BLOOM_GLSLANG_VALIDATOR AND BLOOM_SPIRV_VAL)
+    set(bloom_solid_painted_generated_spv "${CMAKE_CURRENT_BINARY_DIR}/solid_painted.generated.spv")
+    execute_process(
+        COMMAND "${BLOOM_GLSLANG_VALIDATOR}" --target-env vulkan1.2 -V
+                "${BLOOM_SOLID_PAINTED_COMP}" -o "${bloom_solid_painted_generated_spv}"
+        RESULT_VARIABLE bloom_solid_painted_glslang_result)
+    if(NOT bloom_solid_painted_glslang_result EQUAL 0)
+        message(FATAL_ERROR "glslangValidator failed to compile solid_painted.comp.")
+    endif()
+    execute_process(
+        COMMAND "${BLOOM_SPIRV_VAL}" --target-env vulkan1.2 "${bloom_solid_painted_generated_spv}"
+        RESULT_VARIABLE bloom_solid_painted_spirv_val_result)
+    if(NOT bloom_solid_painted_spirv_val_result EQUAL 0)
+        message(FATAL_ERROR "spirv-val rejected the regenerated PaintedCoverageV1 SPIR-V.")
+    endif()
+    file(SHA256 "${bloom_solid_painted_generated_spv}" bloom_solid_painted_spv_sha256)
+    if(NOT bloom_solid_painted_spv_sha256 STREQUAL BLOOM_SOLID_PAINTED_SPV_SHA256)
+        message(FATAL_ERROR
+            "regenerated PaintedCoverageV1 SPIR-V SHA-256 ${bloom_solid_painted_spv_sha256} does not "
+            "match the embedded ${BLOOM_SOLID_PAINTED_SPV_SHA256}; the checked-in .comp and "
+            "solid_painted_spirv.inc disagree.")
+    endif()
+    message(STATUS "Bloom render: solid_painted.comp regenerated and SPIR-V-validated "
+        "(${bloom_solid_painted_spv_sha256}).")
+else()
+    message(STATUS "Bloom render: glslangValidator/spirv-val not found in the prefix; the pinned "
+        "solid_painted.comp digest is still enforced.")
+endif()
+
 # --- Fixed ViewerPresentV2 vertex/fragment shaders: source pins and regeneration checks ----------
 #
 # Offline artifacts from the same tools/gpu-shaders compile/validate/embed recipe (no new generator).
@@ -1388,6 +1442,7 @@ target_sources(
         text_font_access.hpp
         text_raster.cpp
         styled_text.cpp
+        painted_coverage.cpp
         unicode_text_tables.inc
         path_raster.cpp
     PUBLIC
@@ -1437,6 +1492,7 @@ target_sources(
             include/bloom/render/native_samples.hpp
             include/bloom/render/text_raster.hpp
             include/bloom/render/path_raster.hpp
+            include/bloom/render/painted_coverage.hpp
 )
 
 target_sources(bloom_render PRIVATE gpu_translation_axis_private.hpp)
@@ -1529,6 +1585,7 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/gpu_solid_checker.cpp
         vulkan/gpu_solid_resources.cpp
         vulkan/gpu_solid_covered.cpp
+        vulkan/gpu_solid_painted.cpp
         vulkan/gpu_solid_fault.hpp
         vulkan/gpu_solid_private.hpp
         vulkan/gpu_solid_retirement.cpp
@@ -1562,6 +1619,9 @@ if(BLOOM_RENDER_VULKAN_AVAILABLE)
         vulkan/shaders/solid_covered.comp
         vulkan/shaders/solid_covered.manifest
         vulkan/shaders/solid_covered_spirv.inc
+        vulkan/shaders/solid_painted.comp
+        vulkan/shaders/solid_painted.manifest
+        vulkan/shaders/solid_painted_spirv.inc
         vulkan/shaders/translation_opacity.comp
         vulkan/shaders/translation_opacity.manifest
         vulkan/shaders/translation_opacity_spirv.inc
