@@ -669,6 +669,15 @@ void edgeTests(Expectations& expectations, References& gpu) {
         expectations.expect(most > 3.9F, "an HDR fill color keeps its value above 1 (" +
                                               std::to_string(most) + ")");
         gpu.emplace_back("HDR fill", *hdr);
+        // Undo takes the fill color and the switch off as one step each; redo brings them back.
+        const bool undone = made->commands.undo().changed() && made->commands.undo().changed();
+        const auto back = referenceAt(expectations, *made, frameTime(0), "undone fill");
+        expectations.expect(undone && back && samePicture(*full, *back),
+                            "undoing the fill color and switch draws the animated text as before");
+        const bool redone = made->commands.redo().changed() && made->commands.redo().changed();
+        const auto again = referenceAt(expectations, *made, frameTime(0), "redone fill");
+        expectations.expect(redone && again && samePicture(*hdr, *again),
+                            "redoing them draws the HDR fill again");
     }
     // An empty text with an animator draws nothing and evaluates without error.
     auto empty = fixture("");
