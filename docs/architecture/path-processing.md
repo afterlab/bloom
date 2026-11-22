@@ -161,7 +161,8 @@ a thousandth of a pixel.
 `taperStart`, `taperEnd` (0, percent of the drawn stretch), `dashLength` (0 is solid), `dashGap` (8),
 `dashOffset`, `spacing` (0 is continuous; above 0 the brush stamps round dots of the width every
 `spacing` pixels), `wiggle` (0, pixels), `wiggleFrequency` (2, cycles per 100 pixels), `wigglePhase`,
-`seed`, `coreWidth` (0, percent of the width) and `tolerance`; selectors `cap` (Butt, Round default,
+`seed`, `coreWidth` (0, percent of the width), `tolerance`, and the optional `stampRotation`, `dash2`,
+`gap2`, `dash3` and `gap3` (0; see "Dash patterns"); selectors `cap` (Butt, Round default,
 Square) and `join` (Miter, Round default, Bevel). Outputs `path` (the body), `core` and `length` (the
 drawn length before dashes).
 
@@ -173,6 +174,44 @@ the path, the seed and the phase (animate the phase to make it boil). `core` is 
 share of the width: draw it brighter over the body for a beam. Glow itself is not part of the node; blur
 the body with an image node. Counts of dashes, dots and wiggle samples are bounded, and a result beyond
 them fails with a diagnostic. The outline's groups are dropped.
+
+### Dash patterns
+
+The dash pattern (#759) is up to three dash and gap pairs, in pixels along the drawn stretch:
+`dashLength` and `dashGap`, then the optional `dash2` and `gap2`, then `dash3` and `gap3` (each 0
+by default). The pairs are walked in order, starting `dashOffset` pixels into the pattern, and a
+pair at 0 and 0 is skipped wherever it is. The first pair alone keeps the meaning it always had: a
+`dashLength` of 0 (or a negative length) is solid. Once a later pair is set, the stroke is
+dashed even when `dashLength` is 0, and a dash of 0 is a cap-only dot where it falls: a disc the
+width across with Round caps, a square of the width's side turned with the path with Square caps,
+nothing with Butt caps (as SVG draws a zero-length dash). A negative length anywhere in a pattern
+makes the stroke solid, as SVG treats one. An open stretch's end is a place a dot can fall; a closed
+one's end is its start, so a dot is not drawn twice there.
+
+Dashes follow trims, tapers (each dash and dot takes the width envelope where it lies) and wiggle as
+the single pair always did. A dash that runs across a closed contour's start is cut there into two
+pieces, each with its caps, as before. The offset moves the whole pattern, so an offset one period
+on draws the same outline, and a driven offset runs the pattern along the path. Dashes and dots
+count against the same bound as dashes did, and past it the node fails with "Path Stroke dashes are
+too short". The four new operands are optional: a Path Stroke saved before them opens unbound and
+draws exactly what it drew ([project-format.md](project-format.md)).
+
+Like every Path Stroke operand, the pattern lengths and the offset are sockets: they animate by a
+value driving them (a keyed Scalar, or Value Time times a rate as the Vegas preset does), not by
+keyframes on the operand itself.
+
+### The same geometry on every platform
+
+The stroke's geometry uses only correctly rounded arithmetic, so it is the same bits on Linux, macOS
+and Windows (#759): lengths are the square root of IEEE products rather than `std::hypot` (which is
+only faithful per platform), a disc's sixteen corners are written out as the exact values the
+stroke has always used, and the stamp rotation's cosine and sine come from an exact reduction to
+within an eighth of a turn and a fixed series, never a platform's `std::cos` or `std::sin`.
+`path_processing_tests` holds digests of every output bit for the strokes that existed before dash
+patterns (recorded before the change) and for the patterns, so a difference on any platform is a
+failure. The Path flattening shared with Shape Source decides its subdivision with `std::hypot`;
+a platform difference there could change a subdivision only when a curve's excess length equals the
+tolerance to the last place.
 
 ### Brush stamps
 

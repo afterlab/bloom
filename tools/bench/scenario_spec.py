@@ -959,6 +959,29 @@ SCENARIOS["text-outline-2k"] = {
     ],
 }
 
+# #759: Path Stroke dash patterns: a closed path stroked with a three-pair dash-dot pattern with
+# round caps, its offset keyed so every frame cuts new dashes and dots, drawn by a Shape Source. The
+# cost is the pattern walk, the cap-only dots and the polygon union, then the fill. No media is
+# read. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["path-stroke-dash-pattern-2k"] = {
+    "description": "A Shape Source drawing 64 rings stroked with a keyed three-pair dash-dot "
+                   "pattern with round caps.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Shape",
+         "generator": ["bloom.shape-source", {"kind": 6}],  # ShapeKind::Path
+         "pathChain": {
+             "keys": [
+                 [0, {"contours": [_ring(i, 0) for i in range(64)], "fillRule": "evenOdd"}]],
+             "steps": [
+                 {"type": "bloom.path-stroke",
+                  "values": {"width": 4.0, "cap": 1, "dashLength": 18.0, "dashGap": 8.0,
+                             "dash2": 0.0, "gap2": 8.0, "dash3": 4.0, "gap3": 8.0},
+                  "keys": {"dashOffset": [[0, 0.0], [23, 46.0]]}}]}},
+    ],
+}
+
 # #752: Subtitles over a plate: two-line cues with italic and colored runs, a block box and an
 # outline, half a second each, two of them stacked for a while. Every frame inside one cue reuses one
 # subtitles result, so the cost is one layout and one set of coverage passes per cue, then only the

@@ -121,7 +121,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   its labels and placed layers share, so they stay aligned while the space moves, scales or turns;
   reading the space as numbers and converting points in and out of it.
 - [Strokes and glowing paths](user-guide/strokes-and-glowing-paths.md) — Path Stroke's write-on,
-  tapers, dashes and brush stamps, stroking masks and letters with Mask Path and Text Outline,
+  tapers, dash patterns (dash-dot and dotted lines in one stroke) and brush stamps, stroking masks
+  and letters with Mask Path and Text Outline,
   outlining an image's alpha with Alpha Contour, and the ready-made Saber, Beam, Vegas, Write-on and
   Stroke glows.
 - [Lens Flare](user-guide/lens-flare.md) — the element stack, presets, placing the light in 2D, from

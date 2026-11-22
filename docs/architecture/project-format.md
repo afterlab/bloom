@@ -1031,8 +1031,8 @@ dropped.
 
 A node may leave any optional parameter role unbound. The compiler lowers an unbound optional role
 at its definition default, so a node without, for example, a Transform 2D motion-blur, Film Grain
-Monochrome or Sensor Noise, Procedural Warp split, Path Stroke stamp or Glow mode binding renders as
-a node bound at those defaults.
+Monochrome or Sensor Noise, Procedural Warp split, Path Stroke stamp or dash pattern (#759: `dash2`,
+`gap2`, `dash3`, `gap3`) or Glow mode binding renders as a node bound at those defaults.
 
 ## Project I/O Boundary
 

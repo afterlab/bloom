@@ -18,11 +18,31 @@ Connect a path to Path Stroke's **Path**, and its **Path** output to a Shape nod
   (percent) below has a slider as well as its number.
 - **Taper Start** and **Taper End** narrow the stroke to a point over that share of it.
 - **Dash Length**, **Dash Gap** and **Dash Offset** cut it into dashes; animate **Dash Offset** to make
-  them run.
+  them run. **Dash 2**, **Gap 2**, **Dash 3** and **Gap 3** add a second and third dash and gap to the
+  pattern (see below).
 - **Wiggle**, **Wiggle Frequency**, **Wiggle Phase** and **Seed** roughen it; animate the phase to make
   it boil.
 - **Core Width** is a second, thinner stroke on the **Core** output, for a hot centre drawn over the
   body.
+
+### Dash patterns
+
+A pattern is up to three dashes, each followed by its gap: **Dash Length** and **Dash Gap**, then
+**Dash 2** and **Gap 2**, then **Dash 3** and **Gap 3**. A pair left at 0 and 0 is not used, and
+**Dash Offset** slides the whole pattern along the path. With only the first pair, a **Dash Length**
+of 0 still means a solid stroke, as it always has.
+
+A dash of 0 in a pattern draws a dot: round with **Cap** set to Round, square with Square, and
+nothing with Butt. So one stroke draws the classic line styles:
+
+- **Dash-dot**: Cap Round, Dash Length 12, Dash Gap 6, Dash 2 0, Gap 2 6.
+- **Dotted**: Cap Round, Dash Length 0, Dash Gap 10, Dash 2 0, Gap 2 10.
+- **Dash-dot-dot**: Cap Round, Dash Length 16, Dash Gap 5, Dash 2 0, Gap 2 5, Dash 3 0, Gap 3 5.
+
+Keep each gap wider than the stroke's width, or the round caps close it. Dashes follow the trim, the
+tapers and the wiggle, and run on round a closed outline. To animate a dash value or the offset,
+drive it from a value, as every Path Stroke control is: connect a keyed Scalar or a Time node to
+its socket (the Vegas preset runs its Dash Offset this way).
 
 ### Brush stamps
 

@@ -422,7 +422,7 @@ As editable shapes, the operation builds, inside the target composition:
 | a drawn element (`path`, `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`) | a Shape layer whose `path` parameter is driven by its own **Path node** (`bloom.value-path`) |
 | solid fill and solid stroke | the Shape's own fill and stroke |
 | gradient fill | a Linear or Radial Gradient layer matted by the outline filled opaque (Alpha track matte) |
-| gradient stroke, dashes | a Path Stroke node (dash length, gap, offset, cap, join) matted or drawn as a stroke outline |
+| gradient stroke, dashes | a Path Stroke node (up to three dash and gap pairs, offset, cap, join) matted or drawn as a stroke outline |
 | `clip-path`, `mask` | the clip or mask's content as a sibling entry used as a track matte (Alpha for clips, Luma for masks) |
 | `<text>` | a native Text layer (position, size, colour, alignment, rotation). The file's `font-family`, weight and style go through the platform font catalogue (installed faces, System source); a family that is not installed, a generic family, or a weight or slope the family lacks is substituted and listed by name |
 | `opacity` | the entry layer's opacity |
@@ -498,11 +498,16 @@ attribute, inheritance), `currentColor`, linear and radial gradients with `href`
 clip paths and masks (bounding-box units on shapes), opacity, fill and stroke opacity, fill rule,
 dashes, caps, joins and text with `tspan` positions and `text-anchor`.
 
+`stroke-dasharray` of up to six lengths (an odd count repeated, as SVG reads it) is Path Stroke's
+three dash and gap pairs exactly (#759), so `12 4 0 4` imports as a dash, a round or square dot and
+their gaps. A pattern of a single zero-length dash and a gap (dots) is written into the second pair
+too, because the first pair alone reads a dash of 0 as solid.
+
 Reported, never silently dropped (each item is named in the operation's warnings, in
 the Jobs panel for the desktop import, and in the script result): a radial gradient's focal point
 (drawn centred), patterns, filters other than a single Gaussian blur, markers, embedded or linked images, `foreignObject`, scripts,
 animation, text-on-path, text stroke and gradient fills of text, per-span colours inside one text
-run, multi-length dash patterns beyond the first dash and gap, anisotropic stroke widths, CSS the
+run, dash patterns of more than six lengths (an odd count counts as repeated; the first six are kept), anisotropic stroke widths, CSS the
 reader does not apply, and anything hidden by `display: none`.
 
 ### Security and bounds
