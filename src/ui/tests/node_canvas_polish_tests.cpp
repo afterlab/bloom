@@ -15,6 +15,7 @@
 #include <bloom/ui/kit/icons.hpp>
 #include <bloom/ui/properties_editor.hpp>
 
+#include <QEvent>
 #include <QGraphicsProxyWidget>
 #include <QImage>
 #include <QPainter>
@@ -169,7 +170,9 @@ void testAddsNeverOverlap() {
 }
 
 // The command-side estimate the placement uses for an unmeasured card is an upper bound of every
-// built-in card the editor draws, which is what makes command placement overlap-free.
+// built-in card the editor draws, which is what makes command placement overlap-free. Each card is
+// removed once measured: every row of a card is an embedded widget with its own window, and a few
+// hundred cards held at once exhaust the window memory of a non-interactive Windows session.
 void testEstimateBoundsEveryCard() {
     Fixture f;
     double x = 0.0;
@@ -198,7 +201,11 @@ void testEstimateBoundsEveryCard() {
                       << "x" << card->cardRect().height() << ", estimate " << estimate.width
                       << "x" << estimate.height << '\n';
         }
-    }
+        commands::Transaction remove("Fixture edit", f.session.snapshot().revision());
+        remove.emplace<commands::RemoveNodes>(f.session.compositionId(), std::set{*id});
+        (void)f.scene()->submit(std::move(remove));
+        QCoreApplication::processEvents();
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);    }
     // A run that drew no cards would agree with any estimate.
     expect(measured >= 50, "the estimate was held against the drawn cards");
     std::cout << "ESTIMATE cards=" << measured << '\n';
