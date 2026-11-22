@@ -25,6 +25,7 @@
 // proved to prepare on the GPU. It writes no route proof: it is evidence, and it SKIPs
 // when there is no Wayland platform or device (and fails then with --require-device).
 
+#include "fixed_memory_budget.hpp"
 #include "gpu_route_proof_harness_support.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -38,6 +39,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/runtime/gpu_ocio_context.hpp>
+#include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <bloom/runtime/reference_display_preparation.hpp>
 #include <bloom/ui/composition_commands.hpp>
@@ -66,7 +68,9 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <stop_token>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -639,7 +643,39 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         return options.requireDevice ? 1 : 0;
     }
 
-    TaskScheduler scheduler(schedulerConfig());
+    // The production root (#758): one processing policy and its delivered budget view, sampled
+    // before the first frame is asked for and kept fresh, shared by the scheduler, the service, the
+    // GPU-scene stage and the controller as the application wires them. The service takes each
+    // frame's allowance from the delivered view, never an explicit one.
+    auto rootSample = bloom::test_support::fixedMemoryBudgetSample();
+    runtime::MemoryBudgetLedger rootLedger{rootSample.physicalBytes,
+                                           rootSample.machine.availableBytes.value_or(0)};
+    const auto rootView = std::make_shared<runtime::TaskBudgetView>();
+    const auto processingRoot =
+        std::make_shared<runtime::GpuProcessingPhasePolicy>(32, nullptr, rootView);
+    const auto deliverRootSample = [&rootLedger,
+                                    &processingRoot](runtime::MemoryBudgetSample sample) {
+        const auto at = runtime::GpuProcessingPhasePolicy::Clock::now();
+        const auto state = rootLedger.applySample(std::move(sample), at);
+        processingRoot->applyHostSample(state, rootLedger.physicalByteBudget(),
+                                        rootLedger.allocate(), at);
+    };
+    rootLedger.beginProcessSampling();
+    deliverRootSample(std::move(rootSample));
+    const std::jthread rootSampler([&deliverRootSample](const std::stop_token& stop) {
+        while (!stop.stop_requested()) {
+            for (int index = 0; index < 100 && !stop.stop_requested(); ++index)
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            if (!stop.stop_requested())
+                deliverRootSample(bloom::test_support::fixedMemoryBudgetSample());
+        }
+    });
+    auto rootedSchedulerConfig = schedulerConfig();
+    rootedSchedulerConfig.budgetView = rootView;
+    TaskScheduler scheduler(rootedSchedulerConfig);
+    auto rootedOptions = serviceOptions(options.loader);
+    rootedOptions.processingPhasePolicy = processingRoot;
+    rootedOptions.previewByteAllowance.reset();
     const runtime::CpuReferenceDisplayPreparer displayPreparer;
     // The production shape: the GPU scene builder carries the shared OCIO context resolved from the
     // packaged tools (without it field programs and effects are outside the GPU subset).
@@ -662,6 +698,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
         std::string_view{BLOOM_GPU_TOOLS_SPIRV_VAL_STAGED_SHA256}.substr(7));
 #endif
     auto ocioResolver = std::make_shared<runtime::GpuOcioContextResolver>(std::move(ocioRequest));
+    const runtime::GpuScenePreparationPhase processingPhase{
+        .policy = processingRoot,
+        .envelope = {.metadataBytes = 16ULL * 1024 * 1024,
+                     .retainedCoverageByteLimit = 16ULL * 1024 * 1024,
+                     .growsRetainedSceneStorage = true,
+                     .requestedExecutorBytes = std::nullopt,
+                     .deviceWorkingBytes =
+                         512ULL * 1024 * 1024 + rootedOptions.packedTransferByteAllowance}};
     runtime::GpuSceneOcioContext ocioContext;
     if (!options.cold) {
         runtime::GpuOcioCancellation never = [] { return false; };
@@ -675,17 +719,17 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
     auto sceneMediaContext = runtime::GpuSceneMediaContext::fromEvaluator(fixture.evaluator);
     sceneMediaContext.assetBaseDirectory = mediaDirectory;
     const runtime::CpuGpuSceneBuilder sceneBuilder(nullptr, std::move(sceneMediaContext),
-                                                   std::move(ocioContext));
+                                                   std::move(ocioContext), processingPhase);
     // Cold: the stage the application builds, resolving the tools on the first frame's worker.
     auto gpuStage =
-        options.cold
-            ? ui::makeSessionRefreshingGpuSceneStage(fixture.compiler, fixture.evaluator,
-                                                     fixture.provider, nullptr, nullptr, ocioResolver)
-            : ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, sceneBuilder,
-                                                      fixture.provider);
+        options.cold ? ui::makeSessionRefreshingGpuSceneStage(fixture.compiler, fixture.evaluator,
+                                                              fixture.provider, nullptr, nullptr,
+                                                              ocioResolver, processingPhase)
+                     : ui::makeCompositionPreviewGpuSceneStage(fixture.compiler, sceneBuilder,
+                                                               fixture.provider);
     GpuPreviewDisplayService service(scheduler, std::move(gpuStage), fixture.productionCpuStage(),
                                      fixture.productionCpuFallback(displayPreparer),
-                                     serviceOptions(options.loader));
+                                     std::move(rootedOptions));
 
     // The document: a saved project, or the scenario's composition.
     ui::ProjectHost projectHost(scheduler);
@@ -798,7 +842,8 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                          static_cast<std::size_t>(effective.cacheEntries));
     }
     ui::CompositionPreviewController controller(session, scheduler, bridge, pipeline, settings,
-                                                frameCache, nullptr, submitter);
+                                                frameCache, nullptr, submitter, nullptr,
+                                                processingRoot);
 
     auto host = std::make_unique<QWidget>();
     host->setWindowTitle(QString::fromStdString(
@@ -842,7 +887,9 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                           << " message=" << state.message.toStdString() << '\n';
                 const auto counters = service.status().counters;
                 std::cout << "  cpuFallbacks=" << counters.cpuFallbacks
-                          << " residentFailures=" << counters.residentFailures << " byReason=";
+                          << " residentFailures=" << counters.residentFailures
+                          << " gpuAdmissionRefusals=" << counters.gpuAdmissionRefusals
+                          << " byReason=";
                 for (const auto value : counters.cpuFallbacksByReason)
                     std::cout << value << ',';
                 std::cout << '\n';
