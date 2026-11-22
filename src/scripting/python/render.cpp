@@ -76,7 +76,11 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
                             const std::uint64_t last, const bool range, const std::string& preset,
                             const std::string& destination, const std::uint64_t cancellationTask,
                             const bool replace, const bool requireDevice,
-                            const nb::object& subtitles) {
+                            const nb::object& subtitles, const std::string& background) {
+    // #760: "transparent" (the default) or "composition".
+    const auto chosenBackground = document::parseExportBackground(background);
+    if (!chosenBackground)
+        throw nb::value_error("background is \"transparent\" or \"composition\"");
     output::OutputPresetV1 selected;
     if (preset == "PngRgba8SrgbV1") {
         selected = output::OutputPresetV1::PngRgba8SrgbV1;
@@ -123,7 +127,8 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
             .workerLimits = {},
             .loudness = std::nullopt,
             .encoder = document::ExportEncoderPreference::Automatic,
-            .subtitles = subtitleSettingsToRender};
+            .subtitles = subtitleSettingsToRender,
+            .background = *chosenBackground};
         result =
             Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {

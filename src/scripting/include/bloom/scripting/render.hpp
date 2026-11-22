@@ -49,6 +49,9 @@ struct RenderRequest final {
     // #752: the subtitle tracks to deliver with the render: sidecar files beside an image, and
     // embedded tracks for a format whose container carries them. Absent delivers none.
     std::optional<document::ExportSubtitles> subtitles = std::nullopt;
+    // #760: Transparent keeps alpha; CompositionColor composites every frame over the
+    // composition's Background Color in the working space, so the output is opaque.
+    document::ExportBackground background = document::ExportBackground::Transparent;
 };
 
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not

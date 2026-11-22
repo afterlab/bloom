@@ -470,6 +470,10 @@ struct WorkerLimitArguments final {
 // delivered track; bytes and sha256 describe a sidecar file.
 [[nodiscard]] yyjson_mut_val*
 subtitleFilesValue(Json& out, const std::vector<host::ExportSubtitleFile>& files);
+// #760: the optional `background` argument of render, capture and export: "transparent" (the
+// default) keeps alpha, "composition" composites every frame over the composition's Background
+// Color. Throws InvalidInput for another value.
+[[nodiscard]] document::ExportBackground backgroundArgument(yyjson_val* arguments);
 // The optional `encoder` argument of render and export: "automatic", "software" or "hardware".
 [[nodiscard]] std::optional<document::ExportEncoderPreference>
 encoderArgument(yyjson_val* arguments);

@@ -769,8 +769,9 @@ void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
     command("python", "Start an interactive Python prompt with the bloom package.", {}, {},
             "An interactive interpreter.", "bloom-cli python", {});
     command("render", "Render one frame or a frame range of a project's first composition.",
-            "Output keeps alpha; the composition background colour is not rendered. Files are "
-            "written as <out>/frame.png or frame.exr (a range numbers them).",
+            "Output keeps alpha unless --background composition, which composites every frame "
+            "over the composition's Background Color. Files are written as <out>/frame.png or "
+            "frame.exr (a range numbers them).",
             {{.name = "--project",
               .type = "path",
               .summary = "The project; omit to render a new empty project."},
@@ -803,7 +804,15 @@ void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
               .type = "string",
               .summary = "The Subtitles node ids to deliver, comma separated (1..256). Needs "
                          "--subtitles.",
-              .defaultValue = "every Subtitles node with Export as track on"}},
+              .defaultValue = "every Subtitles node with Export as track on"},
+             {.name = "--background",
+              .type = "string",
+              .summary = "transparent keeps alpha; composition composites every frame over the "
+                         "composition's Background Color in the working space, so the frames "
+                         "are opaque.",
+              .defaultValue = "transparent",
+              .choices = {{"transparent", "Keep alpha"},
+                          {"composition", "Opaque over the composition's Background Color"}}}},
             "The preservation report and \"rendered N frame(s) to <out>\"; exit status 5 on a "
             "render failure.",
             "bloom-cli render --project scene.bloom --range 0-47 --preset PngRgba8SrgbV1 --out "
@@ -811,8 +820,8 @@ void addCliCommandEntries(std::vector<ReferenceEntry>& out) {
             fileEffects());
     command("export", "Render a saved project's export queue jobs headlessly.",
             "Exits non-zero unless every selected job succeeds and prints the verification and "
-            "import results as JSON. Output keeps alpha; the composition background colour is "
-            "not rendered.",
+            "import results as JSON, with each movie's or WAV's streams as read back from the file. "
+            "Output keeps alpha unless an output's background is composition.",
             {{.name = "--project", .type = "path", .required = true, .summary = "The project."},
              {.name = "--all", .type = "flag", .summary = "Every enabled job (or --job)."},
              {.name = "--job",
@@ -905,8 +914,9 @@ void addPythonEntries(std::vector<ReferenceEntry>& out) {
         "bloom.data.outputs(readout, frame=24)[\"outputs\"][0][\"value\"]");
     api("bloom.render", "Render a frame or a range to image files.",
         "bloom.render.frame(number, *, out, composition=None, preset=...) and "
-        "bloom.render.range(first, last, *, out, ...). Output keeps alpha; the composition "
-        "background colour is not rendered. subtitles={\"sidecar\": [\"srt\", \"vtt\", \"ttml\"], "
+        "bloom.render.range(first, last, *, out, ...). Output keeps alpha unless "
+        "background=\"composition\", which composites every frame over the composition's "
+        "Background Color. subtitles={\"sidecar\": [\"srt\", \"vtt\", \"ttml\"], "
         "\"nodes\": [12]} also writes each Subtitles node's cues as sidecar files "
         "<name>.<language>[.<n>].<format> beside the images (nodes is optional: absent means every "
         "node with Export as track on; \"embed\" is refused for images). The result's subtitles is "

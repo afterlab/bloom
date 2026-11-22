@@ -283,8 +283,9 @@ constexpr std::array kNotes{
         "Copies a composition with its layers, nodes, parameters and keys.", "composition",
         "query:compositions", ""},
     OperationNotes{"bloom.composition.set-background-color",
-        "Sets the composition's background colour. The background is display-only: renders, "
-        "exports and captures keep alpha and do not include it.",
+        "Sets the composition's background colour. The Viewer shows it; renders, exports and "
+        "captures keep alpha unless their background is composition (an output setting), which "
+        "composites every frame over it.",
         "", "bloom.composition.set-settings", ""},
     OperationNotes{"bloom.composition.set-duration",
         "Sets the composition's duration.", "", "bloom.composition.set-settings query:compositions",
@@ -319,8 +320,9 @@ constexpr std::array kNotes{
     // --- export queue (ADR 0033) --------------------------------------------------------------
     OperationNotes{"bloom.export.add-job",
         "Adds an export job for a composition to the project's export queue (the Export panel's "
-        "Add). Output keeps alpha; the composition background colour is not rendered. Start it "
-        "with the export.start tool.",
+        "Add). Output keeps alpha unless an output's settings carry \"background\": "
+        "\"composition\", which composites every frame over the composition's Background Color "
+        "so the output is opaque. Start it with the export.start tool.",
         "exportJob, exportOutput (one per output)",
         "export.start export.status export.presets bloom.export.add-output", ""},
     OperationNotes{"bloom.export.remove-jobs", "Removes export jobs from the queue.", "",

@@ -2658,8 +2658,8 @@ class CompositionOps:
               Unit: frames per second as numerator / denominator (24000/1001 is 23.976)
               Range: 1..4294967295
           background  color4  optional
-              Viewer background color, display only: renders and exports keep alpha. Defaults to opaque
-              black.
+              Viewer background color; renders and exports keep alpha unless their background is
+              composition. Defaults to opaque black.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
@@ -2898,8 +2898,9 @@ class CompositionOps:
         ...
     def set_background_color(self, color: tuple[float, float, float, float], *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.composition.set-background-color  (operation, composition)
-        Sets the composition's background colour. The background is display-only: renders, exports and
-        captures keep alpha and do not include it.
+        Sets the composition's background colour. The Viewer shows it; renders, exports and captures
+        keep alpha unless their background is composition (an output setting), which composites every
+        frame over it.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)
@@ -2907,7 +2908,8 @@ class CompositionOps:
               Unit: composition id (query:compositions)
               Range: >= 1
           color  color4  required
-              The Viewer background color, display only: renders and exports keep alpha.
+              The Viewer background color; renders and exports keep alpha unless their background is
+              composition.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
@@ -3185,7 +3187,8 @@ class CompositionOps:
           dropFrame  bool  optional
               Drop-frame timecode labels (honored at 29.97 and 59.94 fps).
           background  color4  optional
-              Viewer background color, display only: renders and exports keep alpha.
+              Viewer background color; renders and exports keep alpha unless their background is
+              composition.
               Unit: straight (unpremultiplied) RGBA in the composition's working colour space; red,
               green and blue are finite and may exceed 1, alpha is 0..1; display-only: renders, exports
               and captures keep alpha and do not include the background
@@ -3664,8 +3667,9 @@ class ExportOps:
     def add_job(self, name: str = ..., range: str = ..., first: int = ..., last: int = ..., enabled: bool = ..., labelColor: tuple = ..., outputs: tuple = ..., *, composition: int | Proxy = ...) -> Mapping[str, Any] | None:
         """bloom.export.add-job  (operation, export)
         Adds an export job for a composition to the project's export queue (the Export panel's Add).
-        Output keeps alpha; the composition background colour is not rendered. Start it with the
-        export.start tool.
+        Output keeps alpha unless an output's settings carry "background": "composition", which
+        composites every frame over the composition's Background Color so the output is opaque. Start it
+        with the export.start tool.
 
         Arguments:
           composition  id  optional, defaults to the current composition (the Viewer's in the desktop application, the first one headless) (context composition)

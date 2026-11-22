@@ -873,8 +873,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
     auto render = makeEntry(
         ReferenceKind::Tool, "render", "render",
         "Render one frame or an inclusive frame range to image files and return their digests.",
-        "Runs as a transient export job with the Export panel's checks. Output keeps alpha; the "
-        "composition background colour is not rendered. Frames are composition frame indices "
+        "Runs as a transient export job with the Export panel's checks. Output keeps alpha "
+        "unless background is composition, which composites every frame over the composition's "
+        "Background Color in the working space, so it is opaque. Frames are composition frame indices "
         "(0 is the first frame). Use capture to look at a frame, render for reference stills or "
         "sequences, export for movies and audio.");
     render.effects = fileEffects();
@@ -930,7 +931,17 @@ void addTools(std::vector<ReferenceEntry>& out) {
               "range: {sidecar:[\"srt\"|\"vtt\"|\"ttml\" (each at most once)], nodes:[Subtitles "
               "node ids] (1..256; absent means every Subtitles node with Export as track "
               "on)}. Absent writes none.",
-          .range = "sidecar needs at least one format"}});
+          .range = "sidecar needs at least one format"},
+         {.name = "background",
+          .type = "string",
+          .summary = "What every frame is composited over before the output transform: "
+                     "transparent keeps alpha (the composition background color is Viewer "
+                     "display only); composition composites over the composition's Background "
+                     "Color in the working space, so the output is opaque. A nested composition "
+                     "never draws its own.",
+          .defaultValue = "transparent",
+          .choices = {{"transparent", "Keep alpha"},
+                      {"composition", "Opaque over the composition's Background Color"}}}});
     render.result =
         "{publishedFrames, preservationReport, gpuFrames|null, "
         "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
@@ -963,9 +974,13 @@ void addTools(std::vector<ReferenceEntry>& out) {
     auto exportTool = makeEntry(
         ReferenceKind::Tool, "export", "render",
         "Export a composition to a movie, audio file or image files in one call.",
-        "Runs as a transient export job. Output keeps alpha; the composition background colour "
-        "is not rendered. For a job that stays in the project's export queue (and the Export "
-        "panel), use bloom.export.add-job and export.start instead.");
+        "Runs as a transient export job. Output keeps alpha unless background is composition, "
+        "which composites every frame over the composition's Background Color in the working "
+        "space, so it is opaque. MP4 carries AAC-LC audio at 192 kb/s, WebM Opus at 192 kb/s and "
+        "always 48 kHz, MOV and MXF 16-bit PCM (24-bit when an audio source is deeper) and WAV 16- "
+        "or 24-bit PCM; export.presets states each preset's container and codecs, and the result "
+        "lists the streams read back from the file. For a job that stays in the project's export "
+        "queue (and the Export panel), use bloom.export.add-job and export.start instead.");
     exportTool.effects = fileEffects();
     addArguments(
         exportTool,
@@ -1084,7 +1099,17 @@ void addTools(std::vector<ReferenceEntry>& out) {
               "output; embed puts the tracks inside a MOV, MP4 or WebM movie (MXF, image "
               "sequences and WAV carry none and refuse embed: use sidecars). Needs a "
               "sidecar format or embed. Absent delivers none.",
-          .range = "sidecar or embed"}});
+          .range = "sidecar or embed"},
+         {.name = "background",
+          .type = "string",
+          .summary = "What every frame is composited over before the output transform: "
+                     "transparent keeps alpha (the composition background color is Viewer "
+                     "display only); composition composites over the composition's Background "
+                     "Color in the working space, so the output is opaque. A nested composition "
+                     "never draws its own.",
+          .defaultValue = "transparent",
+          .choices = {{"transparent", "Keep alpha"},
+                      {"composition", "Opaque over the composition's Background Color"}}}});
     exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
                         "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
                         "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
@@ -1095,7 +1120,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
                         "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
                         "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
                         "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
-                        "sidecar)}";
+                        "sidecar), streams?:[{kind:\"video\"|\"audio\", codec, profile, width, "
+                        "height, frameRate:[n, d] (video), channels, sampleRate (audio), "
+                        "bitrate (bits per second)}] (a movie or WAV, read back from the "
+                        "file)}";
     exportTool.errors = renderErrors;
     addExamples(
         exportTool,
@@ -1108,7 +1136,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
         ReferenceKind::Tool, "capture", "render",
         "Look at a frame: render one PNG at composition resolution and return it as an image.",
         "Uses the still export route with the Viewer's display and view in the desktop "
-        "application. Output keeps alpha; the composition background colour is not rendered. "
+        "application. Output keeps alpha unless background is composition, which composites the "
+        "frame over the composition's Background Color. "
         "It does not apply the Viewer's exposure, gamma, channel, region of interest or preview "
         "resolution. A PNG above about 2.9 MiB is returned as a resource_link with the notice "
         "bloom.mcp.capture-too-large-for-inline. Captures go to Bloom's per-user cache, which "
@@ -1152,7 +1181,17 @@ void addTools(std::vector<ReferenceEntry>& out) {
                             .summary = "With statistics: histogram bins over 0..1. Values below 0 "
                                        "and above 1 are counted in below and above.",
                             .range = "2..256",
-                            .defaultValue = "32"}});
+                            .defaultValue = "32"},
+                           {.name = "background",
+                            .type = "string",
+                            .summary = "What every frame is composited over before the output transform: "
+                                       "transparent keeps alpha (the composition background color is Viewer "
+                                       "display only); composition composites over the composition's Background "
+                                       "Color in the working space, so the output is opaque. A nested composition "
+                                       "never draws its own.",
+                            .defaultValue = "transparent",
+                            .choices = {{"transparent", "Keep alpha"},
+                                        {"composition", "Opaque over the composition's Background Color"}}}});
     capture.result = "MCP image content (image/png, or a resource_link when too large) plus "
                      "{composition, frame, path, bytes, digest, gpuFrames|null, cpuReferenceFrames|null, "
                      "provenance|null, routeNote?, width, height, inline}. With "
@@ -1201,7 +1240,10 @@ void addTools(std::vector<ReferenceEntry>& out) {
          true},
         {"export.presets",
          "The export presets available on this computer and for the open project, optionally "
-         "for one job's composition.",
+         "for one job's composition. Each movie and WAV row states its container, videoCodec, "
+         "videoProfile, audioCodec (MP4: aac, WebM: opus, MOV and MXF: PCM, WAV: PCM), "
+         "audioProfile, audioBitrateKbps (AAC and Opus), audioSampleRate (Opus: always 48000), "
+         "pcmDepth where a deeper source deepens it, and an audio sentence.",
          true},
         {"export.script",
          "A script that recreates an export job and starts it (bloom-cli JSON or Python).", true},
@@ -1211,8 +1253,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
             ReferenceKind::Tool, std::string(item.name), "export queue", std::string(item.summary),
             "Job and output ids come from bloom.export.add-job's outputs or from "
             "export.status. Jobs started this way belong to the Export panel and "
-            "keep running when the agent disconnects. Output keeps alpha; the "
-            "composition background colour is not rendered.");
+            "keep running when the agent disconnects. Output keeps alpha unless the "
+            "output's background is composition.");
         value.effects = item.readOnlyCall ? readOnlyEffects() : fileEffects();
         const auto name = item.name;
         if (name == "export.start")

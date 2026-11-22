@@ -468,6 +468,16 @@ host::ExportWorkerLimits applyWorkerLimits(host::ExportWorkerLimits base,
     return base;
 }
 
+document::ExportBackground backgroundArgument(yyjson_val* arguments) {
+    auto* value = member(arguments, "background");
+    if (!value)
+        return document::ExportBackground::Transparent;
+    const auto parsed = document::parseExportBackground(string(value, 16));
+    if (!parsed)
+        throw InvalidInput("background is transparent or composition");
+    return *parsed;
+}
+
 std::optional<document::ExportEncoderPreference> encoderArgument(yyjson_val* arguments) {
     auto* value = member(arguments, "encoder");
     if (!value)
@@ -857,6 +867,10 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             for (const auto& output : view->outputs) {
                 if (!output.verification)
                     continue;
+                // #760: the preservation report says the output is opaque.
+                if (output.record.settings.background ==
+                    document::ExportBackground::CompositionColor)
+                    result.report = "background=composition (opaque over composition background)";
                 result.frames += output.verification->artifacts.publishedArtifacts;
                 result.gpuFrames += output.verification->provenance.gpuFrames;
                 result.cpuReferenceFrames += output.verification->provenance.cpuReferenceFrames;

@@ -24,10 +24,13 @@ class RenderResult:
     gpu_frames: int
     cpu_reference_frames: int
     subtitles: tuple[RenderSubtitle, ...]
+    streams: tuple[dict[str, Any], ...]
 def frame(number: int, *, out: str | PathLike[str], composition: int | Proxy | None = ...,
           preset: str = ..., replace: bool = ..., require_device: bool = ...,
-          subtitles: dict[str, Any] | None = ...) -> RenderResult: ...
+          subtitles: dict[str, Any] | None = ...,
+          background: str = ...) -> RenderResult: ...
 def range(first: int, last: int, *, out: str | PathLike[str],
           composition: int | Proxy | None = ..., preset: str = ...,
           replace: bool = ..., require_device: bool = ...,
-          subtitles: dict[str, Any] | None = ...) -> RenderResult: ...
+          subtitles: dict[str, Any] | None = ...,
+          background: str = ...) -> RenderResult: ...

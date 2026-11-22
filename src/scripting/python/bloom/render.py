@@ -35,6 +35,10 @@ class RenderResult:
     cpu_reference_frames: int
     # The subtitle tracks delivered, as the MCP result's `subtitles` lists them (#752).
     subtitles: tuple[RenderSubtitle, ...] = ()
+    # A movie's or WAV's streams, read back from the file by the verifying reopen (#761): each a
+    # dict with kind, codec, profile, then width, height and frame_rate [n, d] for video or
+    # channels and sample_rate for audio, and bitrate in bits per second.
+    streams: tuple[dict, ...] = ()
 
 
 _SUBTITLE_FORMATS = ("srt", "vtt", "ttml")
@@ -80,8 +84,11 @@ def _subtitles(value):
     return {"sidecar": sorted(sidecar, key=order.__getitem__), "embed": embed, "nodes": nodes}
 
 
+_BACKGROUNDS = ("transparent", "composition")
+
+
 def _render(first, last, is_range, out, composition, preset, replace, require_device,
-            subtitles=None):
+            subtitles=None, background="transparent"):
     if type(first) is not int or type(last) is not int or first < 0 or last < first:
         raise ValueError("Frames must be nonnegative integers in ascending order")
     if composition is None:
@@ -89,10 +96,14 @@ def _render(first, last, is_range, out, composition, preset, replace, require_de
     if composition is None:
         raise ValueError("The current project has no composition")
     subtitles = _subtitles(subtitles)
+    # #760: "composition" composites every frame over the composition's Background Color.
+    if background not in _BACKGROUNDS:
+        raise ValueError("background is 'transparent' or 'composition'")
     task = _state._task.get()
     cancellation_task = task._ticket.id if task is not None and task._ticket is not None else 0
     result = _state.host().render(int(composition), first, last, is_range, preset, str(Path(out)),
-                                 cancellation_task, bool(replace), bool(require_device), subtitles)
+                                 cancellation_task, bool(replace), bool(require_device), subtitles,
+                                 background)
     if not result["succeeded"]:
         if result["diagnostic_code"] == "cancelled":
             raise CancelledError(result["diagnostic"])
@@ -100,16 +111,19 @@ def _render(first, last, is_range, out, composition, preset, replace, require_de
     return RenderResult(tuple(RenderFile(**item) for item in result["files"]),
                         result["published_frames"], result["preservation_report"],
                         result["gpu_frames"], result["cpu_reference_frames"],
-                        tuple(RenderSubtitle(**item) for item in result["subtitles"]))
+                        tuple(RenderSubtitle(**item) for item in result["subtitles"]),
+                        tuple(dict(item) for item in result.get("streams", ())))
 
 
 def frame(number: int, *, out, composition=None, preset="PngRgba8SrgbV1",
-          replace=False, require_device=False, subtitles=None) -> RenderResult:
+          replace=False, require_device=False, subtitles=None,
+          background="transparent") -> RenderResult:
     return _render(number, number, False, out, composition, preset, replace, require_device,
-                   subtitles)
+                   subtitles, background)
 
 
 def range(first: int, last: int, *, out, composition=None, preset="PngRgba8SrgbV1",
-          replace=False, require_device=False, subtitles=None) -> RenderResult:
+          replace=False, require_device=False, subtitles=None,
+          background="transparent") -> RenderResult:
     return _render(first, last, True, out, composition, preset, replace, require_device,
-                   subtitles)
+                   subtitles, background)

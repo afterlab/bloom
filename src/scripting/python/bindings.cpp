@@ -65,7 +65,7 @@ void bindHost(nb::module_& module) {
         .def("render", &NativeHost::render, nb::arg("composition"), nb::arg("first"),
              nb::arg("last"), nb::arg("range"), nb::arg("preset"), nb::arg("destination"),
              nb::arg("cancellation_task"), nb::arg("replace"), nb::arg("require_device"),
-             nb::arg("subtitles") = nb::none())
+             nb::arg("subtitles") = nb::none(), nb::arg("background") = "transparent")
         .def("scopes", &NativeHost::scopes, nb::arg("options"), nb::arg("cancellation_task"),
              nb::arg("progress") = nb::none())
         .def("outputs", &NativeHost::outputs, nb::arg("composition"), nb::arg("node"),

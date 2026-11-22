@@ -75,7 +75,7 @@ namespace {
 // the analysis was approvable (every published frame was).
 [[nodiscard]] std::string reportText(const output::OutputPresetV1 preset,
                                      const host::ExportOutputVerification& verification,
-                                     const bool approvable) {
+                                     const bool approvable, const document::ExportBackground background) {
     std::size_t exact = 0;
     for (const auto& facet : verification.facets)
         if (facet.state == output::OutputPreservationStateV1::Exact)
@@ -84,7 +84,11 @@ namespace {
     const auto name = identity ? std::string(identity->serializedId) : std::string("unknown");
     return "preset=" + name + "; exact-facets=" + std::to_string(exact) + "/" +
            std::to_string(verification.facets.size()) +
-           "; approvable=" + (approvable ? "true" : "false");
+           "; approvable=" + (approvable ? "true" : "false") +
+           // #760: the frames were composited over the composition background.
+           (background == document::ExportBackground::CompositionColor
+                ? "; background=composition (opaque over composition background)"
+                : "");
 }
 
 [[nodiscard]] host::ExportDestinationContext
@@ -250,6 +254,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
         output.settings.loudness = request.loudness;
     output.settings.encoder = request.encoder;
     output.settings.subtitles = request.subtitles;
+    output.settings.background = request.background;
     if (request.subtitles && request.subtitles->embed &&
         !document::exportFormatEmbedsSubtitles(*format))
         return failed(std::string(host::kSubtitleEmbedUnsupportedReason));
@@ -388,7 +393,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             const auto& verification = *state->verification;
             const auto& provenance = verification.provenance;
             result.publishedFrames = verification.artifacts.publishedArtifacts;
-            result.preservationReport = reportText(request.preset, verification, result.succeeded);
+            result.preservationReport = reportText(request.preset, verification, result.succeeded,
+                                                   request.background);
             result.gpuEvaluatedFrames = provenance.gpuFrames;
             result.cpuReferenceFrames = provenance.cpuReferenceFrames;
             result.gpuNativeDispatches = provenance.gpuNativeDispatches;

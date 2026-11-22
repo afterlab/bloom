@@ -304,12 +304,13 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp", "encoder", "subtitles"},
+             "truePeakDbtp", "encoder", "subtitles", "background"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
     const auto subtitles = subtitlesArguments(arguments);
     const auto encoder = encoderArgument(arguments);
+    const auto background = backgroundArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
     const auto requestedText = string(member(arguments, "destination"));
@@ -329,7 +330,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
     // way the in-app server runs every export.
     // #752: subtitle tracks are an export queue feature, so a request for them takes that route
     // for the presets this function would otherwise run directly, and for `render` too.
-    if (subtitles || (mapping == kPresetMappings.end() && compositionExport))
+    // #760: so does a background, an output setting of the export queue.
+    if (subtitles || background != document::ExportBackground::Transparent ||
+        (mapping == kPresetMappings.end() && compositionExport))
         return renderLive(core, out, call, arguments, compositionExport);
     if (mapping == kPresetMappings.end())
         throw InvalidInput(unknownPresetMessage(presetName));
@@ -585,12 +588,13 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
     members(arguments,
             {"composition", "frame", "first", "last", "preset", "destination", "profile", "audio",
              "sampleRate", "overwrite", "workerMemoryCapBytes", "workerThreads", "loudnessLufs",
-             "truePeakDbtp", "encoder", "subtitles"},
+             "truePeakDbtp", "encoder", "subtitles", "background"},
             {"composition", "preset", "destination"});
     const auto workerLimits = workerLimitArguments(arguments);
     const auto loudness = loudnessArguments(arguments);
     const auto subtitles = subtitlesArguments(arguments);
     const auto encoder = encoderArgument(arguments);
+    const auto background = backgroundArgument(arguments);
     const auto id = integer(member(arguments, "composition"));
     const auto presetName = canonicalPresetName(string(member(arguments, "preset"), 128));
     const auto requested = string(member(arguments, "destination"));
@@ -641,6 +645,7 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         request.settings.loudness = loudness;
     }
     request.settings.subtitles = subtitles;
+    request.settings.background = background;
     if (auto* rate = member(arguments, "sampleRate")) {
         const auto value = integer(rate);
         if (value < 8000 || value > 192000)
@@ -968,7 +973,8 @@ yyjson_mut_val* statisticsCapture(McpServerCore::State& core, Json& out, McpCall
 yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call,
                             yyjson_val* arguments) {
     if (arguments != nullptr)
-        members(arguments, {"composition", "frame", "statistics", "last", "region", "bins"});
+        members(arguments,
+                {"composition", "frame", "statistics", "last", "region", "bins", "background"});
     const bool statistics = arguments && member(arguments, "statistics") &&
                             boolean(member(arguments, "statistics"));
     if (!statistics && arguments &&
@@ -992,6 +998,11 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
         if (mapping)
             frame = mapping.value()->nearestFrameIndex(*call.context.time);
     }
+    // #760: a capture may show the frame over the composition's Background Color.
+    const auto background = arguments != nullptr ? backgroundArgument(arguments)
+                                                  : document::ExportBackground::Transparent;
+    if (statistics && background != document::ExportBackground::Transparent)
+        throw InvalidInput("background does not apply to statistics");
     if (statistics)
         return statisticsCapture(core, out, call, arguments, *composition, frame);
     const auto path = nextCapturePath(core);
@@ -1012,6 +1023,7 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
         // The Viewer's display and view; empty keeps the configuration's defaults.
         request.settings.displayName = call.live->viewerDisplay;
         request.settings.viewName = call.live->viewerView;
+        request.settings.background = background;
         request.presetId = preset->id;
         request.name = "MCP capture";
         request.destination = transientDestination(path.string(), nullptr);
@@ -1026,7 +1038,8 @@ yyjson_mut_val* captureTool(McpServerCore::State& core, Json& out, McpCall& call
                                     .range = std::nullopt,
                                     .preset = output::OutputPresetV1::PngRgba8SrgbV1,
                                     .destination = path,
-                                    .cancelled = [stop] { return stop.stop_requested(); }},
+                                    .cancelled = [stop] { return stop.stop_requested(); },
+                                    .background = background},
                                    {}, call.gpuProvider);
         if (!result.succeeded)
             throw std::runtime_error(result.diagnostic);

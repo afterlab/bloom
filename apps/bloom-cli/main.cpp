@@ -84,7 +84,8 @@ void printUsage() {
                  "run <script.json|script.py> | "
                  "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
                  "<dir> [--replace] [--require-device] [--subtitles srt,vtt,ttml] "
-                 "[--subtitle-nodes <id>,...] | export --project <file> (--all | --job "
+                 "[--subtitle-nodes <id>,...] [--background transparent|composition] | export "
+                 "--project <file> (--all | --job "
                  "<id>...) [--replace] [--save] [--subtitles srt,vtt,ttml] [--embed-subtitles] "
                  "[--subtitle-nodes <id>,...] | "
                  "help [<name>] [--json]\n"
@@ -533,6 +534,7 @@ frameRange(std::string_view value) {
     bool replace = false;
     bool requireDevice = false;
     SubtitleOptions subtitleOptions;
+    auto background = document::ExportBackground::Transparent;
     for (int index = 2; index < argc; ++index) {
         const std::string_view option = argv[index];
         if (option == "--replace") {
@@ -549,7 +551,7 @@ frameRange(std::string_view value) {
         }
         if ((option == "--project" || option == "--out" || option == "--preset" ||
              option == "--frame" || option == "--range" || option == "--subtitles" ||
-             option == "--subtitle-nodes") &&
+             option == "--subtitle-nodes" || option == "--background") &&
             index + 1 >= argc) {
             std::cerr << "error[bloom-cli.option]: " << option << " needs a value\n";
             return 2;
@@ -576,6 +578,15 @@ frameRange(std::string_view value) {
             }
         } else if (option == "--out") {
             outputDirectory = argv[++index];
+        } else if (option == "--background") {
+            // #760: transparent (the default) or composition.
+            const auto parsed = document::parseExportBackground(argv[++index]);
+            if (!parsed) {
+                std::cerr << "error[bloom-cli.background]: --background is transparent or "
+                             "composition\n";
+                return 2;
+            }
+            background = *parsed;
         } else if (option == "--subtitles" || option == "--subtitle-nodes") {
             const auto refusal = option == "--subtitles"
                                      ? parseSubtitleFormats(argv[++index], subtitleOptions)
@@ -673,7 +684,8 @@ frameRange(std::string_view value) {
                                 .workerLimits = {},
                                 .loudness = std::nullopt,
                                 .encoder = document::ExportEncoderPreference::Automatic,
-                                .subtitles = subtitles},
+                                .subtitles = subtitles,
+                                .background = background},
                                {}, gpuProvider);
     providerTeardown.finish();
     std::cout << result.preservationReport << '\n';
