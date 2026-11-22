@@ -10,6 +10,7 @@ target_sources(
         export_output_drivers.cpp
         export_preset_store.cpp
         export_subtitles.cpp
+        export_background.cpp
         export_presets.cpp
         export_queue_service.cpp
         export_run_backend.cpp
@@ -460,6 +461,10 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_audio_formats_test --written-streams
                        LABELS unit host media output TIMEOUT 600
                        SKIP_RETURN_CODE 77)
+        # #760: a ProRes 4444 movie over the composition background, and one without.
+        bloom_add_test(NAME bloom.host.export-background-video
+                       COMMAND bloom_host_export_audio_formats_test --background
+                       LABELS unit host media output TIMEOUT 300)
 
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)

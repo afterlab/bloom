@@ -307,6 +307,16 @@ int main() {
         for (const auto* analysis : {&av1Mp4, &vp9})
             check(channels(*analysis).description.find("PCM") == std::string::npos,
                   "a lossy codec is never called PCM");
+        // #760: an output over the composition background says it is opaque in the Alpha facet;
+        // one without keeps the text it had.
+        const auto backed = o::analyzeMediaOutputV1(o::OutputPresetV1::H264MovV1, h264, {}, 0,
+                                                    true, true);
+        const auto* opaque = std::get_if<o::MediaOutputAnalysisV1>(&backed);
+        check(opaque != nullptr &&
+                  opaque->facets[3].description ==
+                      "Opaque over composition background; Alpha omitted" &&
+                  review.facets[3].description == "Alpha omitted",
+              "the Alpha facet says opaque over the composition background only when asked");
         for (const auto& [preset, settings, why] :
              {std::tuple{o::OutputPresetV1::Av1Mp4V1, web, "AV1 MP4 refuses VP9 in WebM"},
               std::tuple{o::OutputPresetV1::Av1WebmV1, av1, "AV1 WebM refuses an MP4 container"}}) {

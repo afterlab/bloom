@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <atomic>
 #include <bloom/core/worker_thread.hpp>
+#include <bloom/host/export_background.hpp>
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
@@ -253,6 +254,17 @@ struct detail::SequenceExportWorkV1 {
         // fallback instead.
         auto compositionRequest = request.composition;
         compositionRequest.fontFetch = runtime::fonts::FontFetch::Wait;
+        // #760: the background, converted here on the export's worker.
+        if (request.compositionBackground) {
+            const auto* composition = request.composition.snapshot.project().findComposition(
+                request.composition.compositionId);
+            compositionRequest.exportBackground =
+                composition ? exportBackgroundColor(*composition, colorIntent()) : std::nullopt;
+            if (!compositionRequest.exportBackground) {
+                failureStage = SequenceExportFailureStageV1::CompileFailed;
+                throw Unavailable{Error::Unavailable, std::string(kExportBackgroundUnavailable)};
+            }
+        }
         auto compiled = compiler.compile(compositionRequest, context.cancellation());
         checkpoint();
         if (compiled.plan == nullptr) {
@@ -374,7 +386,8 @@ struct detail::SequenceExportWorkV1 {
         analysis =
             std::make_unique<output::MediaOutputAnalysisV1>(checked(output::analyzeMediaOutputV1(
                 request.preset, std::move(s), display, output::outputLookEffectCountV1(*plan),
-                request.platformEncoder != media::provider::PlatformEncoderV1::Skipped)));
+                request.platformEncoder != media::provider::PlatformEncoderV1::Skipped,
+                request.compositionBackground)));
         if (!settings().videoCodec.empty() && analysis->display != nullptr)
             mediaDisplay =
                 std::make_shared<OutputMediaDisplayCommandV1>(analysis->display, colorIntent());

@@ -97,6 +97,9 @@ struct SequenceExportRequestV1 {
     std::optional<std::uint64_t> queueByteLimit = std::nullopt;
     // ADR 0033: run the look-tagged effects bypassed (the VFX handoff policy).
     bool bypassLookNodes = false;
+    // #760: composite every frame over the composition's Background Color in the working space
+    // (host::exportBackgroundColor), so the movie is opaque. False keeps alpha.
+    bool compositionBackground = false;
     // H.264/HEVC target bit rate; absent means the codec default.
     std::optional<std::uint32_t> videoBitrateKbps = std::nullopt;
     // Issue #369: the destination's free space minus the safety margin; the encoded artifact may

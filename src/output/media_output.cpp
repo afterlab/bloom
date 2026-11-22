@@ -139,7 +139,8 @@ NvencEncodeProbeV1 probeNvencEncodeV1(std::string workerExecutable) {
 Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
                      std::shared_ptr<const PreparedOutputDisplayV1> display,
-                     std::uint64_t lookEffects, const bool platformEncoder) {
+                     std::uint64_t lookEffects, const bool platformEncoder,
+                     const bool opaqueBackground) {
     const bool prores = preset == OutputPresetV1::ProResMovV1;
     const bool dnx = preset == OutputPresetV1::DnxhrMxfV1;
     const bool pcm = preset == OutputPresetV1::PcmWavV1;
@@ -209,7 +210,9 @@ analyzeMediaOutputV1(OutputPresetV1 preset, EncodeSettingsV1 settings,
          {F::Color, pcm ? S::Omitted : S::Approximated,
           pcm ? "No picture" : "sRGB transfer; Rec.709 primaries and matrix; limited YUV"},
          {F::AlphaAssociation, alpha ? S::Approximated : S::Omitted,
-          alpha ? "Straight alpha retained by ProRes 4444" : "Alpha omitted"},
+          // #760: an output with a background is opaque before anything is omitted.
+          std::string(opaqueBackground ? "Opaque over composition background; " : "") +
+              (alpha ? "Straight alpha retained by ProRes 4444" : "Alpha omitted")},
          {F::Channels,
           result.settings.audioCodec.empty() ? S::Omitted
           : lossyAudio                       ? S::Approximated

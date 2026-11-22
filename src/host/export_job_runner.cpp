@@ -162,6 +162,12 @@ struct ExportJobRunner::State {
             driver->setPaused(pauseRequested);
             note(runtime::DiagnosticSeverity::Information, "export.output.started",
                  "Rendering " + run.destination.firstPath.filename().string(), run.record.id);
+            // #760: the preservation report says the output is opaque.
+            if (run.record.settings.background == document::ExportBackground::CompositionColor)
+                note(runtime::DiagnosticSeverity::Information, "export.background",
+                     "Opaque over composition background: every frame is composited over the "
+                     "composition's Background Color in the working space",
+                     run.record.id);
             return;
         }
         phase = ExportJobRunPhase::Verifying;

@@ -4,6 +4,7 @@
 // replaced by the AnalysisPolicy check against the preset's declared preservation (section 10).
 #include "export_output_drivers.hpp"
 #include "export_subtitles.hpp"
+#include <bloom/host/export_background.hpp>
 
 #include <bloom/host/export_capacity_wait.hpp>
 #include <bloom/host/export_media_failure.hpp>
@@ -1006,16 +1007,32 @@ class ImageDriver final : public DriverBase {
              &compiler = dependencies_.compiler, tiff, intent = input_.colorIntent,
              display = input_.output.record.settings.displayName,
              view = input_.output.record.settings.viewName,
+             background = input_.output.record.settings.background ==
+                          document::ExportBackground::CompositionColor,
              slot = mediaDisplaySlot_](runtime::TaskContext& context) {
                 using Result =
                     runtime::TaskResult<std::shared_ptr<const runtime::CompiledCompositionPlan>>;
                 if (context.isCancellationRequested())
                     return Result::cancelled();
                 context.reportProgress({"Compiling composition", "", 0, std::nullopt});
+                // #760: the background, converted here off the authoring thread.
+                std::optional<core::Color4d> backdrop;
+                if (background) {
+                    const auto* record = snapshot.project().findComposition(composition);
+                    backdrop = record ? exportBackgroundColor(*record, intent) : std::nullopt;
+                    if (!backdrop)
+                        return Result::failed(runtime::TaskDiagnostic{
+                            .code = "bloom.host.export.background-unavailable",
+                            .severity = runtime::DiagnosticSeverity::Error,
+                            .summary = std::string(kExportBackgroundUnavailable),
+                            .detail = {},
+                            .suggestedAction = "Check the project's color configuration."});
+                }
                 // An export waits for a Google font that is still downloading.
                 auto compiled = compiler.compile({.snapshot = snapshot,
                                                   .compositionId = composition,
-                                                  .fontFetch = runtime::fonts::FontFetch::Wait},
+                                                  .fontFetch = runtime::fonts::FontFetch::Wait,
+                                                  .exportBackground = backdrop},
                                                  context.cancellation());
                 if (compiled.status == runtime::SnapshotCompileStatus::Cancelled)
                     return Result::cancelled();
@@ -1988,6 +2005,8 @@ class MediaDriver final : public DriverBase {
         request.displayName = settings.displayName;
         request.viewName = settings.viewName;
         request.bypassLookNodes = !settings.bakeLook;
+        request.compositionBackground =
+            settings.background == document::ExportBackground::CompositionColor;
         request.videoBitrateKbps = settings.videoBitrateKbps;
         request.vaapiDevice = encoders.vaapiRenderNode;
         // Opt-in worker limits (issue #581); with none set the request is unchanged.

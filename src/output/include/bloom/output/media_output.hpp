@@ -78,7 +78,8 @@ struct NvencEncodeProbeV1 {
 [[nodiscard]] media::provider::Result<MediaOutputAnalysisV1>
 analyzeMediaOutputV1(OutputPresetV1 preset, media::provider::EncodeSettingsV1 settings,
                      std::shared_ptr<const PreparedOutputDisplayV1> display = {},
-                     std::uint64_t lookEffects = 0, bool platformEncoder = true);
+                     std::uint64_t lookEffects = 0, bool platformEncoder = true,
+                     bool opaqueBackground = false);
 [[nodiscard]] media::provider::Result<media::provider::FrameProduct>
 prepareMediaRgba16V1(const render::Rgba32fImage& image, media::provider::Rational pts,
                      const platform::ProcessCancellation& cancellation = {},

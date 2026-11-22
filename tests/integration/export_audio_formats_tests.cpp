@@ -11,6 +11,7 @@
 #include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
+#include <bloom/commands/composition_settings_operations.hpp>
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/layer_drop_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -1298,7 +1299,117 @@ void testSourceRoutingIsLogged() {
 #endif
 }
 
+// #760: the video route's background. A composition with nothing but audio is transparent; a
+// ProRes 4444 movie keeps that alpha (zero) unless the output asks for the composition
+// background, when every frame is opaque and uniform, the composition's Background Color. The
+// log says so.
+void testBackgroundOnTheVideoRoute() {
+    Fixture f("background", WavEncoding::Pcm16);
+    {
+        const auto snapshot = currentSnapshot(f.session);
+        const auto* composition = snapshot.project().findComposition(f.composition());
+        expect(composition != nullptr, "background: the composition exists");
+        if (composition == nullptr)
+            return;
+        auto settings = commands::compositionSettingsOf(*composition);
+        settings.background = core::Color4d{0.8, 0.2, 0.1, 1.0};
+        commands::Transaction transaction("Background");
+        transaction.emplace<commands::SetCompositionSettings>(f.composition(), settings);
+        expect(f.session.execute(std::move(transaction)).changed(),
+               "background: the composition's Background Color is set");
+    }
+    struct Frame final {
+        bool ok = false;
+        std::uint16_t alphaLow = 0xFFFF, alphaHigh = 0;
+        std::uint16_t lumaLow = 0xFFFF, lumaHigh = 0;
+    };
+    const auto decode = [&](const std::filesystem::path& path, const std::string& name) {
+        Frame out;
+        media::video::VideoDecodeSession session(path);
+        const auto probed = session.probe();
+        const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+        expect(probe != nullptr, name + ": the movie probes");
+        if (probe == nullptr)
+            return out;
+        const auto stream = std::ranges::find(probe->streams, media::provider::MediaKind::Video,
+                                              &media::provider::StreamDescriptor::kind);
+        expect(stream != probe->streams.end(), name + ": the movie has a video stream");
+        if (stream == probe->streams.end())
+            return out;
+        const auto decoded = session.frame(*probe, stream->id, 0, 0, nullptr);
+        const auto* frame =
+            std::get_if<std::shared_ptr<const media::provider::FrameProduct>>(&decoded);
+        expect(frame != nullptr && *frame != nullptr &&
+                   (*frame)->format == media::provider::PixelFormat::Yuva444p16 &&
+                   (*frame)->planes.size() == 4,
+               name + ": frame 0 decodes as 16-bit 4:4:4:4");
+        if (frame == nullptr || *frame == nullptr || (*frame)->planes.size() != 4)
+            return out;
+        const auto scan = [](const media::provider::CpuPlane& plane, std::uint16_t& low,
+                             std::uint16_t& high) {
+            for (std::uint32_t y = 0; y < plane.height; ++y)
+                for (std::uint32_t x = 0; x < plane.width; ++x) {
+                    const auto at = static_cast<std::size_t>(y) * plane.stride + x * 2U;
+                    std::uint16_t value = 0;
+                    std::memcpy(&value, plane.bytes.data() + at, sizeof value);
+                    low = std::min(low, value);
+                    high = std::max(high, value);
+                }
+        };
+        scan((*frame)->planes[3], out.alphaLow, out.alphaHigh);
+        scan((*frame)->planes[0], out.lumaLow, out.lumaHigh);
+        out.ok = true;
+        return out;
+    };
+    for (const bool background : {false, true}) {
+        const auto name = std::string("background ") + (background ? "composition" : "transparent");
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::ProResMov;
+        settings.codecProfile = "4444";
+        settings.includeAudio = false;
+        settings.background = background ? document::ExportBackground::CompositionColor
+                                         : document::ExportBackground::Transparent;
+        const auto file = std::string("Exports/") + (background ? "opaque" : "clear") + ".mov";
+        const auto job = f.addJob(settings, file);
+        const auto finished = f.run(job, name);
+        expect(published(finished), name + ": the movie publishes");
+        if (!published(finished))
+            continue;
+        bool logged = false;
+        for (const auto& entry : f.service->log(job, 0).entries)
+            logged = logged || (entry.code == "export.background" &&
+                                entry.message.find("Opaque over composition background") == 0);
+        expect(logged == background, name + ": the log says opaque over the background only when "
+                                            "asked");
+        const auto frame = decode(f.folder / file, name);
+        if (!frame.ok)
+            continue;
+        if (background) {
+            expect(frame.alphaLow == frame.alphaHigh && frame.alphaLow >= 0xFF00,
+                   name + ": every pixel is opaque (alpha " + std::to_string(frame.alphaLow) + ".." +
+                       std::to_string(frame.alphaHigh) + ")");
+            expect(frame.lumaHigh - frame.lumaLow <= 0x0100 && frame.lumaLow > 0x1000,
+                   name + ": the frame is the uniform, non-black background (luma " +
+                       std::to_string(frame.lumaLow) + ".." + std::to_string(frame.lumaHigh) + ")");
+        } else {
+            expect(frame.alphaHigh == 0, name + ": the empty frame keeps zero alpha");
+        }
+    }
+}
+
 int main(const int argc, char** argv) {
+    // #760: the video route's background (bloom.host.export-background-video).
+    if (argc > 1 && std::string_view(argv[1]) == "--background") {
+        try {
+            testBackgroundOnTheVideoRoute();
+        } catch (const std::exception& error) {
+            std::cerr << "FAIL: " << error.what() << '\n';
+            return 1;
+        }
+        if (failures == 0)
+            std::cout << "export background video: ok\n";
+        return failures == 0 ? 0 : 1;
+    }
     // #761: the per-preset stream walk is its own test (bloom.host.export-written-streams).
     if (argc > 1 && std::string_view(argv[1]) == "--written-streams") {
         std::size_t unavailable = 0;
