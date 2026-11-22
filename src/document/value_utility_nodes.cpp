@@ -340,7 +340,7 @@ constexpr std::array<ValueUtilityOperand, 2> kMergePathsOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "tolerance", .kind = SocketValueKind::Scalar, .number = 0.25}};
 // #509 Path Stroke. The body and the core are outlines to fill; distances are pixels, shares are percent.
-constexpr std::array<ValueUtilityOperand, 18> kPathStrokeOperands{
+constexpr std::array<ValueUtilityOperand, 22> kPathStrokeOperands{
     ValueUtilityOperand{.role = "path", .kind = SocketValueKind::Path},
     ValueUtilityOperand{.role = "width", .kind = SocketValueKind::Scalar, .number = 8.0},
     ValueUtilityOperand{.role = "start", .kind = SocketValueKind::Scalar, .number = 0.0},
@@ -363,7 +363,18 @@ constexpr std::array<ValueUtilityOperand, 18> kPathStrokeOperands{
                         .kind = SocketValueKind::Scalar,
                         .schemaKey = bloom::document::kStampRotationParameterSchemaKey,
                         .number = 0.0,
-                        .optional = true}};
+                        .optional = true},
+    // #759: the second and third dash and gap of the dash pattern, pixels. Added after the node
+    // shipped, so optional; a pair at 0 and 0 is unused, so a stroke saved before them draws the
+    // same.
+    ValueUtilityOperand{
+        .role = "dash2", .kind = SocketValueKind::Scalar, .number = 0.0, .optional = true},
+    ValueUtilityOperand{
+        .role = "gap2", .kind = SocketValueKind::Scalar, .number = 0.0, .optional = true},
+    ValueUtilityOperand{
+        .role = "dash3", .kind = SocketValueKind::Scalar, .number = 0.0, .optional = true},
+    ValueUtilityOperand{
+        .role = "gap3", .kind = SocketValueKind::Scalar, .number = 0.0, .optional = true}};
 constexpr std::array<ValueUtilitySelector, 4> kPathStrokeSelectors{
     ValueUtilitySelector{"cap", bloom::document::kStrokeCapParameterSchemaKey,
                          bloom::document::selectorStoredValue(bloom::document::StrokeCap::Round)},

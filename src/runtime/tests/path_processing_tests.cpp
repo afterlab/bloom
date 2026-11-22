@@ -16,22 +16,23 @@
 
 #include <algorithm>
 #include <array>
-#include <cmath>
-#include <cstdint>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
-#include <mutex>
-#include <optional>
-#include <string>
-#include <thread>
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <numbers>
+#include <optional>
 #include <source_location>
+#include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -377,13 +378,15 @@ struct StrokeOptions final {
     double dashLength = 0.0, dashGap = 8.0, dashOffset = 0.0, spacing = 0.0, wiggle = 0.0;
     double frequency = 2.0, phase = 0.0, core = 0.0, tolerance = 0.25, stampRotation = 0.0;
     std::int64_t seed = 0, cap = 0, join = 0, stamp = 0, stampAlign = 0;
+    double dash2 = 0.0, gap2 = 0.0, dash3 = 0.0, gap3 = 0.0;
 };
 
 [[nodiscard]] ValueUtilityOutcome stroke(const PathValue& path, const StrokeOptions& o) {
     return run(Kernel::PathStroke,
-               {wrap(path), o.width, o.start, o.end, o.offset, o.taperStart, o.taperEnd,
-                o.dashLength, o.dashGap, o.dashOffset, o.spacing, o.wiggle, o.frequency, o.phase,
-                o.seed, o.core, o.tolerance, o.stampRotation},
+               {wrap(path),  o.width,      o.start,   o.end,        o.offset,    o.taperStart,
+                o.taperEnd,  o.dashLength, o.dashGap, o.dashOffset, o.spacing,   o.wiggle,
+                o.frequency, o.phase,      o.seed,    o.core,       o.tolerance, o.stampRotation,
+                o.dash2,     o.gap2,       o.dash3,   o.gap3},
                {o.cap, o.join, o.stamp, o.stampAlign});
 }
 
@@ -819,14 +822,16 @@ struct Scenario final {
         customise(options);
         PathValue open;
         open.contours.push_back(zigzag(anchors, anchors < 700 ? 30.0 : 12.0));
-        return Scenario{name,
-                        Kernel::PathStroke,
-                        {wrap(std::move(open)), options.width, options.start, options.end,
-                         options.offset, options.taperStart, options.taperEnd, options.dashLength,
-                         options.dashGap, options.dashOffset, options.spacing, options.wiggle,
-                         options.frequency, options.phase, options.seed, options.core,
-                         options.tolerance, options.stampRotation},
-                        {options.cap, options.join, options.stamp, options.stampAlign}};
+        return Scenario{
+            name,
+            Kernel::PathStroke,
+            {wrap(std::move(open)), options.width,         options.start,    options.end,
+             options.offset,        options.taperStart,    options.taperEnd, options.dashLength,
+             options.dashGap,       options.dashOffset,    options.spacing,  options.wiggle,
+             options.frequency,     options.phase,         options.seed,     options.core,
+             options.tolerance,     options.stampRotation, options.dash2,    options.gap2,
+             options.dash3,         options.gap3},
+            {options.cap, options.join, options.stamp, options.stampAlign}};
     };
     scenarios.push_back({"Transform Path",
                          Kernel::TransformPath,
@@ -866,6 +871,17 @@ struct Scenario final {
     scenarios.push_back(stroke("Path Stroke (dashed)", [](StrokeOptions& o) {
         o.dashLength = 9;
         o.dashGap = 4;
+    }));
+    // #759: a dash-dot pattern of three pairs with round caps, the dots cap-only.
+    scenarios.push_back(stroke("Path Stroke (dash-dot pattern)", [](StrokeOptions& o) {
+        o.dashLength = 24;
+        o.dashGap = 8;
+        o.dash2 = 0;
+        o.gap2 = 8;
+        o.dash3 = 6;
+        o.gap3 = 8;
+        o.cap = 2;
+        o.width = 3;
     }));
     scenarios.push_back(stroke("Path Stroke (dots)", [](StrokeOptions& o) { o.spacing = 14; }));
     scenarios.push_back(stroke("Path Stroke (dash stamps, turned)", [](StrokeOptions& o) {
@@ -983,15 +999,16 @@ void testKernelBudgets(Expectations& expectations) {
     {
         StrokeOptions options;
         options.tolerance = fine;
-        refusal(
-            {"Path Stroke",
-             Kernel::PathStroke,
-             {wrap(vast), options.width, options.start, options.end, options.offset,
-              options.taperStart, options.taperEnd, options.dashLength, options.dashGap,
-              options.dashOffset, options.spacing, options.wiggle, options.frequency, options.phase,
-              options.seed, options.core, options.tolerance, options.stampRotation},
-             {options.cap, options.join, options.stamp, options.stampAlign}},
-            "Path Stroke is too detailed");
+        refusal({"Path Stroke",
+                 Kernel::PathStroke,
+                 {wrap(vast),        options.width,         options.start,    options.end,
+                  options.offset,    options.taperStart,    options.taperEnd, options.dashLength,
+                  options.dashGap,   options.dashOffset,    options.spacing,  options.wiggle,
+                  options.frequency, options.phase,         options.seed,     options.core,
+                  options.tolerance, options.stampRotation, options.dash2,    options.gap2,
+                  options.dash3,     options.gap3},
+                 {options.cap, options.join, options.stamp, options.stampAlign}},
+                "Path Stroke is too detailed");
     }
     // #509: masks or glyphs past the path value's anchor cap.
     {
@@ -1034,9 +1051,11 @@ void testKernelBudgets(Expectations& expectations) {
         const auto make = [&](const StrokeOptions& o, const char* name) {
             return Scenario{name,
                             Kernel::PathStroke,
-                            {wrap(line), o.width, o.start, o.end, o.offset, o.taperStart,
-                             o.taperEnd, o.dashLength, o.dashGap, o.dashOffset, o.spacing, o.wiggle,
-                             o.frequency, o.phase, o.seed, o.core, o.tolerance, o.stampRotation},
+                            {wrap(line),   o.width,     o.start,         o.end,     o.offset,
+                             o.taperStart, o.taperEnd,  o.dashLength,    o.dashGap, o.dashOffset,
+                             o.spacing,    o.wiggle,    o.frequency,     o.phase,   o.seed,
+                             o.core,       o.tolerance, o.stampRotation, o.dash2,   o.gap2,
+                             o.dash3,      o.gap3},
                             {o.cap, o.join, o.stamp, o.stampAlign}};
         };
         refusal(make(dots, "Path Stroke (dots)"), "Path Stroke spacing is too small");
@@ -1048,6 +1067,14 @@ void testKernelBudgets(Expectations& expectations) {
         dashes.dashLength = 1.0e-3;
         dashes.dashGap = 0.0;
         refusal(make(dashes, "Path Stroke (dashes)"), "Path Stroke dashes are too short");
+        // #759: cap-only dots of a pattern count against the same budget.
+        StrokeOptions dotted;
+        dotted.cap = 1;
+        dotted.dashLength = 0;
+        dotted.dashGap = 1.0e-3;
+        dotted.dash2 = 0;
+        dotted.gap2 = 1.0e-3;
+        refusal(make(dotted, "Path Stroke (pattern dots)"), "Path Stroke dashes are too short");
         StrokeOptions shaky;
         shaky.wiggle = 4;
         shaky.frequency = 1.0e9;
@@ -1852,8 +1879,540 @@ void testWarpRespectsAnUncancelledToken(Expectations& expectations) {
 
 } // namespace
 
+// #759: what Path Stroke draws for patterns that existed before dash patterns -- a single dash and
+// gap, solid strokes and brush stamps -- as a digest of every output bit: the body's and the core's
+// anchors and the drawn length. The digests were recorded from the kernel before #759, so a saved
+// project draws exactly as it did; and they hold on every platform, because the kernel's geometry
+// uses only correctly rounded arithmetic (no platform hypot, sine or cosine).
+[[nodiscard]] std::uint64_t digestOf(const ValueUtilityOutcome& outcome) {
+    std::uint64_t hash = 1469598103934665603ULL;
+    const auto mix = [&](const std::uint64_t value) {
+        for (int byte = 0; byte < 8; ++byte) {
+            hash ^= (value >> (8 * byte)) & 0xFFU;
+            hash *= 1099511628211ULL;
+        }
+    };
+    const auto bits = [&](const double value) {
+        std::uint64_t word = 0;
+        static_assert(sizeof(word) == sizeof(value));
+        std::memcpy(&word, &value, sizeof(word));
+        mix(word);
+    };
+    mix(outcome.failed ? 1U : 0U);
+    for (const std::size_t output : {std::size_t{0}, std::size_t{1}}) {
+        const auto* held = std::get_if<runtime::CompiledPathValue>(&outcome.outputs[output]);
+        if (held == nullptr) {
+            mix(0xFFFFU);
+            continue;
+        }
+        mix(held->value->contours.size());
+        for (const auto& contour : held->value->contours) {
+            mix(contour.closed ? 1U : 0U);
+            mix(contour.anchors.size());
+            for (const auto& anchor : contour.anchors) {
+                bits(anchor.point.x);
+                bits(anchor.point.y);
+                mix(anchor.inHandle.has_value() ? 1U : 0U);
+                mix(anchor.outHandle.has_value() ? 1U : 0U);
+            }
+        }
+    }
+    if (const auto* length = std::get_if<double>(&outcome.outputs[2]))
+        bits(*length);
+    return hash;
+}
+
+[[nodiscard]] std::vector<std::pair<std::string, ValueUtilityOutcome>> legacyStrokes() {
+    PathContour curve;
+    curve.closed = false;
+    curve.anchors = {{{10, 40}, std::nullopt, Vec2d{30, 10}},
+                     {{50, 40}, Vec2d{40, 70}, std::nullopt},
+                     {{86, 20}, std::nullopt, std::nullopt}};
+    PathContour ring;
+    ring.closed = true;
+    ring.anchors = {{{20, 20}, Vec2d{10, 30}, Vec2d{30, 10}},
+                    {{70, 18}, Vec2d{60, 8}, Vec2d{80, 28}},
+                    {{64, 66}, Vec2d{74, 60}, Vec2d{54, 72}},
+                    {{24, 60}, std::nullopt, std::nullopt}};
+    const PathValue open = single(curve);
+    const PathValue closed = single(ring);
+    const PathValue line = single(polygon({{0, 0}, {100, 0}}, false));
+    std::vector<std::pair<std::string, ValueUtilityOutcome>> result;
+    const auto add = [&](std::string name, const PathValue& path, auto&& customise) {
+        StrokeOptions options;
+        customise(options);
+        result.emplace_back(std::move(name), stroke(path, options));
+    };
+    add("solid", open, [](StrokeOptions&) {});
+    add("solid butt line", line, [](StrokeOptions&) {});
+    add("dashed butt", line, [](StrokeOptions& o) {
+        o.dashLength = 20;
+        o.dashGap = 10;
+    });
+    add("dashed round, offset", open, [](StrokeOptions& o) {
+        o.dashLength = 9;
+        o.dashGap = 4;
+        o.dashOffset = 3.5;
+        o.cap = 1;
+    });
+    add("dashed closed, negative offset", closed, [](StrokeOptions& o) {
+        o.dashLength = 13;
+        o.dashGap = 6;
+        o.dashOffset = -7;
+    });
+    add("dashed trimmed, tapered", open, [](StrokeOptions& o) {
+        o.dashLength = 8;
+        o.dashGap = 5;
+        o.start = 10;
+        o.end = 80;
+        o.offset = 15;
+        o.taperStart = 30;
+        o.taperEnd = 40;
+        o.width = 12;
+    });
+    add("dashed closed, trimmed across the seam", closed, [](StrokeOptions& o) {
+        o.dashLength = 11;
+        o.dashGap = 7;
+        o.start = 60;
+        o.end = 100;
+        o.offset = 25;
+        o.dashOffset = 2;
+    });
+    add("dashed wiggle", open, [](StrokeOptions& o) {
+        o.dashLength = 10;
+        o.dashGap = 6;
+        o.wiggle = 3;
+        o.frequency = 4;
+        o.seed = 7;
+    });
+    add("dashed core", open, [](StrokeOptions& o) {
+        o.dashLength = 12;
+        o.dashGap = 3;
+        o.core = 40;
+    });
+    add("dashed square miter", open, [](StrokeOptions& o) {
+        o.dashLength = 15;
+        o.dashGap = 5;
+        o.cap = 2;
+        o.join = 0;
+    });
+    add("dashed abutting", open, [](StrokeOptions& o) {
+        o.dashLength = 7;
+        o.dashGap = 0;
+    });
+    add("dashed bevel, animated offset", closed, [](StrokeOptions& o) {
+        o.dashLength = 6;
+        o.dashGap = 9;
+        o.dashOffset = 1234.25;
+        o.join = 2;
+    });
+    add("dots", open, [](StrokeOptions& o) { o.spacing = 9; });
+    add("square stamps turned", open, [](StrokeOptions& o) {
+        o.spacing = 10;
+        o.stamp = 1;
+        o.stampAlign = 1;
+        o.stampRotation = 20;
+    });
+    add("dash stamps fixed", open, [](StrokeOptions& o) {
+        o.spacing = 9;
+        o.stamp = 3;
+        o.stampAlign = 2;
+        o.stampRotation = 35;
+    });
+    add("tapered solid", closed, [](StrokeOptions& o) {
+        o.taperStart = 30;
+        o.taperEnd = 40;
+        o.width = 12;
+    });
+    return result;
+}
+
+// #759 dash patterns, held to an independent reference: where each dash and dot falls is worked out
+// here from the arc length of a straight-segment path, and the stroke's outline is read by its
+// bounds and by whether points on the centre line are inside it.
+[[nodiscard]] bool inside(const PathValue& value, const Vec2d point) {
+    int winding = 0;
+    for (const auto& contour : value.contours) {
+        const auto& a = contour.anchors;
+        for (std::size_t index = 0; index < a.size(); ++index) {
+            const auto p = a[index].point;
+            const auto q = a[(index + 1) % a.size()].point;
+            const double side = (q.x - p.x) * (point.y - p.y) - (point.x - p.x) * (q.y - p.y);
+            if (p.y <= point.y && q.y > point.y && side > 0.0)
+                ++winding;
+            else if (p.y > point.y && q.y <= point.y && side < 0.0)
+                --winding;
+        }
+    }
+    return winding != 0;
+}
+
+struct Extent final {
+    double minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0;
+};
+[[nodiscard]] std::vector<Extent> extentsOf(const PathValue& value) {
+    std::vector<Extent> result;
+    for (const auto& contour : value.contours) {
+        Extent extent{1e300, -1e300, 1e300, -1e300};
+        for (const auto& anchor : contour.anchors) {
+            extent.minX = std::min(extent.minX, anchor.point.x);
+            extent.maxX = std::max(extent.maxX, anchor.point.x);
+            extent.minY = std::min(extent.minY, anchor.point.y);
+            extent.maxY = std::max(extent.maxY, anchor.point.y);
+        }
+        result.push_back(extent);
+    }
+    std::ranges::sort(result, {}, &Extent::minX);
+    return result;
+}
+
+// Whether a distance along a path falls in a dash of `pattern` (dash, gap, ...) shifted by
+// `offset`, worked out independently of the kernel: the place in the period, then which length it
+// is in.
+[[nodiscard]] bool inDash(const std::vector<double>& pattern, const double offset, const double s) {
+    double period = 0.0;
+    for (const double length : pattern)
+        period += length;
+    double phase = std::fmod(s + offset, period);
+    if (phase < 0.0)
+        phase += period;
+    for (std::size_t index = 0; index < pattern.size(); ++index) {
+        if (phase < pattern[index])
+            return index % 2 == 0;
+        phase -= pattern[index];
+    }
+    return false;
+}
+// The distance from `s` to the nearest end of a dash or gap, to keep samples off the edges.
+[[nodiscard]] double edgeDistance(const std::vector<double>& pattern, const double offset,
+                                  const double s) {
+    double period = 0.0;
+    for (const double length : pattern)
+        period += length;
+    double phase = std::fmod(s + offset, period);
+    if (phase < 0.0)
+        phase += period;
+    double nearest = phase;
+    double at = 0.0;
+    for (const double length : pattern) {
+        at += length;
+        nearest = std::min(nearest, std::abs(phase - at));
+    }
+    return nearest;
+}
+
+// #759: what the dash patterns draw, as the same digests: recorded on one platform, they hold on
+// every platform because the geometry uses only correctly rounded arithmetic.
+[[nodiscard]] std::vector<std::pair<std::string, ValueUtilityOutcome>> patternStrokes() {
+    PathContour curve;
+    curve.closed = false;
+    curve.anchors = {{{10, 40}, std::nullopt, Vec2d{30, 10}},
+                     {{50, 40}, Vec2d{40, 70}, std::nullopt},
+                     {{86, 20}, std::nullopt, std::nullopt}};
+    PathContour ring;
+    ring.closed = true;
+    ring.anchors = {{{20, 20}, Vec2d{10, 30}, Vec2d{30, 10}},
+                    {{70, 18}, Vec2d{60, 8}, Vec2d{80, 28}},
+                    {{64, 66}, Vec2d{74, 60}, Vec2d{54, 72}},
+                    {{24, 60}, std::nullopt, std::nullopt}};
+    const PathValue open = single(curve);
+    const PathValue closed = single(ring);
+    std::vector<std::pair<std::string, ValueUtilityOutcome>> result;
+    const auto add = [&](std::string name, const PathValue& path, auto&& customise) {
+        StrokeOptions options;
+        customise(options);
+        result.emplace_back(std::move(name), stroke(path, options));
+    };
+    add("dash-dot round", open, [](StrokeOptions& o) {
+        o.width = 3;
+        o.cap = 1;
+        o.dashLength = 9;
+        o.dashGap = 4;
+        o.dash2 = 0;
+        o.gap2 = 4;
+    });
+    add("dotted square", open, [](StrokeOptions& o) {
+        o.width = 3;
+        o.cap = 2;
+        o.dashGap = 6;
+        o.dash2 = 0;
+        o.gap2 = 6;
+    });
+    add("three pairs closed, offset", closed, [](StrokeOptions& o) {
+        o.cap = 1;
+        o.dashLength = 13;
+        o.dashGap = 4;
+        o.dash2 = 0;
+        o.gap2 = 4;
+        o.dash3 = 5;
+        o.gap3 = 4;
+        o.dashOffset = -21.5;
+    });
+    add("pattern trimmed, tapered, wiggled, cored", open, [](StrokeOptions& o) {
+        o.width = 9;
+        o.cap = 1;
+        o.start = 5;
+        o.end = 90;
+        o.taperStart = 30;
+        o.taperEnd = 40;
+        o.wiggle = 2;
+        o.frequency = 3;
+        o.core = 40;
+        o.dashLength = 7;
+        o.dashGap = 3;
+        o.dash2 = 0;
+        o.gap2 = 3;
+        o.dash3 = 2;
+        o.gap3 = 3;
+    });
+    return result;
+}
+
+void testPathStrokeDashPatterns(Expectations& expectations) {
+    const PathValue line = single(polygon({{0, 0}, {100, 0}}, false));
+
+    // Dash-dot, square caps: 12 on, 4 off, a dot, 4 off. Each dash is the width longer (half at
+    // each end), each dot a square of the width's side where it falls.
+    {
+        StrokeOptions o;
+        o.width = 2;
+        o.cap = 2;
+        o.dashLength = 12;
+        o.dashGap = 4;
+        o.dash2 = 0;
+        o.gap2 = 4;
+        const auto extents = extentsOf(pathOf(stroke(line, o)));
+        std::vector<std::pair<double, double>> expected;
+        for (int k = 0; k < 5; ++k) {
+            expected.emplace_back(20.0 * k - 1.0, 20.0 * k + 13.0);
+            expected.emplace_back(20.0 * k + 15.0, 20.0 * k + 17.0);
+        }
+        bool exact = extents.size() == expected.size();
+        for (std::size_t index = 0; exact && index < expected.size(); ++index)
+            exact = near(extents[index].minX, expected[index].first, 2e-3) &&
+                    near(extents[index].maxX, expected[index].second, 2e-3) &&
+                    near(extents[index].minY, -1.0, 2e-3) && near(extents[index].maxY, 1.0, 2e-3);
+        expectations.expect(exact, "a 12 4 0 4 pattern with square caps is five dashes and five "
+                                   "square dots, each where the arc length puts it");
+    }
+
+    // Dotted, round caps: a dot every 10 from the start, the open end included. With butt caps a
+    // dot has no shape, so nothing is drawn.
+    {
+        StrokeOptions o;
+        o.width = 4;
+        o.cap = 1;
+        o.dashLength = 0;
+        o.dashGap = 10;
+        o.dash2 = 0;
+        o.gap2 = 10;
+        const auto dotted = stroke(line, o);
+        const auto extents = extentsOf(pathOf(dotted));
+        const double disc = 0.5 * 16 * 4.0 * std::sin(2.0 * std::numbers::pi / 16.0);
+        bool dots = extents.size() == 11;
+        for (std::size_t index = 0; dots && index < extents.size(); ++index)
+            dots = near(0.5 * (extents[index].minX + extents[index].maxX),
+                        10.0 * static_cast<double>(index), 2e-3) &&
+                   near(extents[index].maxX - extents[index].minX, 4.0, 2e-3);
+        expectations.expect(dots && near(area(pathOf(dotted)), 11 * disc, 1e-2),
+                            "a dotted pattern with round caps is a disc the width across every 10 "
+                            "pixels, both ends included");
+        o.cap = 0;
+        const auto butt = stroke(line, o);
+        expectations.expect(!butt.failed && pathOf(butt).contours.empty(),
+                            "a zero-length dash with butt caps draws nothing");
+        // The same dots from the second pair alone (the first left at 0 and 0 is unused), and from
+        // the third with the second unused.
+        o.cap = 1;
+        o.dashGap = 0;
+        o.gap2 = 10;
+        const auto second = stroke(line, o);
+        o.gap2 = 0;
+        o.gap3 = 10;
+        const auto third = stroke(line, o);
+        expectations.expect(pathOf(second) == pathOf(dotted) && pathOf(third) == pathOf(dotted),
+                            "a pair left at 0 and 0 is unused wherever it is in the pattern");
+    }
+
+    // Three pairs on a closed square, with an offset that carries a dash across the start: every
+    // point of the centre line is inside the outline exactly where the reference has a dash.
+    {
+        const PathValue ring = single(square(0, 0, 100));
+        const std::vector<double> pattern{30, 10, 5, 10, 15, 10};
+        const auto at = [](const double s) {
+            const double side = std::fmod(s, 400.0);
+            if (side < 100)
+                return Vec2d{side, 0};
+            if (side < 200)
+                return Vec2d{100, side - 100};
+            if (side < 300)
+                return Vec2d{300 - side, 100};
+            return Vec2d{0, 400 - side};
+        };
+        const auto check = [&](const double offset, const std::string& what) {
+            StrokeOptions o;
+            o.width = 2;
+            o.cap = 0;
+            o.dashLength = pattern[0];
+            o.dashGap = pattern[1];
+            o.dash2 = pattern[2];
+            o.gap2 = pattern[3];
+            o.dash3 = pattern[4];
+            o.gap3 = pattern[5];
+            o.dashOffset = offset;
+            const auto outline = pathOf(stroke(ring, o));
+            int wrong = 0;
+            int samples = 0;
+            for (double s = 0.25; s < 400.0; s += 0.5) {
+                if (edgeDistance(pattern, offset, s) < 0.6)
+                    continue;
+                ++samples;
+                if (inside(outline, at(s)) != inDash(pattern, offset, s))
+                    ++wrong;
+            }
+            expectations.expect(samples > 600 && wrong == 0, what + ": " + std::to_string(wrong) +
+                                                                 " of " + std::to_string(samples) +
+                                                                 " centre-line points disagree");
+            return outline;
+        };
+        const auto shifted = check(25, "three pairs on a closed contour, offset 25");
+        check(-33, "three pairs on a closed contour, offset -33");
+        expectations.expect(inside(shifted, {0, 0}) && inside(shifted, {0, 2}) &&
+                                inside(shifted, {3, 0}),
+                            "with offset 25 a dash runs across the contour's start");
+        // Animating the offset runs the whole pattern: a period on is the same outline, and a
+        // fraction of one moves every dash.
+        expectations.expect(check(105, "offset 105") == shifted &&
+                                check(26, "offset 26") != shifted,
+                            "an offset of one period more draws the same; a pixel more moves it");
+    }
+
+    // A trimmed and tapered pattern: the trim keeps 20 to 180 of a 200 line and the pattern starts
+    // at the trim; a 50% start taper narrows each dash and dot by where it is in the drawn stretch.
+    // The line has a point every pixel, because the taper is carried at the path's points.
+    {
+        std::vector<Vec2d> points;
+        for (int x = 0; x <= 200; ++x)
+            points.push_back({static_cast<double>(x), 0.0});
+        const PathValue long_line = single(polygon(points, false));
+        const std::vector<double> pattern{10, 5, 0, 5, 2, 5};
+        StrokeOptions o;
+        o.width = 2;
+        o.cap = 1;
+        o.start = 10;
+        o.end = 90;
+        o.taperStart = 50;
+        o.dashLength = 10;
+        o.dashGap = 5;
+        o.dash2 = 0;
+        o.gap2 = 5;
+        o.dash3 = 2;
+        o.gap3 = 5;
+        const auto outline = pathOf(stroke(long_line, o));
+        int wrong = 0;
+        for (double s = 0.25; s < 160.0; s += 0.5) {
+            // Round caps reach past each dash end by the half-width there; test the dash middles
+            // and the gap middles far from every end.
+            if (edgeDistance(pattern, 0.0, s) < 1.5)
+                continue;
+            if (inside(outline, {20 + s, 0}) != inDash(pattern, 0.0, s))
+                ++wrong;
+        }
+        // The third period's first dash, 54 to 64 into the stretch (74 to 84 on the line), has the
+        // taper's width at its middle: 2 * 59 / 80 across.
+        const double half = 0.5 * 2.0 * 59.0 / 80.0;
+        const bool tapered = inside(outline, {79, half - 0.04}) &&
+                             !inside(outline, {79, half + 0.04}) &&
+                             inside(outline, {79, -(half - 0.04)});
+        // The second period's dot, 42 into the stretch (62 on the line), is a disc of the taper's
+        // width there; nothing is drawn before the trim or after it.
+        const double dot = 0.5 * 2.0 * 42.0 / 80.0;
+        const bool dotted = inside(outline, {62, dot - 0.04}) && !inside(outline, {62, dot + 0.04});
+        expectations.expect(
+            wrong == 0 && tapered && dotted && !inside(outline, {15, 0}) &&
+                !inside(outline, {185, 0}),
+            "a trimmed, tapered dash-dot pattern starts at the trim and narrows with "
+            "the taper (" +
+                std::to_string(wrong) + " points disagree)");
+    }
+
+    // The patterns' own digests (patternStrokes), the same bits on every platform.
+    {
+        const std::vector<std::pair<std::string_view, std::uint64_t>> recorded{
+            {"dash-dot round", 0x3a8095c6a00bc32dULL},
+            {"dotted square", 0x28c13114c240f988ULL},
+            {"three pairs closed, offset", 0x7065a5f1a0a728c0ULL},
+            {"pattern trimmed, tapered, wiggled, cored", 0xb24a0b7c9f69cd4dULL},
+        };
+        const bool print = std::getenv("BLOOM_PRINT_STROKE_DIGESTS") != nullptr;
+        const auto strokes = patternStrokes();
+        expectations.expect(strokes.size() == recorded.size(),
+                            "every pattern stroke has its digest");
+        for (std::size_t index = 0; index < strokes.size(); ++index) {
+            const auto& [name, outcome] = strokes[index];
+            const auto digest = digestOf(outcome);
+            if (print)
+                std::cout << "            {\"" << name << "\", 0x" << std::hex << digest << std::dec
+                          << "ULL},\n";
+            expectations.expect(!outcome.failed && index < recorded.size() &&
+                                    name == recorded[index].first &&
+                                    digest == recorded[index].second,
+                                name + ": draws the recorded pattern, bit for bit");
+        }
+    }
+
+    // A negative length in a pattern is solid, as SVG treats one; none set is solid too.
+    {
+        StrokeOptions solid;
+        StrokeOptions negative;
+        negative.dashLength = 10;
+        negative.dashGap = 5;
+        negative.dash2 = -1;
+        negative.gap2 = 5;
+        expectations.expect(pathOf(stroke(line, negative)) == pathOf(stroke(line, solid)),
+                            "a negative length in the pattern draws the stroke solid");
+    }
+}
+
+// #759: the digests of what Path Stroke drew before dash patterns (see legacyStrokes), recorded
+// from the kernel before the change.
+void testPathStrokeLegacyDigests(Expectations& expectations) {
+    const std::vector<std::pair<std::string_view, std::uint64_t>> recorded{
+        {"solid", 0x4e3248bbf4641e7eULL},
+        {"solid butt line", 0x404ef53264bc1046ULL},
+        {"dashed butt", 0xc1472262e39a06a6ULL},
+        {"dashed round, offset", 0x1f953076bed5d52ULL},
+        {"dashed closed, negative offset", 0x16c9e52ab6e10a03ULL},
+        {"dashed trimmed, tapered", 0xf708988a0ca279e8ULL},
+        {"dashed closed, trimmed across the seam", 0x960d8f43e6ce510aULL},
+        {"dashed wiggle", 0x42a272cce188ca2fULL},
+        {"dashed core", 0xb818470dc07f47d3ULL},
+        {"dashed square miter", 0xf80ace9e22c39291ULL},
+        {"dashed abutting", 0xf44213723fd44644ULL},
+        {"dashed bevel, animated offset", 0xfab7f8a7d9164a72ULL},
+        {"dots", 0xecc8309359381facULL},
+        {"square stamps turned", 0x6d2e3b44cee03345ULL},
+        {"dash stamps fixed", 0x1325e188ba4d7ad0ULL},
+        {"tapered solid", 0x2775db9d34d077f1ULL},
+    };
+    const bool print = std::getenv("BLOOM_PRINT_STROKE_DIGESTS") != nullptr;
+    const auto strokes = legacyStrokes();
+    expectations.expect(strokes.size() == recorded.size(), "every legacy stroke has its digest");
+    for (std::size_t index = 0; index < strokes.size() && index < recorded.size(); ++index) {
+        const auto& [name, outcome] = strokes[index];
+        const auto digest = digestOf(outcome);
+        if (print)
+            std::cout << name << " 0x" << std::hex << digest << std::dec << '\n';
+        expectations.expect(!outcome.failed && name == recorded[index].first &&
+                                digest == recorded[index].second,
+                            name + ": draws exactly what it drew before dash patterns");
+    }
+}
+
 int main() {
     Expectations expectations;
+    testPathStrokeLegacyDigests(expectations);
+    testPathStrokeDashPatterns(expectations);
     testTransform(expectations);
     testTrim(expectations);
     testRoundCorners(expectations);

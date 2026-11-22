@@ -1,5 +1,6 @@
 // #509: a Path Stroke with a turned Square stamp survives a save and open with its ids and values,
-// and draws what it drew: the CPU reference frame is bit-identical.
+// and draws what it drew: the CPU reference frame is bit-identical. #759: so does a dash pattern,
+// and a single dash and gap saved before patterns opens, saves and draws unchanged.
 
 #include <bloom/commands/command_stack.hpp>
 #include <bloom/commands/node_operations.hpp>
@@ -185,17 +186,125 @@ void squareStampRoundTrips() {
            "the Square stamp renders bit-identically after a save and open");
 }
 
+constexpr std::array<std::string_view, 4> kPatternRoles{"dash2", "gap2", "dash3", "gap3"};
+
+// #759: a single dash and gap saved before dash patterns -- the node has no dash2, gap2, dash3 or
+// gap3 binding -- opens with nothing injected, saves back to the same bytes and draws exactly what
+// the same stroke with every pattern role bound at its default draws.
+void singlePairSavedBeforePatterns() {
+    Fixture fixture;
+    fixture.set(fixture.stroke, "spacing", 0.0);
+    fixture.set(fixture.stroke, "dashLength", 12.0);
+    fixture.set(fixture.stroke, "dashGap", 6.0);
+    const auto bound = fixture.document.snapshot();
+    const auto boundPixels = render(bound, fixture.composition);
+    // The node as it was saved before the pattern roles existed.
+    auto draft = fixture.document.draft(bound);
+    auto* composition = draft.project().findComposition(fixture.composition);
+    auto record = *composition->graph().findNode(fixture.stroke);
+    std::vector<document::EdgeRecord> edges;
+    for (const auto& edge : composition->graph().edges()) {
+        const auto* into = std::get_if<document::NodeInputRef>(&edge.destination);
+        if (edge.source.nodeId == fixture.stroke ||
+            (into != nullptr && into->nodeId == fixture.stroke))
+            edges.push_back(edge);
+    }
+    std::size_t removed = 0;
+    std::erase_if(record.parameters, [&](const document::ParameterBinding& binding) {
+        if (std::ranges::find(kPatternRoles, binding.role) == kPatternRoles.end())
+            return false;
+        expect(composition->parameters().erase(binding.parameterId), "a pattern parameter erases");
+        ++removed;
+        return true;
+    });
+    expect(removed == kPatternRoles.size(), "a new Path Stroke binds the four pattern roles");
+    expect(composition->graph().eraseNode(fixture.stroke) && composition->graph().addNode(record),
+           "the stroke is the node saved before patterns");
+    for (const auto& edge : edges)
+        expect(composition->graph().addEdge(edge), "the stroke's links are kept");
+    expect(fixture.document.commit(bound.revision(), std::move(draft)).committed(),
+           "a Path Stroke without the pattern roles is a valid document");
+    const auto old = fixture.document.snapshot();
+    expect(sameBits(boundPixels, render(old, fixture.composition)),
+           "unbound pattern roles draw exactly what roles bound at 0 draw");
+
+    const auto settings = document::makeBloomNeutralColorSettingsV1({});
+    const auto saved = save(old, settings);
+    auto result = project::openProjectArchive(saved, {}, memory());
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
+           "a project saved before dash patterns opens");
+    if (result.outcome() != project::OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto* node =
+        reopened.project().findComposition(fixture.composition)->graph().findNode(fixture.stroke);
+    expect(node != nullptr && std::ranges::none_of(node->parameters,
+                                                   [](const auto& binding) {
+                                                       return std::ranges::find(kPatternRoles,
+                                                                                binding.role) !=
+                                                              kPatternRoles.end();
+                                                   }),
+           "opening injects no pattern role");
+    expect(save(reopened, settings) == saved, "it saves back to the same bytes");
+    expect(sameBits(boundPixels, render(reopened, fixture.composition)),
+           "and draws exactly what it drew");
+}
+
+// #759: a dash-dot pattern of three pairs survives a save and open with its ids and values, and
+// draws what it drew.
+void patternRoundTrips() {
+    Fixture fixture;
+    fixture.set(fixture.stroke, "spacing", 0.0);
+    fixture.set(fixture.stroke, "cap", std::int64_t{1});
+    fixture.set(fixture.stroke, "width", 4.0);
+    const auto solid = render(fixture.document.snapshot(), fixture.composition);
+    fixture.set(fixture.stroke, "dashLength", 10.0);
+    fixture.set(fixture.stroke, "dashGap", 6.0);
+    fixture.set(fixture.stroke, "dash2", 0.0);
+    fixture.set(fixture.stroke, "gap2", 6.0);
+    fixture.set(fixture.stroke, "dash3", 3.0);
+    fixture.set(fixture.stroke, "gap3", 6.0);
+    fixture.set(fixture.stroke, "dashOffset", 5.0);
+    const auto snapshot = fixture.document.snapshot();
+    const auto pattern = render(snapshot, fixture.composition);
+    expect(!sameBits(solid, pattern), "a dash-dot pattern draws another picture");
+    auto result = project::openProjectArchive(
+        save(snapshot, document::makeBloomNeutralColorSettingsV1({})), {}, memory());
+    expect(result.outcome() == project::OpenArchiveOutcome::Opened,
+           "a project with a dash pattern opens");
+    if (result.outcome() != project::OpenArchiveOutcome::Opened)
+        return;
+    auto opened = std::move(result).takeOpened();
+    const auto reopened = opened.document->snapshot();
+    const auto* composition = reopened.project().findComposition(fixture.composition);
+    bool kept = true;
+    for (const auto role : kPatternRoles) {
+        const auto id = fixture.parameter(fixture.stroke, role);
+        const auto* before =
+            snapshot.project().findComposition(fixture.composition)->parameters().find(id);
+        const auto* after = composition->parameters().find(id);
+        kept = kept && before && after && before->source == after->source;
+    }
+    expect(kept, "the second and third dash and gap keep their ids and values");
+    expect(sameBits(pattern, render(reopened, fixture.composition)),
+           "the pattern renders bit-identically after a save and open");
+}
+
 } // namespace
 
 int main() {
     try {
         squareStampRoundTrips();
+        singlePairSavedBeforePatterns();
+        patternRoundTrips();
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;
     }
     if (failures != 0)
         return 1;
-    std::cout << "PASS: a Path Stroke stamp survives a save and open\n";
+    std::cout << "PASS: a Path Stroke stamp and dash pattern survive a save and open, and a "
+                 "stroke saved before dash patterns opens and saves unchanged\n";
     return 0;
 }

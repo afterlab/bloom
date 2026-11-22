@@ -2,15 +2,15 @@
 // path-processing.md).
 //
 // Transform Path, Trim Path, Offset Path, Round Corners, Boolean Paths (all four operations),
-// Merge Paths and Path Stroke (solid, dashed, dots, tapered, wiggle, core) are built into real
-// documents through commands: a Path node, the processing node and a Shape Source whose `path` it
-// drives. Each state is compiled by the production SnapshotCompiler, rendered by the CPU reference,
-// prepared by the production CpuGpuSceneBuilder, run on the production GpuSceneExecutor and held to
-// the CPU reference at 2e-6, alpha exact, cold then warm. Editing one operand of a node changes
-// the pixels and is dispatched, an unrelated edit is not; an operand animated over time gives a
-// frame per time and a held key dispatches nothing new. A fill with alpha one half and a colour
-// above one, a path partly outside the frame, a region of interest and the chain
-// `Path Stroke core -> Shape Source -> Glow` run the same way, as do image effects and compositing
+// Merge Paths and Path Stroke (solid, dashed, dash patterns, dots, tapered, wiggle, core) are built
+// into real documents through commands: a Path node, the processing node and a Shape Source whose
+// `path` it drives. Each state is compiled by the production SnapshotCompiler, rendered by the CPU
+// reference, prepared by the production CpuGpuSceneBuilder, run on the production GpuSceneExecutor
+// and held to the CPU reference at 2e-6, alpha exact, cold then warm. Editing one operand of a node
+// changes the pixels and is dispatched, an unrelated edit is not; an operand animated over time
+// gives a frame per time and a held key dispatches nothing new. A fill with alpha one half and a
+// colour above one, a path partly outside the frame, a region of interest and the chain `Path
+// Stroke core -> Shape Source -> Glow` run the same way, as do image effects and compositing
 // recipes (Gaussian Blur, Exposure, Drop Shadow, Glow) over a curved Shape Source and over a Text
 // Source read as an image. Preparation and the native job cancel, and the budget refuses.
 //
@@ -367,6 +367,37 @@ struct Scenario final {
                 return c.processor;
             },
             [](Fixture& f, const document::NodeId n) { f.set(n, "width", 14.0); });
+    // #759 dash patterns: a dash-dot of round cap-only dots, and three pairs with square caps. Each
+    // edit changes one of the pattern's new values, so their cache identity is held too.
+    add(
+        "path stroke (dash-dot pattern)",
+        [](Fixture& f) {
+            const auto c = f.chain(document::kPathStrokeNodeType, openLine());
+            f.set(c.processor, "width", 5.0);
+            f.set(c.processor, "cap", document::selectorStoredValue(document::StrokeCap::Round));
+            f.set(c.processor, "dashLength", 10.0);
+            f.set(c.processor, "dashGap", 7.0);
+            f.set(c.processor, "dash2", 0.0);
+            f.set(c.processor, "gap2", 7.0);
+            return c.processor;
+        },
+        [](Fixture& f, const document::NodeId n) { f.set(n, "gap2", 11.0); });
+    add(
+        "path stroke (three pairs, square caps)",
+        [](Fixture& f) {
+            const auto c = f.chain(document::kPathStrokeNodeType, openLine());
+            f.set(c.processor, "width", 4.0);
+            f.set(c.processor, "cap", document::selectorStoredValue(document::StrokeCap::Square));
+            f.set(c.processor, "dashLength", 9.0);
+            f.set(c.processor, "dashGap", 5.0);
+            f.set(c.processor, "dash2", 0.0);
+            f.set(c.processor, "gap2", 5.0);
+            f.set(c.processor, "dash3", 3.0);
+            f.set(c.processor, "gap3", 5.0);
+            f.set(c.processor, "dashOffset", 4.0);
+            return c.processor;
+        },
+        [](Fixture& f, const document::NodeId n) { f.set(n, "dash3", 6.0); });
     // #509 Mask Path and Text Outline: a layer's masks and a text's glyph outlines, stroked where
     // they are. The masks are in the plate's own space, which for a frame-sized plate at its
     // default place is the frame's, so the stroke's Shape is an entry of the composition's Merge at
@@ -874,6 +905,34 @@ int main(int argc, char** argv) {
                                     samePixels(*keyedEnd, *keyedHolding),
                                 "a keyed Trim Path moves between its keys and holds after the last");
 
+        // 6b. #759 Keyed: a dash-dot pattern's offset animates, running the whole pattern along
+        // the path, then holds.
+        Fixture keyedDash;
+        const auto dashChain = keyedDash.chain(document::kPathStrokeNodeType, openLine());
+        keyedDash.set(dashChain.processor, "width", 5.0);
+        keyedDash.set(dashChain.processor, "cap",
+                      document::selectorStoredValue(document::StrokeCap::Round));
+        keyedDash.set(dashChain.processor, "dashLength", 10.0);
+        keyedDash.set(dashChain.processor, "dashGap", 7.0);
+        keyedDash.set(dashChain.processor, "dash2", 0.0);
+        keyedDash.set(dashChain.processor, "gap2", 7.0);
+        // The offset is driven, as every Path Stroke operand animates: a keyed Scalar into its
+        // socket, 0 at the start and half the period at one second, held after.
+        const auto dashDriver = keyedDash.addNode(document::kScalarValueNodeType);
+        keyedDash.key(dashDriver, document::kValueParameterRole, 0, 0.0);
+        keyedDash.key(dashDriver, document::kValueParameterRole, 4, 12.0);
+        keyedDash.connect(dashDriver, document::kValuePortName, dashChain.processor, "dashOffset");
+        auto dashStart = referenceAt(expectations, keyedDash, 0, "keyed dash offset start");
+        auto dashMiddle = referenceAt(expectations, keyedDash, 2, "keyed dash offset middle");
+        auto dashEnd = referenceAt(expectations, keyedDash, 4, "keyed dash offset end");
+        auto dashHolding = referenceAt(expectations, keyedDash, 6, "keyed dash offset holding");
+        if (dashStart && dashMiddle && dashEnd && dashHolding)
+            expectations.expect(!samePixels(*dashStart, *dashMiddle) &&
+                                    !samePixels(*dashMiddle, *dashEnd) &&
+                                    samePixels(*dashEnd, *dashHolding),
+                                "a keyed dash offset runs the pattern between its keys and holds "
+                                "after the last");
+
         if (expectations.failures() != 0) {
             std::cerr << expectations.failures() << " path processing expectation(s) failed\n";
             return 1;
@@ -1028,6 +1087,24 @@ int main(int argc, char** argv) {
                 expectations.expect(run.counters().dispatches == before.dispatches ||
                                         parity(moved, keyedMiddle->frame->processImage().pixels()),
                                     "an animated Trim Path frame matches its CPU frame");
+            }
+        }
+        // #759: the keyed dash offset on the device: each time its own frame at parity, and a
+        // frame past the last key dispatches nothing new.
+        if (dashStart && dashMiddle && dashEnd && dashHolding) {
+            auto& run = *executor.executor;
+            gpuParity(expectations, run, *dashStart, "keyed dash offset start");
+            gpuParity(expectations, run, *dashMiddle, "keyed dash offset middle");
+            gpuParity(expectations, run, *dashEnd, "keyed dash offset end");
+            const auto holding = builder.build(dashHolding->plan, dashHolding->request);
+            expectations.expect(holding.hasValue(), "keyed dash offset holding prepares");
+            if (holding) {
+                const auto before = run.counters();
+                const auto held = runScene(run, holding.scene);
+                expectations.expect(parity(held, dashHolding->frame->processImage().pixels()) &&
+                                        run.counters().dispatches == before.dispatches,
+                                    "a dash offset past the last key matches and dispatches "
+                                    "nothing new");
             }
         }
 

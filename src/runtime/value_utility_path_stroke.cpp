@@ -8,6 +8,7 @@
 #include <bloom/render/path_raster.hpp>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <numbers>
@@ -43,10 +44,16 @@ struct Stretch {
     bool closed = false;
 };
 
+// The length of (x, y) as the square root of IEEE products: correctly rounded, so the same bits on
+// every platform, where std::hypot is only faithful per platform (#759).
+[[nodiscard]] double hypotenuse(const double x, const double y) noexcept {
+    return std::sqrt(x * x + y * y);
+}
+
 [[nodiscard]] double lengthOf(const std::vector<Vec2d>& points) noexcept {
     double length = 0.0;
     for (std::size_t index = 1; index < points.size(); ++index)
-        length += std::hypot(points[index].x - points[index - 1].x,
+        length += hypotenuse(points[index].x - points[index - 1].x,
                              points[index].y - points[index - 1].y);
     return length;
 }
@@ -63,7 +70,7 @@ struct Stretch {
     for (std::size_t index = 0; index + 1 < source.points.size(); ++index) {
         const auto& a = source.points[index];
         const auto& b = source.points[index + 1];
-        const double length = std::hypot(b.x - a.x, b.y - a.y);
+        const double length = hypotenuse(b.x - a.x, b.y - a.y);
         const double low = distance;
         const double high = distance + length;
         distance = high;
@@ -106,7 +113,7 @@ struct Stretch {
 }
 
 [[nodiscard]] Vec2d unit(const Vec2d from, const Vec2d to) noexcept {
-    const double length = std::hypot(to.x - from.x, to.y - from.y);
+    const double length = hypotenuse(to.x - from.x, to.y - from.y);
     return length > 0.0 ? Vec2d{(to.x - from.x) / length, (to.y - from.y) / length} : Vec2d{1, 0};
 }
 
@@ -123,16 +130,65 @@ void addPolygon(PathsD& polygons, PathD polygon) {
     polygons.push_back(std::move(polygon));
 }
 
+// The disc's corners, cos and sin of 2 pi side / kDiscSides, written out (#759): exactly the values
+// the stroke has always used, now the same on every platform rather than whatever a platform's
+// std::cos and std::sin answer.
+constexpr std::array<std::array<double, 2>, kDiscSides> kDiscCorners{{
+    {0x1.0000000000000p+0, 0x0.0p+0},
+    {0x1.d906bcf328d46p-1, 0x1.87de2a6aea963p-2},
+    {0x1.6a09e667f3bcdp-1, 0x1.6a09e667f3bccp-1},
+    {0x1.87de2a6aea964p-2, 0x1.d906bcf328d46p-1},
+    {0x1.1a62633145c07p-54, 0x1.0000000000000p+0},
+    {-0x1.87de2a6aea962p-2, 0x1.d906bcf328d46p-1},
+    {-0x1.6a09e667f3bccp-1, 0x1.6a09e667f3bcdp-1},
+    {-0x1.d906bcf328d46p-1, 0x1.87de2a6aea965p-2},
+    {-0x1.0000000000000p+0, 0x1.1a62633145c07p-53},
+    {-0x1.d906bcf328d47p-1, -0x1.87de2a6aea961p-2},
+    {-0x1.6a09e667f3bcep-1, -0x1.6a09e667f3bccp-1},
+    {-0x1.87de2a6aea96dp-2, -0x1.d906bcf328d44p-1},
+    {-0x1.a79394c9e8a0ap-53, -0x1.0000000000000p+0},
+    {0x1.87de2a6aea967p-2, -0x1.d906bcf328d45p-1},
+    {0x1.6a09e667f3bcbp-1, -0x1.6a09e667f3bcep-1},
+    {0x1.d906bcf328d44p-1, -0x1.87de2a6aea96ep-2},
+}};
+
 void addDisc(PathsD& polygons, const Vec2d center, const double radius) {
     if (!(radius > 1e-9))
         return;
     PathD disc;
     disc.reserve(kDiscSides);
-    for (int side = 0; side < kDiscSides; ++side) {
-        const double angle = 2.0 * std::numbers::pi * side / kDiscSides;
-        disc.emplace_back(center.x + radius * std::cos(angle), center.y + radius * std::sin(angle));
-    }
+    for (const auto& [cosine, sine] : kDiscCorners)
+        disc.emplace_back(center.x + radius * cosine, center.y + radius * sine);
     addPolygon(polygons, std::move(disc));
+}
+
+// The cosine and sine of `degrees`, the same bits on every platform (#759): the angle is reduced
+// exactly to within an eighth of a turn of a quarter turn, and the two series are summed with
+// correctly rounded arithmetic only. A whole number of quarter turns is exact.
+[[nodiscard]] std::array<double, 2> turnOf(const double degrees) noexcept {
+    const double turned = std::remainder(degrees, 360.0);
+    const double within = std::remainder(turned, 90.0);               // -45 to 45, exact
+    const auto quarters = static_cast<int>((turned - within) / 90.0); // -2 to 2, exact
+    const double t = within * (std::numbers::pi / 180.0);
+    const double t2 = t * t;
+    // The Taylor series to t^17 and t^18; the first term left out is below 1e-19 for |t| <= pi/4.
+    double sine = 1.0;
+    for (int k = 8; k >= 1; --k)
+        sine = 1.0 - t2 / static_cast<double>((2 * k) * (2 * k + 1)) * sine;
+    sine *= t;
+    double cosine = 1.0;
+    for (int k = 9; k >= 1; --k)
+        cosine = 1.0 - t2 / static_cast<double>((2 * k - 1) * (2 * k)) * cosine;
+    switch ((quarters % 4 + 4) % 4) {
+    case 1:
+        return {-sine, cosine};
+    case 2:
+        return {-cosine, -sine};
+    case 3:
+        return {sine, -cosine};
+    default:
+        return {cosine, sine};
+    }
 }
 
 // One brush stamp: its centre, the width envelope there and the path's direction there.
@@ -186,6 +242,44 @@ void addStamp(PathsD& polygons, const Stamp& stamp, const double width, const St
         break;
     }
     addPolygon(polygons, std::move(polygon));
+}
+
+// #759 The dash pattern: up to three dash and gap pairs, walked in order from the offset. The first
+// pair alone keeps the meaning it always had (a dash of 0 is solid, a negative length is solid). A
+// later pair set makes a pattern even when the first dash is 0; a pair at 0 and 0 is unused; and a
+// negative length anywhere is solid, as SVG treats one. None is solid.
+struct DashPattern {
+    std::vector<double> lengths; // dash, gap, dash, gap, ...
+    std::vector<double> starts;  // where each length begins within the period
+    double period = 0.0;
+    std::size_t dashes = 0;
+};
+
+[[nodiscard]] std::optional<DashPattern> dashPatternOf(const std::array<double, 6>& values) {
+    DashPattern pattern;
+    const bool extended =
+        std::any_of(values.begin() + 2, values.end(), [](const double v) { return v != 0.0; });
+    if (!extended) {
+        if (!(values[0] > 0.0 && values[1] >= 0.0 && values[1] + values[0] > 0.0))
+            return std::nullopt;
+        pattern.lengths = {values[0], values[1]};
+    } else {
+        if (std::ranges::any_of(values, [](const double v) { return v < 0.0; }))
+            return std::nullopt;
+        for (std::size_t pair = 0; pair < 3; ++pair)
+            if (values[2 * pair] != 0.0 || values[2 * pair + 1] != 0.0) {
+                pattern.lengths.push_back(values[2 * pair]);
+                pattern.lengths.push_back(values[2 * pair + 1]);
+            }
+    }
+    for (const double length : pattern.lengths) {
+        pattern.starts.push_back(pattern.period);
+        pattern.period += length;
+    }
+    if (!(pattern.period > 0.0))
+        return std::nullopt;
+    pattern.dashes = pattern.lengths.size() / 2;
+    return pattern;
 }
 
 struct Style {
@@ -302,6 +396,10 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     const double coreWidth = reader.scalar(15);
     const double tolerance = reader.scalar(16);
     const double stampRotation = reader.scalar(17);
+    const double dash2 = reader.scalar(18);
+    const double gap2 = reader.scalar(19);
+    const double dash3 = reader.scalar(20);
+    const double gap3 = reader.scalar(21);
     const auto cap = runtime::detail::selectorAt(invocation, 0, document::kStrokeCaps,
                                                  document::StrokeCap::Round);
     const auto join = runtime::detail::selectorAt(invocation, 1, document::kOffsetJoins,
@@ -314,7 +412,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         return outcome;
     for (const double value :
          {width, start, end, offset, taperStart, taperEnd, dashLength, dashGap, dashOffset, spacing,
-          wiggle, frequency, phase, coreWidth, stampRotation})
+          wiggle, frequency, phase, coreWidth, stampRotation, dash2, gap2, dash3, gap3})
         if (!std::isfinite(value))
             return support::refuse(std::move(outcome), "Path Stroke operand is not finite",
                                    "Every number must be finite.");
@@ -352,7 +450,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             const Vec2d next{point.x, point.y};
             if (!stretch.points.empty()) {
                 const auto& previous = stretch.points.back();
-                const double step = std::hypot(next.x - previous.x, next.y - previous.y);
+                const double step = hypotenuse(next.x - previous.x, next.y - previous.y);
                 if (!(step > 0.0))
                     continue;
                 along += step;
@@ -363,7 +461,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         if (contour.closed && stretch.points.size() > 1) {
             const auto first = stretch.points.front();
             const auto& last = stretch.points.back();
-            const double step = std::hypot(first.x - last.x, first.y - last.y);
+            const double step = hypotenuse(first.x - last.x, first.y - last.y);
             if (step > 0.0) {
                 along += step;
                 stretch.points.push_back(first);
@@ -408,7 +506,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             for (std::size_t index = 1; index < head.points.size(); ++index) {
                 tail.points.push_back(head.points[index]);
                 tail.along.push_back(tail.along.back() +
-                                     std::hypot(head.points[index].x - head.points[index - 1].x,
+                                     hypotenuse(head.points[index].x - head.points[index - 1].x,
                                                 head.points[index].y - head.points[index - 1].y));
             }
             pieces.pop_back();
@@ -441,7 +539,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                 const double distance = std::min(length, static_cast<double>(sample) * step);
                 while (cursor + 2 < piece.points.size()) {
                     const double segment =
-                        std::hypot(piece.points[cursor + 1].x - piece.points[cursor].x,
+                        hypotenuse(piece.points[cursor + 1].x - piece.points[cursor].x,
                                    piece.points[cursor + 1].y - piece.points[cursor].y);
                     if (distance <= base + segment)
                         break;
@@ -449,7 +547,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                     ++cursor;
                 }
                 const double segment =
-                    std::hypot(piece.points[cursor + 1].x - piece.points[cursor].x,
+                    hypotenuse(piece.points[cursor + 1].x - piece.points[cursor].x,
                                piece.points[cursor + 1].y - piece.points[cursor].y);
                 const double t =
                     segment > 0.0 ? std::clamp((distance - base) / segment, 0.0, 1.0) : 0.0;
@@ -488,7 +586,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
         double distance = 0.0;
         for (std::size_t index = 0; index < piece.points.size(); ++index) {
             if (index > 0)
-                distance += std::hypot(piece.points[index].x - piece.points[index - 1].x,
+                distance += hypotenuse(piece.points[index].x - piece.points[index - 1].x,
                                        piece.points[index].y - piece.points[index - 1].y);
             double value = 1.0;
             if (startShare > 0.0 && length > 0.0)
@@ -501,9 +599,12 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
             piece.closed = false; // a taper gives a closed contour a start and an end
     }
 
-    // Brush spacing stamps dots; a dash cuts the pieces; neither leaves them whole.
+    // Brush spacing stamps dots; a dash cuts the pieces; neither leaves them whole. A dash of 0 in
+    // the pattern is a dot of the cap's shape (`capDots`).
+    const auto pattern = dashPatternOf({dashLength, dashGap, dash2, gap2, dash3, gap3});
     std::vector<Stretch> strokes;
     std::vector<Stamp> stamps;
+    std::vector<Stamp> capDots;
     if (spacing > 0.0) {
         for (const auto& piece : pieces) {
             const double length = lengthOf(piece.points);
@@ -518,7 +619,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                     return support::cancelledOutcome(invocation);
                 while (index + 2 < piece.points.size()) {
                     const double segment =
-                        std::hypot(piece.points[index + 1].x - piece.points[index].x,
+                        hypotenuse(piece.points[index + 1].x - piece.points[index].x,
                                    piece.points[index + 1].y - piece.points[index].y);
                     if (at <= base + segment)
                         break;
@@ -526,7 +627,7 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                     ++index;
                 }
                 const double segment =
-                    std::hypot(piece.points[index + 1].x - piece.points[index].x,
+                    hypotenuse(piece.points[index + 1].x - piece.points[index].x,
                                piece.points[index + 1].y - piece.points[index].y);
                 const double t = segment > 0.0 ? std::clamp((at - base) / segment, 0.0, 1.0) : 0.0;
                 stamps.push_back({lerp(piece.points[index], piece.points[index + 1], t),
@@ -535,56 +636,91 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                                   unit(piece.points[index], piece.points[index + 1])});
             }
         }
-    } else if (dashLength > 0.0 && dashGap >= 0.0 && dashGap + dashLength > 0.0) {
-        const double period = dashLength + dashGap;
+    } else if (pattern) {
+        const double period = pattern->period;
         for (const auto& piece : pieces) {
             const double length = lengthOf(piece.points);
-            if (length / period > static_cast<double>(kMaximumSamples))
+            if (length / period * static_cast<double>(pattern->dashes) >
+                static_cast<double>(kMaximumSamples))
                 return support::refuse(
                     std::move(outcome), "Path Stroke dashes are too short",
                     "The pattern would cut more dashes than can be drawn; lengthen "
                     "the dash.");
+            // The distance of each point along the piece, to carry the envelope across.
+            std::vector<double> cumulative(piece.points.size(), 0.0);
+            for (std::size_t index = 1; index < piece.points.size(); ++index)
+                cumulative[index] = cumulative[index - 1] +
+                                    hypotenuse(piece.points[index].x - piece.points[index - 1].x,
+                                               piece.points[index].y - piece.points[index - 1].y);
+            // The envelope at a distance, interpolated between the points either side.
+            const auto envelopeAt = [&](const double position) {
+                const auto upper = std::upper_bound(cumulative.begin(), cumulative.end(), position);
+                const auto high = static_cast<std::size_t>(upper - cumulative.begin());
+                const std::size_t low = high == 0 ? 0 : high - 1;
+                const std::size_t next = std::min(low + 1, cumulative.size() - 1);
+                const double span = cumulative[next] - cumulative[low];
+                const double t = span > 0.0 ? (position - cumulative[low]) / span : 0.0;
+                return piece.envelope[low] + (piece.envelope[next] - piece.envelope[low]) * t;
+            };
+            // The period starts at the offset; each dash of the pattern begins at its place in it.
+            // An open piece's end is a place a dot can fall; a closed one's end is its start.
             double first = -std::fmod(dashOffset, period);
             if (first > 0.0)
                 first -= period;
-            for (double at = first; at < length; at += period) {
+            for (double at = first; at < length || (!piece.closed && at <= length); at += period) {
                 if (support::stopRequested(invocation))
                     return support::cancelledOutcome(invocation);
-                const double from = std::max(at, 0.0);
-                const double to = std::min(at + dashLength, length);
-                if (!(to > from))
-                    continue;
-                auto dash = slice(piece, from, to);
-                if (dash.points.size() < 2)
-                    continue;
-                // Carry the envelope across: interpolated at the dash's ends, by distance.
-                dash.envelope.assign(dash.points.size(), 1.0);
-                std::vector<double> cumulative(piece.points.size(), 0.0);
-                for (std::size_t index = 1; index < piece.points.size(); ++index)
-                    cumulative[index] =
-                        cumulative[index - 1] +
-                        std::hypot(piece.points[index].x - piece.points[index - 1].x,
-                                   piece.points[index].y - piece.points[index - 1].y);
-                double position = from;
-                for (std::size_t index = 0; index < dash.points.size(); ++index) {
-                    if (index > 0)
-                        position += std::hypot(dash.points[index].x - dash.points[index - 1].x,
-                                               dash.points[index].y - dash.points[index - 1].y);
-                    const auto upper =
-                        std::upper_bound(cumulative.begin(), cumulative.end(), position);
-                    const auto high = static_cast<std::size_t>(upper - cumulative.begin());
-                    const std::size_t low = high == 0 ? 0 : high - 1;
-                    const std::size_t next = std::min(low + 1, cumulative.size() - 1);
-                    const double span = cumulative[next] - cumulative[low];
-                    const double t = span > 0.0 ? (position - cumulative[low]) / span : 0.0;
-                    dash.envelope[index] =
-                        piece.envelope[low] + (piece.envelope[next] - piece.envelope[low]) * t;
+                for (std::size_t element = 0; element < pattern->lengths.size(); element += 2) {
+                    const double begin = element == 0 ? at : at + pattern->starts[element];
+                    const double run = pattern->lengths[element];
+                    if (!(run > 0.0)) {
+                        // A dash of 0 is the dot its caps make, where it falls; a butt cap has
+                        // none.
+                        if (cap == document::StrokeCap::Butt || begin < 0.0 || begin > length ||
+                            (piece.closed && begin == length))
+                            continue;
+                        const auto upper =
+                            std::upper_bound(cumulative.begin(), cumulative.end(), begin);
+                        const auto high = static_cast<std::size_t>(upper - cumulative.begin());
+                        const std::size_t low =
+                            std::min(high == 0 ? std::size_t{0} : high - 1, cumulative.size() - 2);
+                        const double span = cumulative[low + 1] - cumulative[low];
+                        const double t =
+                            span > 0.0 ? std::clamp((begin - cumulative[low]) / span, 0.0, 1.0)
+                                       : 0.0;
+                        capDots.push_back({lerp(piece.points[low], piece.points[low + 1], t),
+                                           envelopeAt(begin),
+                                           unit(piece.points[low], piece.points[low + 1])});
+                        if (strokes.size() + capDots.size() > kMaximumSamples)
+                            return support::refuse(std::move(outcome),
+                                                   "Path Stroke dashes are too short",
+                                                   "The pattern would cut more dashes than can be "
+                                                   "drawn; lengthen the dash.");
+                        continue;
+                    }
+                    const double from = std::max(begin, 0.0);
+                    const double to = std::min(begin + run, length);
+                    if (!(to > from))
+                        continue;
+                    auto dash = slice(piece, from, to);
+                    if (dash.points.size() < 2)
+                        continue;
+                    // Carry the envelope across: interpolated at the dash's ends, by distance.
+                    dash.envelope.assign(dash.points.size(), 1.0);
+                    double position = from;
+                    for (std::size_t index = 0; index < dash.points.size(); ++index) {
+                        if (index > 0)
+                            position += hypotenuse(dash.points[index].x - dash.points[index - 1].x,
+                                                   dash.points[index].y - dash.points[index - 1].y);
+                        dash.envelope[index] = envelopeAt(position);
+                    }
+                    strokes.push_back(std::move(dash));
+                    if (strokes.size() + capDots.size() > kMaximumSamples)
+                        return support::refuse(std::move(outcome),
+                                               "Path Stroke dashes are too short",
+                                               "The pattern would cut more dashes than can be "
+                                               "drawn; lengthen the dash.");
                 }
-                strokes.push_back(std::move(dash));
-                if (strokes.size() > kMaximumSamples)
-                    return support::refuse(std::move(outcome), "Path Stroke dashes are too short",
-                                           "The pattern would cut more dashes than can be drawn; "
-                                           "lengthen the dash.");
             }
         }
     } else {
@@ -596,9 +732,16 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
     stampShape.followsPath =
         stampAlign == document::StampAlign::FollowPath ||
         (stampAlign == document::StampAlign::Automatic && stamp == document::StrokeStamp::Dash);
-    const double turn = std::remainder(stampRotation, 360.0) * std::numbers::pi / 180.0;
-    stampShape.cosine = std::cos(turn);
-    stampShape.sine = std::sin(turn);
+    const auto [turnCosine, turnSine] = turnOf(stampRotation);
+    stampShape.cosine = turnCosine;
+    stampShape.sine = turnSine;
+
+    // A zero-length dash's dot: a disc the width across for a Round cap, a square of the width's
+    // side turned with the path for a Square cap (as SVG draws a zero-length dash).
+    StampShape capShape;
+    capShape.kind = cap == document::StrokeCap::Square ? document::StrokeStamp::Square
+                                                       : document::StrokeStamp::Dot;
+    capShape.followsPath = true;
 
     // The outline of the body, and of the core at its share of the width.
     // nullopt when the stroke is too detailed or the kernel was cancelled (`cancelled` says which).
@@ -622,6 +765,15 @@ ValueUtilityOutcome pathStroke(const ValueUtilityInvocation& invocation) {
                 return std::nullopt;
             }
             addStamp(polygons, placed, style.width, stampShape);
+            if (polygons.size() > kMaximumPolygons)
+                return std::nullopt;
+        }
+        for (const auto& dot : capDots) {
+            if (support::stopRequested(invocation)) {
+                cancelled = true;
+                return std::nullopt;
+            }
+            addStamp(polygons, dot, style.width, capShape);
             if (polygons.size() > kMaximumPolygons)
                 return std::nullopt;
         }
