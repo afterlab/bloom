@@ -742,6 +742,24 @@ int run(const int argc, char** argv) {
                                     after.cpuFallbacks == before.cpuFallbacks,
                                 "rooted resident request admits real GPU work with no speculative "
                                 "scheduler pixel claim");
+            // #758 cold race, forced: the scheduler's request bytes are already held, as by the
+            // frames still in flight when a cold Viewer asks for its next one. The rooted Viewer
+            // frame is still admitted on the GPU route: no admission refusal, no CPU fallback.
+            const auto viewerBefore = rootedService.status().counters;
+            auto viewerFrame = rootedService.submit(
+                TaskRequest("cold viewer frame", owner, bloom::runtime::TaskPriority::Interactive,
+                            bloom::runtime::TaskExecutor::Gpu),
+                snapshot, makeIdentity(*neutralPlan, 2, {}, {}, ViewAdjust{}), kBudget, {});
+            const auto viewerResult = awaitResult(viewerFrame.handle, 60s);
+            std::shared_ptr<const bloom::runtime::PreparedPreviewFrame> viewerShown;
+            const auto viewerAfter = rootedService.status().counters;
+            expectations.expect(
+                viewerFrame.status == TaskSubmissionStatus::Accepted &&
+                    isResidentPrepared(viewerResult, 2, viewerShown) &&
+                    viewerAfter.gpuAdmissionRefusals == viewerBefore.gpuAdmissionRefusals &&
+                    viewerAfter.cpuFallbacks == viewerBefore.cpuFallbacks,
+                "a rooted Viewer frame behind held request bytes is admitted on the "
+                "GPU route");
         }
         rootedService.beginShutdown();
         expectations.expect(waitUntil(
