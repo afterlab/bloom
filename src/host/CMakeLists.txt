@@ -436,7 +436,10 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_queue_service_test
                        LABELS unit host media output TIMEOUT 300)
 
-        add_executable(bloom_host_export_audio_formats_test tests/export_audio_formats_tests.cpp)
+        # Under tests/integration: its independent probe of the written file reads it with the media
+        # decoder, which src/host may not depend on.
+        add_executable(bloom_host_export_audio_formats_test
+                       "${PROJECT_SOURCE_DIR}/tests/integration/export_audio_formats_tests.cpp")
         target_include_directories(bloom_host_export_audio_formats_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
                                                                            bloom_commands
