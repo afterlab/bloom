@@ -154,6 +154,7 @@ This is the first alpha. Expect rough edges, and keep copies of projects that ma
   Windows installer, so `bloom-cli` works from a terminal.
 - A new application icon and new pictures for the macOS disk image and the Windows installer.
 
-[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.2...HEAD
+[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.3...HEAD
+[0.1.0-alpha.3]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.1
