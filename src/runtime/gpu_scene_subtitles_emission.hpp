@@ -19,6 +19,7 @@
 #include "text_styled_frame.hpp"
 
 #include <bloom/render/image.hpp>
+#include <bloom/render/painted_coverage.hpp>
 #include <bloom/runtime/gpu_scene_coverage_cache.hpp>
 #include <bloom/runtime/prepared_gpu_scene.hpp>
 
@@ -106,6 +107,93 @@ template <typename Geometry, typename Emit, typename Charge, typename ChargeCove
     const bool folded = alwaysMerge || frame.layers.size() > 1;
     // A lone layer carries the opacity in its own command, as a Text coverage does.
     const float commandOpacity = folded ? 1.0F : static_cast<float>(opacity);
+    // The layer opacity after the fold, as the CPU reference fades the composited row.
+    const auto fade = [&]() -> std::optional<GpuSceneLeafFailure> {
+        if (opacity == 1.0)
+            return std::nullopt;
+        if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
+            return error;
+        OperationKey key;
+        key.add(std::string{"gpu-translation-opacity-v1"});
+        key.add(semanticKey);
+        key.add(0.0);
+        key.add(0.0);
+        key.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity)));
+        addWindowToKey(key, window);
+        addWindowToKey(key, window);
+        addPixelAspectToKey(key, fullPixelAspect);
+        key.add(std::string{kGpuTranslationOpacitySpirvSha256});
+        semanticKey = key.digest();
+        composed = emit(GpuSceneTranslationCommand{.sourceOperation = operationIndex,
+                                                   .input = composed,
+                                                   .sourceWindow = window,
+                                                   .outputWindow = window,
+                                                   .translationX = 0.0,
+                                                   .translationY = 0.0,
+                                                   .opacity = static_cast<float>(opacity),
+                                                   .semanticKey = semanticKey});
+        return std::nullopt;
+    };
+    if (frame.painted) {
+        // #758: every layer's coverage resolved on the host as usual, then all of them drawn by one
+        // PaintedCoverageV1 command, each in its own paint, folded in drawing order.
+        std::vector<std::shared_ptr<const render::PathRasterCoverageGeometry>> geometries;
+        std::vector<render::PaintedCoverageLayer> layers;
+        geometries.reserve(frame.layers.size());
+        layers.reserve(frame.layers.size());
+        OperationKey pixelKey;
+        pixelKey.add(std::string{"gpu-painted-coverage-v1"});
+        OperationKey geometryKey;
+        geometryKey.add(std::string{"gpu-painted-coverage-geometry-v1"});
+        for (std::size_t layerIndex = 0; layerIndex < frame.layers.size(); ++layerIndex) {
+            const auto& layer = frame.layers[layerIndex];
+            std::shared_ptr<const render::PathRasterCoverageGeometry> geometry;
+            std::string layerKey;
+            if (const auto error = geometryOf(layerIndex, layer, geometry, layerKey))
+                return error;
+            geometryKey.add(layerKey);
+            pixelKey.add(layerKey);
+            pixelKey.add(std::bit_cast<std::uint32_t>(layer.pixel.red()));
+            pixelKey.add(std::bit_cast<std::uint32_t>(layer.pixel.green()));
+            pixelKey.add(std::bit_cast<std::uint32_t>(layer.pixel.blue()));
+            pixelKey.add(std::bit_cast<std::uint32_t>(layer.pixel.alpha()));
+            layers.push_back({geometry.get(), layer.pixel});
+            geometries.push_back(std::move(geometry));
+        }
+        if (layers.empty())
+            return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
+                        "A drawn Subtitles frame has no layer");
+        auto painted = render::paintCoverageLayers(layers);
+        if (!painted)
+            return fail(PreparedGpuSceneDiagnosticCode::InvalidPlan,
+                        "The painted text coverage is invalid");
+        if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
+            return error;
+        addWindowToKey(pixelKey, window);
+        addWindowToKey(pixelKey, fullDisplayWindow);
+        addPixelAspectToKey(pixelKey, fullPixelAspect);
+        pixelKey.add(std::string{kGpuSolidPaintedSpirvSha256});
+        GpuSceneCoverageSolidCommand command{
+            .index = kInvalidGpuSceneCommand,
+            .sourceOperation = operationIndex,
+            .pixel = render::Rgba32f::transparent(),
+            .opacity = 1.0F,
+            .geometry = nullptr,
+            .coverage = nullptr,
+            .palette = nullptr,
+            .painted = std::make_shared<const render::PathPaintedCoverage>(
+                std::move(*painted.value())),
+            .outputWindow = window,
+            .displayWindow = fullDisplayWindow,
+            .pixelAspect = fullPixelAspect,
+            .geometryKey = geometryKey.digest(),
+            .semanticKey = pixelKey.digest()};
+        if (const auto error = chargeCoverage(command))
+            return error;
+        semanticKey = command.semanticKey;
+        composed = emit(std::move(command));
+        return fade();
+    }
     std::vector<GpuSceneCommandIndex> foregrounds;
     OperationKey mergeKey;
     mergeKey.add(std::string{"gpu-source-over-chain-v1"});
@@ -132,6 +220,7 @@ template <typename Geometry, typename Emit, typename Charge, typename ChargeCove
                                              .geometry = std::move(geometry),
                                              .coverage = nullptr,
                                              .palette = nullptr,
+                                             .painted = nullptr,
                                              .outputWindow = window,
                                              .displayWindow = fullDisplayWindow,
                                              .pixelAspect = fullPixelAspect,
@@ -164,31 +253,7 @@ template <typename Geometry, typename Emit, typename Charge, typename ChargeCove
                                .pixelAspect = fullPixelAspect,
                                .semanticKey = semanticKey};
     composed = emit(std::move(merge));
-    if (opacity == 1.0)
-        return std::nullopt;
-    // The layer opacity after the fold, as the CPU reference fades the composited row.
-    if (const auto error = charge(width, height, sizeof(render::Rgba32f)))
-        return error;
-    OperationKey key;
-    key.add(std::string{"gpu-translation-opacity-v1"});
-    key.add(semanticKey);
-    key.add(0.0);
-    key.add(0.0);
-    key.add(std::bit_cast<std::uint32_t>(static_cast<float>(opacity)));
-    addWindowToKey(key, window);
-    addWindowToKey(key, window);
-    addPixelAspectToKey(key, fullPixelAspect);
-    key.add(std::string{kGpuTranslationOpacitySpirvSha256});
-    semanticKey = key.digest();
-    composed = emit(GpuSceneTranslationCommand{.sourceOperation = operationIndex,
-                                               .input = composed,
-                                               .sourceWindow = window,
-                                               .outputWindow = window,
-                                               .translationX = 0.0,
-                                               .translationY = 0.0,
-                                               .opacity = static_cast<float>(opacity),
-                                               .semanticKey = semanticKey});
-    return std::nullopt;
+    return fade();
 }
 
 // The node's own image (the CPU reference's leaf): the layers rasterized at the frame over the

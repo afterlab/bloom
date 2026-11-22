@@ -65,6 +65,9 @@ fail(const PreparedGpuSceneDiagnosticCode code, std::string message) {
 // O(rows) geometry while a complex one can exceed its R8 mask.
 [[nodiscard]] inline std::uint64_t
 gpuSceneCoverageHostBytes(const GpuSceneCoverageSolidCommand& command) noexcept {
+    if (command.painted != nullptr) {
+        return command.painted->bytes();
+    }
     if (command.geometry != nullptr) {
         return static_cast<std::uint64_t>(command.geometry->rows.size()) *
                    sizeof(render::PathRasterCoverageRange) +

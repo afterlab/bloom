@@ -72,6 +72,10 @@ struct SubtitlesFrame final {
     std::string contentKey;
     std::vector<SubtitlesPlacedCue> cues;
     std::size_t glyphs = 0;
+    // #758: the layers are an animated text's per-cluster paints (render/painted_coverage.hpp):
+    // the GPU draws all of them in one PaintedCoverageV1 pass, however many colors, opacities and
+    // outline widths the clusters have. The CPU reference folds them layer by layer, the same pixels.
+    bool painted = false;
 };
 
 enum class SubtitlesFailureKind : std::uint8_t { Invalid, Budget, Cancelled };

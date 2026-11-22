@@ -17,7 +17,9 @@
 // - Subtitles progress drives a reveal, its text the Text Source and its index a selector;
 // - the cache identity: unanimated text keeps its identity, a later frame of a still animator
 //   reuses its image, an inactive value keeps the identity and an active one changes it;
-// - the budget refusals (glyph and layer limits), cancellation, and save and reopen;
+// - the glyph budget refusal, cancellation, and save and reopen;
+// - a 2,000-character text whose every character has its own fill color and opacity (a smooth
+//   ramp) draws, with no layer limit, and the GPU draws all its paints in one coverage pass;
 // - an animator fed by something other than a Text Source warns and passes its input through.
 //
 // Then every state is prepared by the production CpuGpuSceneBuilder, run by the production
@@ -47,12 +49,14 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <numeric>
+#include <set>
 #include <thread>
 
 namespace {
@@ -1024,17 +1028,6 @@ void budgetAndCancelTests(Expectations& expectations) {
         made->addAnimator();
         refusedOnBothRoutes(expectations, *made, "past the glyph limit", "at most 8192");
     }
-    {
-        // A ramp of fill colors over 300 glyphs: a color per glyph, past the layer limit.
-        auto made = fixture(std::string(300, 'i'), 8.0);
-        made->setText("box", document::Vec2d{480.0, 260.0});
-        made->setText("wrap", true);
-        made->addAnimator();
-        made->setAnimator("fill", true);
-        made->setAnimator("fillColor", core::Color4d{1.0, 0.0, 0.0, 1.0});
-        made->setAnimator("selector1Shape", std::int64_t{document::kTextShapeRampUp});
-        refusedOnBothRoutes(expectations, *made, "past the layer limit", "at most 256");
-    }
     auto small = fixture("Cancel me");
     small->addAnimator();
     small->setAnimator("rotation", 15.0);
@@ -1051,6 +1044,78 @@ void budgetAndCancelTests(Expectations& expectations) {
                                     runtime::PreparedGpuSceneDiagnosticCode::Cancelled,
                             "a cancelled GPU preparation is cancelled");
     }
+}
+
+// #758: per-cluster paint does not split the coverage pass. A 2,000-character wrapped text with a
+// smooth selector ramping both the fill color and the opacity gives every drawn character its own
+// color and opacity (far past the 256 layers the animator once refused); it draws on the CPU, and
+// its GPU scene holds one painted coverage command for all of them.
+[[nodiscard]] std::unique_ptr<Fixture> paintedFixture() {
+    std::string text;
+    while (text.size() < 2000)
+        text += "Animated text ";
+    text.resize(2000);
+    auto made = fixture(std::move(text), 8.0);
+    made->setText("box", document::Vec2d{480.0, 260.0});
+    made->setText("wrap", true);
+    made->addAnimator();
+    made->setAnimator("fill", true);
+    made->setAnimator("fillColor", core::Color4d{1.0, 0.0, 0.0, 1.0});
+    made->setAnimator("opacity", 0.1);
+    made->setAnimator("selector1Shape", std::int64_t{document::kTextShapeSmooth});
+    return made;
+}
+
+void paintedTests(Expectations& expectations, References& gpu,
+                  std::optional<Reference>& painted) {
+    auto made = paintedFixture();
+    painted = referenceAt(expectations, *made, frameTime(0), "painted 2000");
+    if (!painted)
+        return;
+    const auto prepared = runtime::CpuGpuSceneBuilder{}.build(painted->plan, painted->request);
+    expectations.expect(prepared.hasValue(),
+                        "painted 2000: the GPU scene prepares: " + prepared.diagnostic.message);
+    if (!prepared)
+        return;
+    std::size_t paintedCommands = 0;
+    std::size_t paints = 0;
+    std::size_t coverageCommands = 0;
+    for (const auto& command : prepared.scene->commands())
+        if (const auto* covered = std::get_if<runtime::GpuSceneCoverageSolidCommand>(&command)) {
+            ++coverageCommands;
+            if (covered->painted != nullptr) {
+                ++paintedCommands;
+                paints += covered->painted->paints();
+            }
+        }
+    expectations.expect(paintedCommands == 1 && coverageCommands == 1 && paints > 256,
+                        "painted 2000: one painted coverage command draws all " +
+                            std::to_string(paints) + " paints (" +
+                            std::to_string(coverageCommands) + " coverage commands)");
+    gpu.emplace_back("painted 2000", *painted);
+}
+
+// The pass count on the device: the cold run of the painted text dispatches exactly one painted
+// coverage pass and no per-layer path coverage, and matches the CPU reference.
+void paintedPassCount(Expectations& expectations, runtime::GpuSceneExecutor& executor,
+                      const Reference& reference) {
+    const auto prepared = runtime::CpuGpuSceneBuilder{}.build(reference.plan, reference.request);
+    expectations.expect(prepared.hasValue(), "painted 2000: prepares for the device");
+    if (!prepared)
+        return;
+    const auto before = executor.counters();
+    const auto pixels = runScene(executor, prepared.scene);
+    const auto after = executor.counters();
+    expectations.expect(parity(pixels, reference.frame->processImage().pixels()),
+                        "painted 2000: GPU pixels match the CPU oracle (2e-6)");
+    const auto passes = after.paintedCoverageDispatches - before.paintedCoverageDispatches;
+    const auto layerPasses = after.coverageDispatches - before.coverageDispatches;
+    const auto dispatches = after.dispatches - before.dispatches;
+    expectations.expect(passes == 1 && layerPasses == 0,
+                        "painted 2000: one coverage pass on the device (" + std::to_string(passes) +
+                            " painted, " + std::to_string(layerPasses) + " per-layer)");
+    std::cout << "painted 2000: every paint drawn in " << passes << " coverage pass ("
+              << dispatches << " dispatches for the frame)\n";
 }
 
 [[nodiscard]] project::ProjectIoOperationMemory memory() {
@@ -1144,6 +1209,8 @@ int main(int argc, char** argv) {
         subtitlesTests(expectations, references);
         cacheTests(expectations);
         budgetAndCancelTests(expectations);
+        std::optional<Reference> painted;
+        paintedTests(expectations, references, painted);
         persistenceTests(expectations, references);
         diagnosticTests(expectations);
         if (expectations.failures() != 0) {
@@ -1173,6 +1240,8 @@ int main(int argc, char** argv) {
         expectations.expect(executor.hasValue(), "the scene executor creates");
         if (!executor)
             return 1;
+        if (painted)
+            paintedPassCount(expectations, *executor.executor, *painted);
         for (const auto& [label, reference] : references)
             gpuParity(expectations, *executor.executor, reference, label);
         if (expectations.failures() != 0) {

@@ -824,12 +824,9 @@ prepareStyledTextFrame(const CompiledText& text, const CompiledCompositionPlan& 
                                     std::move(*message)};
         }
         auto& layers = std::get<std::vector<AnimatedTextLayer>>(animated);
-        if (layers.size() + (boxes.empty() ? 0U : 1U) > kStyledTextLayerLimit)
-            return SubtitlesFailure{SubtitlesFailureKind::Budget,
-                                    "The animated text draws " +
-                                        std::to_string(layers.size() + (boxes.empty() ? 0U : 1U)) +
-                                        " layers (colors, outlines, cursors); at most " +
-                                        std::to_string(kStyledTextLayerLimit) + " may"};
+        // #758: the layers are per-cluster paints, drawn by one painted coverage pass however
+        // many there are; only the glyph limit bounds them.
+        frame.painted = true;
         if (!addLayer(boxes, {}, background))
             return failed("The text background could not be built");
         for (auto& layer : layers)

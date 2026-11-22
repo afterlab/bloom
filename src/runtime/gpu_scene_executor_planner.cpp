@@ -133,7 +133,11 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
     if (const auto* covered = std::get_if<GpuSceneCoverageSolidCommand>(&command)) {
         std::uint64_t bytes = 0;
         if (!checkedImageBytes(covered->outputWindow, bytes) ||
-            (covered->geometry == nullptr && covered->coverage == nullptr) ||
+            (covered->geometry == nullptr && covered->coverage == nullptr &&
+             covered->painted == nullptr) ||
+            (covered->painted != nullptr &&
+             (covered->geometry != nullptr || covered->coverage != nullptr ||
+              covered->palette != nullptr)) ||
             (covered->palette != nullptr &&
              (covered->coverage == nullptr || covered->geometry != nullptr ||
               covered->palette->empty() || covered->palette->size() > 256))) {
@@ -146,7 +150,15 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         const std::uint64_t height =
             static_cast<std::uint64_t>(covered->outputWindow.extent().height());
         const std::uint64_t expected = width * height;
-        if (covered->geometry != nullptr) {
+        if (covered->painted != nullptr) {
+            const auto& painted = *covered->painted;
+            if (painted.width != width || painted.height != height ||
+                painted.rows.size() != height * 4ULL || painted.paints() == 0) {
+                color[index] = 2;
+                return makeDiagnostic(GpuSceneExecutorDiagnosticCode::MalformedDescriptor,
+                                      "a painted coverage does not match its window");
+            }
+        } else if (covered->geometry != nullptr) {
             const auto& geometry = *covered->geometry;
             if (geometry.width != width || geometry.height != height ||
                 geometry.rows.size() != height * 4ULL) {
@@ -178,6 +190,7 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::planCommand(const GpuSceneCom
         step.coverageGeometry = covered->geometry;
         step.hostCoverage = covered->coverage;
         step.hostPalette = covered->palette;
+        step.paintedCoverage = covered->painted;
         step.coveredOpacity = covered->opacity;
         steps.push_back(std::move(step));
         color[index] = 2;

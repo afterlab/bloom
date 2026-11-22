@@ -137,6 +137,10 @@ struct GpuSceneExecutorCounters final {
     // rasterized on the device (not a host mask). A warm scene whose covered output is cached runs
     // zero of these.
     std::uint64_t coverageDispatches = 0;
+    // #758: native PaintedCoverageV1 begin() calls, each drawing every painted layer of a frame (an
+    // animated text's per-cluster colors and opacities) in one pass. Also counted as covered solid
+    // dispatches.
+    std::uint64_t paintedCoverageDispatches = 0;
     std::uint64_t translationDispatches = 0;
     std::uint64_t sourceOverDispatches = 0;
     // Distinct from the composite counters above: an affine placement (GpuAffine) and an explicit

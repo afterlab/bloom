@@ -2,6 +2,7 @@
 
 #include <bloom/core/telemetry_counters.hpp>
 #include <bloom/render/gpu_path_coverage.hpp>
+#include <bloom/render/painted_coverage.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -99,8 +100,8 @@ GpuSceneExecutorDiagnostic GpuSceneExecutor::Impl::ensurePathCoverage() {
 }
 
 // Dispatches one covered step. A PathRaster vector source begins the native GpuPathCoverage
-// producer (PathCoverage); the integer-grid FreeType text leaf begins the ordinary host-bitmap
-// covered fill (Solid). The windowing/pixel/opacity fields are shared.
+// producer (PathCoverage); a painted coverage (#758) begins PaintedCoverageV1 (Solid); the
+// integer-grid FreeType text leaf begins the ordinary host-bitmap covered fill (Solid). The windowing/pixel/opacity fields are shared.
 GpuSceneExecutorDiagnostic
 GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
     if (!step.solidDataWindow.has_value() || !step.solidDisplayWindow.has_value()) {
@@ -110,6 +111,18 @@ GpuSceneExecutor::Impl::startCoveredStep(const GpuSceneExecutorStep& step) {
     const std::uint64_t remaining = remainingBudget();
     const render::GpuSolidParameters parameters{step.solidPixel, *step.solidDataWindow,
                                                 *step.solidDisplayWindow, step.solidPixelAspect};
+    if (step.paintedCoverage != nullptr) {
+        // #758: PaintedCoverageV1 rasterizes every painted layer's spans on the device and folds
+        // them in one dispatch; the host resolved only the spans and the 17 pixels of each paint.
+        const auto native = solid->beginPainted(parameters, *step.paintedCoverage, remaining);
+        if (native.code != render::GpuSolidDiagnosticCode::None) {
+            return diagnosticFromSolid(native);
+        }
+        ++counters.coveredSolidDispatches;
+        ++counters.paintedCoverageDispatches;
+        nativeKind = NativeKind::Solid;
+        return {};
+    }
     if (step.coverageGeometry != nullptr) {
         if (const auto error = ensurePathCoverage();
             error.code != GpuSceneExecutorDiagnosticCode::None) {

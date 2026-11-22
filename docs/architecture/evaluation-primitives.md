@@ -789,8 +789,15 @@ baseline center: K leans the top right for a positive skew, S scales, R turns cl
 for a positive angle. A cluster whose values are neutral is not transformed, so a neutral animator
 draws the Text Source's own styled pixels. The clusters are grouped into `SubtitlesLayer`s by
 outline width and straight color (opacity folded into alpha): outlines first, then fills, then each
-cursor. At most 256 layers are drawn; more fails the node naming the limit, as the 8,192-glyph
-limit does. The frame's bounds and pivot come from the still layout's ink, so a reveal or a moving
+cursor. These layers are per-cluster paint, not passes: the frame is marked painted, and the GPU
+draws all of its layers (the box too) in one `PaintedCoverageV1` pass
+(`render/painted_coverage.hpp`). The host resolves each layer's coverage spans as usual and
+concatenates them per sub-scanline, every span tagged by its layer's paint, with each paint's 17
+possible pixels (one per number of covered samples of the 4 x 4 grid, from `coverageSolidRow`);
+the shader counts each paint's samples per pixel and folds the paints source-over in drawing order
+with the SourceOverV1 arithmetic. That is the CPU reference's layer-by-layer fold, which only visits
+the rows and columns each layer's bounds reach. So the pass count does not depend on how many
+colors, opacities or outline widths the clusters have, and only the 8,192-glyph limit refuses. The frame's bounds and pivot come from the still layout's ink, so a reveal or a moving
 letter never shifts the layer; its window covers the animated ink.
 
 The frame key adds every resolved selector and property value, the reveal and whether each cursor

@@ -101,6 +101,8 @@ struct GpuSceneExecutorStep final {
     std::shared_ptr<const std::vector<std::uint8_t>> hostCoverage;
     // Set with `hostCoverage` when its bytes index these exact pixels (#641).
     std::shared_ptr<const std::vector<render::Rgba32f>> hostPalette;
+    // #758: or a painted coverage, every layer drawn by one PaintedCoverageV1 dispatch.
+    std::shared_ptr<const render::PathPaintedCoverage> paintedCoverage;
     float coveredOpacity = 1.0F;
     // Upload source: the strong immutable CPU source the converted pixels came from. It is retained
     // for the job lifetime so the staging copy and any unretired submission keep their source

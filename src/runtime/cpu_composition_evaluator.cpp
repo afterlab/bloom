@@ -2290,6 +2290,70 @@ std::optional<core::RationalTime> mapAudioClipTime(const AudioClipDescription& c
 }
 
 namespace {
+// #758: the frame layers' fold for one row (subtitles_frame.hpp): each layer's coverage of its
+// pixel source-over the layers before it, in order, exactly as coverageRow, coverageSolidRow and
+// sourceOverLinearRec709SceneRow give it. A layer only touches the rows and columns its raster's
+// bounds reach (with a pixel of margin): outside them its coverage is zero, a transparent pixel
+// that source-over skips, so no pixel changes, and a text of many small layers (an animated text's
+// per-cluster paints) costs its glyphs rather than the row's width for every layer.
+struct FoldLayer final {
+    const render::PathRaster* raster = nullptr;
+    bool stroke = false;
+    render::Rgba32f pixel = render::Rgba32f::transparent();
+    render::PathBounds bounds{};
+};
+enum class FoldOutcome : std::uint8_t { Done, Cancelled, FillFailed, CompositeFailed };
+
+[[nodiscard]] FoldLayer foldLayer(const render::PathRaster& raster, const bool stroke,
+                                  const render::Rgba32f pixel) noexcept {
+    return {&raster, stroke, pixel, raster.pixelBounds(!stroke, stroke)};
+}
+
+[[nodiscard]] FoldOutcome foldLayersRow(const std::span<const FoldLayer> layers,
+                                        const std::int64_t originX, const std::int64_t y,
+                                        const std::span<render::Rgba32f> pixels,
+                                        const render::PathCancellation& cancel,
+                                        std::optional<render::ImageError>& error) {
+    const auto width = static_cast<double>(pixels.size());
+    const auto row = static_cast<double>(y);
+    const auto left0 = static_cast<double>(originX);
+    std::vector<std::uint8_t> coverage;
+    std::vector<render::Rgba32f> layer;
+    for (const auto& entry : layers) {
+        const auto& b = entry.bounds;
+        double first = 0.0;
+        double last = width;
+        if (std::isfinite(b.left) && std::isfinite(b.top) && std::isfinite(b.right) &&
+            std::isfinite(b.bottom)) {
+            if (row + 1.0 <= std::floor(b.top) - 1.0 || row >= std::ceil(b.bottom) + 1.0)
+                continue;
+            first = std::clamp(std::floor(b.left) - 1.0 - left0, 0.0, width);
+            last = std::clamp(std::ceil(b.right) + 1.0 - left0, 0.0, width);
+        }
+        if (!(last > first))
+            continue;
+        const auto offset = static_cast<std::size_t>(first);
+        const auto count = static_cast<std::size_t>(last) - offset;
+        coverage.assign(count, std::uint8_t{0});
+        layer.assign(count, render::Rgba32f::transparent());
+        if (!entry.raster->coverageRow(originX + static_cast<std::int64_t>(offset), y, coverage,
+                                       render::PathFillRule::NonZero, entry.stroke, cancel))
+            return FoldOutcome::Cancelled;
+        if (const auto failed = render::coverageSolidRow(coverage, entry.pixel, layer)) {
+            error = *failed;
+            return FoldOutcome::FillFailed;
+        }
+        if (const auto failed =
+                render::sourceOverLinearRec709SceneRow(layer, pixels.subspan(offset, count))) {
+            error = *failed;
+            return FoldOutcome::CompositeFailed;
+        }
+    }
+    return FoldOutcome::Done;
+}
+} // namespace
+
+namespace {
 [[nodiscard]] std::string_view audioEffectNodeType(const AudioEffectKind kind) noexcept {
     switch (kind) {
     case AudioEffectKind::Equalizer:
@@ -4185,41 +4249,40 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     const auto data = descriptor.dataWindow();
                     reportRowPassStarted(progress, operationIndex, data.extent().height());
                     auto& image = *builder.value();
-                    const auto width = static_cast<std::size_t>(data.extent().width());
+                    std::vector<FoldLayer> folds;
+                    folds.reserve(frame.layers.size());
+                    for (const auto& entry : frame.layers)
+                        folds.push_back(foldLayer(*entry.raster, entry.stroke, entry.pixel));
                     const auto outcome = runRowBandPass(
                         rowBands, cancellation, data.extent().height(), data.originY(),
-                        [&image, &frame, data, width, &operationSubject, &cancellation,
+                        [&image, &folds, data, &operationSubject, &cancellation,
                          what](const std::int64_t y) -> RowFailure {
                             auto row = image.row(y);
                             if (!row)
                                 return imageDiagnostic(*row.error(), operationSubject,
                                                        std::string(what) +
                                                            " row could not be addressed");
-                            std::vector<std::uint8_t> coverage(width);
-                            std::vector<render::Rgba32f> layer(width,
-                                                               render::Rgba32f::transparent());
                             std::fill(row.value()->begin(), row.value()->end(),
                                       render::Rgba32f::transparent());
-                            const auto cancel = [&cancellation] {
+                            const render::PathCancellation cancel = [&cancellation] {
                                 return cancellation.isCancellationRequested();
                             };
-                            for (const auto& entry : frame.layers) {
-                                std::fill(coverage.begin(), coverage.end(), std::uint8_t{0});
-                                if (!entry.raster->coverageRow(data.originX(), y, coverage,
-                                                               render::PathFillRule::NonZero,
-                                                               entry.stroke, cancel))
-                                    return std::nullopt;
-                                if (render::coverageSolidRow(coverage, entry.pixel, layer))
-                                    return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
-                                                      std::string(what) + " coverage is invalid",
-                                                      {}, operationSubject);
-                                if (render::sourceOverLinearRec709SceneRow(layer, *row.value()))
-                                    return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
-                                                      std::string(what) +
-                                                          " layers do not composite",
-                                                      {}, operationSubject);
+                            std::optional<render::ImageError> error;
+                            switch (foldLayersRow(folds, data.originX(), y, *row.value(), cancel,
+                                                  error)) {
+                            case FoldOutcome::Done:
+                            case FoldOutcome::Cancelled:
+                                return std::nullopt;
+                            case FoldOutcome::FillFailed:
+                                return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
+                                                  std::string(what) + " coverage is invalid", {},
+                                                  operationSubject);
+                            case FoldOutcome::CompositeFailed:
+                                break;
                             }
-                            return std::nullopt;
+                            return diagnostic(EvaluationDiagnosticCode::InvalidPixel,
+                                              std::string(what) + " layers do not composite", {},
+                                              operationSubject);
                         });
                     if (outcome.cancelled || cancellation.isCancellationRequested()) {
                         operationCancelled = true;
@@ -5664,6 +5727,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 }
                             }
                             const bool vectorDrawn = vectorRaster || !vectorLayers.empty();
+                            std::vector<FoldLayer> vectorFolds;
+                            vectorFolds.reserve(vectorLayers.size());
+                            for (const auto& entry : vectorLayers)
+                                vectorFolds.push_back(
+                                    foldLayer(entry.raster, entry.stroke, entry.pixel));
                             const auto vectorScratch =
                                 vectorDrawn
                                     ? static_cast<std::uint64_t>(layerWindow->extent().width()) *
@@ -5737,7 +5805,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 rowBands, cancellation, height, outputWindow.originY(),
                                 [&image, &source, &layerTransform, resample, outputWindow,
                                  resampleLattice, levels, &operationSubject, &vectorRaster,
-                                 &vectorLayers, vectorFill, vectorStroke, vectorHasFill,
+                                 &vectorLayers, &vectorFolds, vectorFill, vectorStroke,
+                                 vectorHasFill,
                                  vectorHasStroke, vectorRule, vectorOpacity,
                                  &cancellation](const std::int64_t y) -> RowFailure {
                                     auto outputRow = image.row(y);
@@ -5751,32 +5820,25 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         // coverage of its color over the ones before, then the
                                         // layer's opacity, as the leaf folds them at the frame.
                                         auto pixels = *outputRow.value();
-                                        std::vector<std::uint8_t> coverage(pixels.size());
-                                        std::vector<render::Rgba32f> layerPixels(
-                                            pixels.size(), render::Rgba32f::transparent());
                                         std::fill(pixels.begin(), pixels.end(),
                                                   render::Rgba32f::transparent());
-                                        const auto cancelled = [&] {
+                                        const render::PathCancellation cancelled = [&] {
                                             return cancellation.isCancellationRequested();
                                         };
-                                        for (const auto& entry : vectorLayers) {
-                                            std::fill(coverage.begin(), coverage.end(),
-                                                      std::uint8_t{0});
-                                            if (!entry.raster.coverageRow(
-                                                    outputWindow.originX(), y, coverage,
-                                                    render::PathFillRule::NonZero, entry.stroke,
-                                                    cancelled))
-                                                return std::nullopt;
-                                            if (const auto error = render::coverageSolidRow(
-                                                    coverage, entry.pixel, layerPixels))
-                                                return imageDiagnostic(*error, operationSubject,
-                                                                       "Subtitles fill failed");
-                                            if (const auto error =
-                                                    render::sourceOverLinearRec709SceneRow(
-                                                        layerPixels, pixels))
-                                                return imageDiagnostic(
-                                                    *error, operationSubject,
-                                                    "Subtitles layers do not composite");
+                                        std::optional<render::ImageError> error;
+                                        switch (foldLayersRow(vectorFolds, outputWindow.originX(),
+                                                              y, pixels, cancelled, error)) {
+                                        case FoldOutcome::Done:
+                                            break;
+                                        case FoldOutcome::Cancelled:
+                                            return std::nullopt;
+                                        case FoldOutcome::FillFailed:
+                                            return imageDiagnostic(*error, operationSubject,
+                                                                   "Subtitles fill failed");
+                                        case FoldOutcome::CompositeFailed:
+                                            return imageDiagnostic(
+                                                *error, operationSubject,
+                                                "Subtitles layers do not composite");
                                         }
                                         for (auto& value : pixels) {
                                             const auto faded = render::Rgba32f::fromPremultiplied(

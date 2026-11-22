@@ -250,6 +250,7 @@ emitSolidCommand(const CompiledSolid& solid, const CompiledCompositionPlan& plan
             .geometry = nullptr,
             .coverage = std::move(indices),
             .palette = std::move(palette),
+            .painted = nullptr,
             .outputWindow = solidWindow,
             .displayWindow = solidDisplay,
             .pixelAspect = solidAspect,

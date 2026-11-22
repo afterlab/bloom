@@ -40,6 +40,7 @@
 #include <bloom/render/gpu_operation_batch.hpp>
 #include <bloom/render/gpu_solid.hpp>
 #include <bloom/render/image_types.hpp>
+#include <bloom/render/painted_coverage.hpp>
 #include <bloom/render/path_raster.hpp>
 #include <bloom/runtime/cancellation.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -236,6 +237,10 @@ struct GpuSceneCoverageSolidCommand final {
     // Solid whose last column and row are partly covered at a proxy scale carries its interior,
     // right-edge, bottom-edge and corner pixels this way, each computed as the CPU computes it.
     std::shared_ptr<const std::vector<render::Rgba32f>> palette;
+    // #758: when set (and `geometry`, `coverage` and `palette` are not), PaintedCoverageV1 draws
+    // every layer of this host-resolved painted coverage in one pass, each in its own paint, and
+    // `pixel`/`opacity` take no part (render/painted_coverage.hpp).
+    std::shared_ptr<const render::PathPaintedCoverage> painted;
     render::ImageWindow outputWindow;
     render::ImageWindow displayWindow;
     core::PixelAspectRatio pixelAspect = core::PixelAspectRatio::square();
@@ -246,6 +251,8 @@ struct GpuSceneCoverageSolidCommand final {
 
     // The one coverage representation this command carries, for charge/identity accounting.
     [[nodiscard]] const void* coverageIdentity() const noexcept {
+        if (painted != nullptr)
+            return static_cast<const void*>(painted.get());
         return geometry != nullptr ? static_cast<const void*>(geometry.get())
                                    : static_cast<const void*>(coverage.get());
     }

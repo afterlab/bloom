@@ -30,9 +30,6 @@ namespace bloom::runtime::detail {
 
 // The most glyphs one styled text draws.
 inline constexpr std::size_t kStyledTextGlyphLimit = 8192;
-// #758: the most layers (distinct fill colors, outlines, the box and cursors) an animated text
-// draws in one frame.
-inline constexpr std::size_t kStyledTextLayerLimit = 256;
 
 // What the layout reads, resolved at the frame.
 struct StyledTextSourceInput final {

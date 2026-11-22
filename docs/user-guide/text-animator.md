@@ -77,6 +77,6 @@ Agents and scripts build the same recipes: `help {"name":"concept:text-animator"
 
 ## Limits
 
-An animated text draws at most 8,192 letters and 256 different colors and outline widths at once;
-past either, the node shows an error naming the limit. Editing a value only redraws the frames it
+An animated text draws at most 8,192 letters at once; past that, the node shows an error naming the
+limit. Every letter may have its own color, opacity and outline width. Editing a value only redraws the frames it
 changes, and a text with no animator draws as it always has.
