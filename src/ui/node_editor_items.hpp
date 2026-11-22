@@ -2563,7 +2563,13 @@ class NodeItem final : public QGraphicsObject {
         };
         for (const auto& row : valueRows_) {
             if ((row.widget == imageRange_ && !imageSequence_) || !rowShown(row.widget)) {
-                propertyRows_.at(row.widget)->graphicsProxyWidget()->hide();
+                // A hidden row still takes the card's label column and row size, so it never
+                // sits at its unlaid size (a wrapped two-line label) until it is shown.
+                auto* hidden = propertyRows_.at(row.widget);
+                hidden->setLabelWidth(static_cast<int>(labelColumn));
+                hidden->resize(static_cast<int>(std::floor(width_ - (kCardPadding + kCardPadding))),
+                               kit::px(kit::Size::PropertyRow));
+                hidden->graphicsProxyWidget()->hide();
                 continue;
             }
             placeRow(row.widget, y);
