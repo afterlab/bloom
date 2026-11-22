@@ -210,12 +210,16 @@ compile(Expectations& expectations, const Fixture& fixture, const std::string& l
 [[nodiscard]] std::optional<Reference>
 referenceOf(Expectations& expectations, const document::Document& document,
             const document::CompositionId main, const core::RationalTime time,
-            const std::string& label) {
+            const std::string& label, const std::optional<render::ImageWindow>& roi = {},
+            const std::optional<runtime::EvaluationResolution>& resolution = {}) {
     const auto plan = compileDocument(expectations, document, main, label);
     if (!plan)
         return std::nullopt;
     Reference reference{plan, requestFor(*plan), nullptr};
     reference.request.time = time;
+    reference.request.roi = roi;
+    if (resolution)
+        reference.request.resolution = *resolution;
     auto oracle = reference.request;
     oracle.bypassOperationCache = true;
     const auto result = runtime::CpuCompositionEvaluator{}.evaluate(plan, oracle, {});
@@ -230,11 +234,22 @@ referenceOf(Expectations& expectations, const document::Document& document,
     return reference;
 }
 
-[[nodiscard]] std::optional<Reference> referenceAt(Expectations& expectations,
-                                                   const Fixture& fixture,
-                                                   const core::RationalTime time,
-                                                   const std::string& label) {
-    return referenceOf(expectations, fixture.document, fixture.main, time, label);
+[[nodiscard]] std::optional<Reference>
+referenceAt(Expectations& expectations, const Fixture& fixture, const core::RationalTime time,
+            const std::string& label, const std::optional<render::ImageWindow>& roi = {},
+            const std::optional<runtime::EvaluationResolution>& resolution = {}) {
+    return referenceOf(expectations, fixture.document, fixture.main, time, label, roi, resolution);
+}
+
+[[nodiscard]] render::ImageWindow windowOf(const std::int64_t x, const std::int64_t y,
+                                           const std::uint64_t width, const std::uint64_t height) {
+    auto made = render::ImageWindow::create(x, y, width, height);
+    return *made.value();
+}
+
+[[nodiscard]] render::ImageExtent extentOf(const std::uint64_t width, const std::uint64_t height) {
+    auto made = render::ImageExtent::create(width, height);
+    return *made.value();
 }
 
 [[nodiscard]] render::Rgba32f pixelAt(const Reference& reference, const std::int64_t x,
@@ -600,6 +615,69 @@ void propertyTests(Expectations& expectations, References& gpu) {
                                 std::abs((box.right - still.right) - 27) <= 1,
                             "a centered line grows by its tracking on both sides");
         gpu.emplace_back("centered tracking", *tracked);
+    }
+}
+
+// The edges of the reference semantics: an animated text over an ROI and at a reduced render
+// scale (a proxy), a muted animator, an HDR fill color and an empty text, each on both routes.
+void edgeTests(Expectations& expectations, References& gpu) {
+    auto made = fixture("Animate me");
+    made->setText("fixedDigits", true);
+    const auto plain = referenceAt(expectations, *made, frameTime(0), "edge plain");
+    made->addAnimator();
+    made->setAnimator("selector1End", 50.0);
+    made->setAnimator("rotation", 20.0);
+    made->setAnimator("position", document::Vec2d{0.0, -20.0});
+    const auto full = referenceAt(expectations, *made, frameTime(0), "edge animated");
+    if (!plain || !full)
+        return;
+    const auto box = coverage(*full);
+    // An ROI over the turned half draws the full frame's pixels there.
+    if (auto roi = referenceAt(expectations, *made, frameTime(0), "animated ROI",
+                               windowOf(box.left, box.top, 120, 60))) {
+        expectations.expect(sameRegion(*full, *roi, box.left, box.top, box.left + 120, box.top + 60),
+                            "an ROI draws the animated pixels the full frame draws there");
+        gpu.emplace_back("animated ROI", *roi);
+    }
+    // A half-size frame draws the animated text at half size.
+    if (auto proxy = referenceAt(expectations, *made, frameTime(0), "animated proxy", std::nullopt,
+                                 runtime::ProxyResolution{extentOf(256, 144)})) {
+        const auto half = coverage(*proxy);
+        expectations.expect(!half.empty() &&
+                                std::abs((half.right - half.left) * 2 - (box.right - box.left)) <= 4,
+                            "a half-size frame draws the animated text at half size");
+        gpu.emplace_back("animated proxy", *proxy);
+    }
+    // A muted animator passes the text through: its own pixels and bounds.
+    execute<commands::SetNodeMuted>(made->document, made->commands, made->main,
+                                    made->animators.back(), true);
+    if (auto muted = referenceAt(expectations, *made, frameTime(0), "muted animator")) {
+        expectations.expect(samePicture(*plain, *muted) && textBounds(*plain) == textBounds(*muted),
+                            "a muted animator passes the text through untouched");
+        gpu.emplace_back("muted animator", *muted);
+    }
+    execute<commands::SetNodeMuted>(made->document, made->commands, made->main,
+                                    made->animators.back(), false);
+    // A fill color above 1 stays above 1 (HDR working values are not clamped).
+    made->setAnimator("fill", true);
+    made->setAnimator("fillColor", core::Color4d{4.0, 0.25, 0.0, 1.0});
+    if (auto hdr = referenceAt(expectations, *made, frameTime(0), "HDR fill")) {
+        float most = 0.0F;
+        for (std::int64_t y = 0; y < kHeight; ++y)
+            for (std::int64_t x = 0; x < kWidth; ++x)
+                most = std::max(most, pixelAt(*hdr, x, y).red());
+        expectations.expect(most > 3.9F, "an HDR fill color keeps its value above 1 (" +
+                                              std::to_string(most) + ")");
+        gpu.emplace_back("HDR fill", *hdr);
+    }
+    // An empty text with an animator draws nothing and evaluates without error.
+    auto empty = fixture("");
+    empty->addAnimator();
+    empty->setAnimator("opacity", 0.5);
+    if (auto none = referenceAt(expectations, *empty, frameTime(0), "empty text")) {
+        expectations.expect(coverage(*none).empty() && mostAlpha(*none) == 0.0F,
+                            "an animator on an empty text draws nothing");
+        gpu.emplace_back("empty text", *none);
     }
 }
 
@@ -1049,6 +1127,7 @@ int main(int argc, char** argv) {
         References references;
         arithmeticTests(expectations);
         propertyTests(expectations, references);
+        edgeTests(expectations, references);
         selectorTests(expectations, references);
         wordFadeTests(expectations, references);
         revealTests(expectations, references);

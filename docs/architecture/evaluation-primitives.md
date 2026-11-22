@@ -800,6 +800,12 @@ cursor blinks. The CPU reference and the GPU builder call the same preparation, 
 same layers as native path coverage with parity; cancellation is checked between animators and
 between clusters.
 
+The pixels are the Text Source's: premultiplied RGBA in the working space, with colors not clamped,
+so an HDR fill or outline color draws above 1 and opacity scales coverage. An ROI draws
+the full frame's pixels inside it, a reduced render scale (proxy) draws the same layout scaled with
+it, and the layout's pixel aspect and windows are the Text Source's. A muted animator is skipped,
+an empty text draws nothing, and a chain that reaches no Text Source passes its image through.
+
 ### Path coverage
 
 `src/render/path_raster.cpp` owns the Qt-free path reference primitive. Coordinates stay in
