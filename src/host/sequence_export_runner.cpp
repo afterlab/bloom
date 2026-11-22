@@ -590,6 +590,7 @@ struct detail::SequenceExportWorkV1 {
         outcome.evidence = std::move(evidence);
         outcome.loudness = loudnessReport;
         outcome.subtitles = qc.subtitles;
+        outcome.streams = qc.streams;
         outcome.toleranceProfile = media::provider::encodeToleranceName(settings());
         outcome.encoder = encoderToken(served);
         outcome.sourceRouting = std::move(sourceRouting);

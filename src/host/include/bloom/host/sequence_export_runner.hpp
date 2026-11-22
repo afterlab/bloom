@@ -246,6 +246,8 @@ struct SequenceExportResultV1 {
     // #752: the embedded tracks the reopened artifact holds (equal to the request's, or the output
     // failed verification).
     std::vector<media::provider::SubtitleTrackV1> subtitles;
+    // #761: the picture and sound streams the reopened file holds (EncodeQcV1::streams).
+    std::vector<media::provider::EncodedStreamV1> streams;
     [[nodiscard]] bool published() const noexcept { return publication.targetWasPublished(); }
 };
 // Authoring-thread driver. poll() never blocks: it composes the existing attempt/approval stages.

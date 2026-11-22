@@ -439,7 +439,8 @@ if(BUILD_TESTING)
         add_executable(bloom_host_export_audio_formats_test tests/export_audio_formats_tests.cpp)
         target_include_directories(bloom_host_export_audio_formats_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
         target_link_libraries(bloom_host_export_audio_formats_test PRIVATE bloom_host
-                                                                           bloom_commands)
+                                                                           bloom_commands
+                                                                           bloom_media_video)
         # The playback mixer reference the effect chain test compares its export with.
         target_include_directories(bloom_host_export_audio_formats_test PRIVATE
             "${PROJECT_SOURCE_DIR}/tests/support")
@@ -451,6 +452,11 @@ if(BUILD_TESTING)
         bloom_add_test(NAME bloom.host.export-audio-formats
                        COMMAND bloom_host_export_audio_formats_test
                        LABELS unit host media output TIMEOUT 600)
+        # #761: every built-in movie and WAV preset; skipped (77) where a preset cannot export.
+        bloom_add_test(NAME bloom.host.export-written-streams
+                       COMMAND bloom_host_export_audio_formats_test --written-streams
+                       LABELS unit host media output TIMEOUT 600
+                       SKIP_RETURN_CODE 77)
 
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)

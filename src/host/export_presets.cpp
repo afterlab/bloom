@@ -225,6 +225,92 @@ std::vector<BuiltIn> makeBuiltIns() {
 
 } // namespace
 
+ExportDeclaredCodecs exportDeclaredCodecs(const document::ExportOutputSettings& settings) {
+    ExportDeclaredCodecs out;
+    const auto& profile = settings.codecProfile;
+    switch (settings.format) {
+    case ExportFormat::ProResMov: {
+        out.container = "mov";
+        out.videoCodec = "prores";
+        const auto token = profile.empty() ? std::string("hq") : profile;
+        out.videoProfile = token == "proxy"    ? "Proxy"
+                           : token == "lt"     ? "LT"
+                           : token == "422"    ? "Standard"
+                           : token == "4444"   ? "4444"
+                           : token == "4444xq" ? "XQ"
+                                               : "HQ";
+        break;
+    }
+    case ExportFormat::DnxhrMxf: {
+        out.container = "mxf";
+        out.videoCodec = "dnxhd";
+        auto token = profile.empty() ? std::string("hq") : profile;
+        if (token.starts_with("dnxhr_"))
+            token = token.substr(6);
+        for (auto& c : token)
+            c = static_cast<char>(c >= 'a' && c <= 'z' ? c - 'a' + 'A' : c);
+        out.videoProfile = "DNXHR " + token;
+        break;
+    }
+    case ExportFormat::H264Mov:
+    case ExportFormat::H264Mp4:
+        out.container = settings.format == ExportFormat::H264Mp4 ? "mp4" : "mov";
+        out.videoCodec = "h264";
+        out.videoProfile = "High";
+        break;
+    case ExportFormat::HevcMov:
+    case ExportFormat::HevcMp4:
+        out.container = settings.format == ExportFormat::HevcMp4 ? "mp4" : "mov";
+        out.videoCodec = "hevc";
+        out.videoProfile = profile == "main10" ? "Main 10" : "Main";
+        break;
+    case ExportFormat::Vp9Webm:
+        out.container = "webm";
+        out.videoCodec = "vp9";
+        out.videoProfile = profile == "10bit" ? "Profile 2" : "Profile 0";
+        break;
+    case ExportFormat::Av1Webm:
+    case ExportFormat::Av1Mp4:
+        out.container = settings.format == ExportFormat::Av1Mp4 ? "mp4" : "webm";
+        out.videoCodec = "av1";
+        out.videoProfile = "Main";
+        break;
+    case ExportFormat::Wav:
+        out.container = "wav";
+        break;
+    default:
+        return out;
+    }
+    if (!settings.includeAudio && settings.format != ExportFormat::Wav) {
+        out.audioRule = "No audio";
+        return out;
+    }
+    if (out.container == "mp4") {
+        out.audioCodec = "aac";
+        out.audioProfile = "LC";
+        out.audioBitrateKbps = 192;
+        out.audioSampleRate = settings.audioSampleRate;
+        out.audioRule = "AAC-LC at 192 kb/s, at the output's sample rate";
+    } else if (out.container == "webm") {
+        out.audioCodec = "opus";
+        out.audioBitrateKbps = 192;
+        out.audioSampleRate = 48000;
+        out.audioRule = "Opus at 192 kb/s, always at 48 kHz (Opus is defined there)";
+    } else if (out.container == "wav") {
+        out.audioCodec = profile == "s16" ? "pcm_s16le" : "pcm_s24le";
+        out.audioSampleRate = settings.audioSampleRate;
+        out.audioRule = std::string(profile == "s16" ? "PCM 16-bit" : "PCM 24-bit") +
+                        ", at the output's sample rate";
+    } else {
+        out.audioCodec = "pcm_s16le";
+        out.audioSampleRate = settings.audioSampleRate;
+        out.pcmDeepensForDeeperSources = true;
+        out.audioRule = "PCM 16-bit, or 24-bit when an audio source is deeper, at the output's "
+                        "sample rate";
+    }
+    return out;
+}
+
 std::string_view exportFormatExtension(const ExportFormat format) noexcept {
     switch (format) {
     case ExportFormat::Png:

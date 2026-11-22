@@ -2260,6 +2260,23 @@ class MediaDriver final : public DriverBase {
         artifacts.publication = publicationOutcome(result.publication.outcome);
         report_.published.push_back(artifacts.firstPath);
         reportEmbeddedSubtitles(artifacts.firstPath, result.subtitles);
+        // #761: the streams the file holds, as the verifying reopen read them.
+        for (const auto& written : result.streams) {
+            ExportWrittenStream stream{
+                .kind = written.kind == media::provider::MediaKind::Audio ? ExportStreamKind::Audio
+                                                                          : ExportStreamKind::Video,
+                .codec = written.codec,
+                .profile = written.profile,
+                .width = written.width,
+                .height = written.height,
+                .frameRate = ExportRationalValue{written.rate.numerator, written.rate.denominator},
+                .channels = written.channels,
+                .sampleRate = written.sampleRate,
+                .bitrate = written.bitrate};
+            log(runtime::DiagnosticSeverity::Information, "export.stream",
+                "Written stream: " + exportWrittenStreamText(stream));
+            report_.verification.streams.push_back(std::move(stream));
+        }
         const auto expectedFrames = input_.range.last - input_.range.first + 1;
         if (result.evidence) {
             const auto& evidence = *result.evidence;

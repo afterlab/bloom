@@ -287,6 +287,35 @@ struct ExportPresetCatalogueOptions final {
 
 // The destination extension without the dot ("mp4", "exr", "tiff").
 [[nodiscard]] std::string_view exportFormatExtension(document::ExportFormat format) noexcept;
+
+// #761: what a movie or WAV output's file carries, stated before it is written. The codec tokens
+// and profile names are the ones the written streams read back with (ExportWrittenStream), so a
+// published file's streams equal these. Image formats carry no streams: `container` is empty.
+struct ExportDeclaredCodecs final {
+    // "mov", "mp4", "mxf", "webm" or "wav".
+    std::string container;
+    // "prores", "dnxhd", "h264", "hevc", "vp9" or "av1", with the profile as the codec names it
+    // ("HQ", "DNXHR HQ", "High", "Main 10", "Profile 0", "Main"); empty for WAV.
+    std::string videoCodec;
+    std::string videoProfile;
+    // "aac", "opus", "pcm_s16le" or "pcm_s24le", with the AAC profile ("LC"); empty when the output
+    // carries no audio.
+    std::string audioCodec;
+    std::string audioProfile;
+    // AAC and Opus: their bit rate in kb/s (192). Absent for PCM.
+    std::optional<std::uint32_t> audioBitrateKbps;
+    // The rate the audio is written at: 48000 for Opus (it is defined there) whatever the
+    // output's rate, otherwise the output's audioSampleRate. Zero without audio.
+    std::uint32_t audioSampleRate = 0;
+    // MOV and MXF write 16-bit PCM, and 24-bit PCM when an audio source is deeper than 16 bits:
+    // `audioCodec` is then "pcm_s16le" and this is true.
+    bool pcmDeepensForDeeperSources = false;
+    // One sentence for help and tooltips: "AAC-LC at 192 kb/s, at the output's sample rate".
+    std::string audioRule;
+    friend bool operator==(const ExportDeclaredCodecs&, const ExportDeclaredCodecs&) = default;
+};
+[[nodiscard]] ExportDeclaredCodecs
+exportDeclaredCodecs(const document::ExportOutputSettings& settings);
 // The `{format}` token value ("mp4", "prores", "exr").
 [[nodiscard]] std::string_view exportFormatShortName(document::ExportFormat format) noexcept;
 // The preservation the settings' format is declared to produce, facet by facet.

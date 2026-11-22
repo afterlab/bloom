@@ -234,6 +234,28 @@ struct ExportLoudnessReport final {
     double limiterReductionDb = 0.0;
 };
 
+// #761: one picture or sound stream of a published movie or WAV, as the verifying reopen read it
+// from the file: the codec's short name ("h264", "aac", "pcm_s24le"), its profile as the codec
+// names it ("High", "LC"; empty where it has none), the picture size and frame rate of a video
+// stream, the channels and sample rate of an audio stream, and the average bit rate in bits per
+// second over the stream's duration.
+enum class ExportStreamKind : std::uint8_t { Video = 1, Audio = 2 };
+struct ExportWrittenStream final {
+    ExportStreamKind kind = ExportStreamKind::Video;
+    std::string codec;
+    std::string profile;
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    ExportRationalValue frameRate{0, 1};
+    std::uint32_t channels = 0;
+    std::uint32_t sampleRate = 0;
+    std::uint64_t bitrate = 0;
+    friend bool operator==(const ExportWrittenStream&, const ExportWrittenStream&) = default;
+};
+// "video h264 High 1920x1080 25/1 fps 4013 kb/s", "audio aac LC 2 ch 48000 Hz 191 kb/s": the
+// export log's and the CLI's line for one stream.
+[[nodiscard]] std::string exportWrittenStreamText(const ExportWrittenStream& stream);
+
 // #752: one subtitle track an output delivered: a sidecar file beside the export, or a track
 // embedded in the movie. Every one listed was verified (parsed back or reopened).
 struct ExportSubtitleFile final {
@@ -276,6 +298,9 @@ struct ExportOutputVerification final {
     std::optional<ExportLoudnessReport> loudness;
     // #752: the subtitle sidecars and embedded tracks the output delivered, verified.
     std::vector<ExportSubtitleFile> subtitles;
+    // #761: a published movie's or WAV's picture and sound streams, read back from the file by the
+    // verifying reopen (video first); empty for an image output.
+    std::vector<ExportWrittenStream> streams;
 };
 
 // Problems known before Start. Destination facts (exists, writable, free space, the existing

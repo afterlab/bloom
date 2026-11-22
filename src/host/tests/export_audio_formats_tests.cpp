@@ -24,6 +24,7 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/video/session.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
@@ -46,6 +47,7 @@
 #include <iostream>
 #include <iterator>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -206,8 +208,9 @@ struct Fixture {
     document::AssetId audio;
 
     static host::ProjectSession makeSession(host::ProjectSessionIdentitySource& identity,
-                                            const std::filesystem::path& folder) {
-        auto format = document::CompositionFormat::create(64, 32);
+                                            const std::filesystem::path& folder,
+                                            const std::uint32_t width, const std::uint32_t height) {
+        auto format = document::CompositionFormat::create(width, height);
         auto created =
             document::makeNewProject("Audio", "Main", core::RationalTime::fromInteger(1), *format);
         auto path = host::ProjectDisplayPath::create(folder / "audio.bloom");
@@ -225,9 +228,11 @@ struct Fixture {
     // The composition carries one audio layer reading `source`.
     // `compilable == false` leaves the compiler's registry empty, so no composition compiles.
     // `media`, when given, is the source instead of a written WAV: a copy of that file.
+    // `width` x `height` is the composition's size (DNxHR needs more than the default).
     Fixture(const std::string& name, const WavEncoding source, const bool compilable = true,
-            const std::filesystem::path& media = {})
-        : folder(scratch(name)), session(makeSession(identity, folder)) {
+            const std::filesystem::path& media = {}, const std::uint32_t width = 64,
+            const std::uint32_t height = 32)
+        : folder(scratch(name)), session(makeSession(identity, folder, width, height)) {
         if (compilable && !runtime::registerBuiltInNodeDefinitions(registry))
             throw std::runtime_error("registry");
         registry.freeze();
@@ -699,6 +704,169 @@ void testSourceFormatsAcrossPresets() {
     }
 }
 
+// #761: every built-in movie and WAV preset, exported with the audio of a 16-bit source. The
+// verifying reopen's stream list equals an independent probe of the published file (the media
+// worker's intake probe, the platform's own reader where it has one), and the codecs the preset
+// states equal the ones written. PCM's bit rate is exact; a lossy stream's is positive, and the
+// bytes the streams' rates account for fit in the file. Returns the presets this computer cannot
+// export (each named), which the caller reports as a skip, never as a pass.
+std::size_t testWrittenStreamsForEveryPreset() {
+    Fixture f("streams", WavEncoding::Pcm16, true, {}, 256, 128);
+    std::size_t unavailable = 0;
+    std::size_t walked = 0;
+    const auto catalogue = f.presets->snapshot();
+    for (const auto& preset : catalogue->presets) {
+        if (preset.origin != host::ExportPresetOrigin::BuiltIn || !preset.capabilities.singleFile)
+            continue;
+        auto settings = preset.settings;
+        settings.includeAudio = true;
+        const auto name = preset.id;
+        // A deliverable that needs another project color configuration (the review H.264 asks for
+        // ACES names) writes the same streams as the raw preset of its format and profile, which
+        // this walk exports; it is named and checked against that preset.
+        if (const auto project = f.service->projectAvailability(settings);
+            preset.projectDependent && !project.available) {
+            const auto same = std::ranges::find_if(catalogue->presets, [&](const auto& other) {
+                return other.id != preset.id && !other.projectDependent &&
+                       other.origin == host::ExportPresetOrigin::BuiltIn &&
+                       other.settings.format == settings.format &&
+                       other.settings.codecProfile == settings.codecProfile;
+            });
+            expect(same != catalogue->presets.end(),
+                   name + ": a raw preset of the same format and profile is walked");
+            if (same != catalogue->presets.end()) {
+                auto other = same->settings;
+                other.includeAudio = true;
+                expect(host::exportDeclaredCodecs(other) == host::exportDeclaredCodecs(settings),
+                       name + ": states the codecs of " + same->id);
+                std::cerr << "  " << name << ": needs " << project.reason << "; its streams are "
+                          << same->id << "'s\n";
+            }
+            continue;
+        }
+        if (!preset.platformAvailability.available) {
+            std::cerr << "  " << name << ": not available here (" << preset.platformAvailability.reason
+                      << ")\n";
+            ++unavailable;
+            continue;
+        }
+        ++walked;
+        const auto declared = host::exportDeclaredCodecs(settings);
+        const auto extension = std::string(host::exportFormatExtension(settings.format));
+        const auto file = "Exports/streams-" + preset.id.substr(preset.id.find(':') + 1) + "." +
+                          extension;
+        const auto finished = f.run(f.addJob(settings, file), name);
+        if (finished && finished->failure)
+            std::cerr << "  " << name << ": " << finished->failure->reason << '\n';
+        expect(published(finished), name + ": exports and publishes");
+        if (!published(finished) || finished->outputs.empty() ||
+            !finished->outputs.front().verification)
+            continue;
+        const auto& verification = *finished->outputs.front().verification;
+        const auto& written = verification.streams;
+        const bool movie = settings.format != ExportFormat::Wav;
+        expect(written.size() == (movie ? 2U : 1U),
+               name + ": the result lists " + (movie ? "a video and an audio" : "an audio") +
+                   " stream (got " + std::to_string(written.size()) + ")");
+        // The independent probe of the published file.
+        media::video::VideoDecodeSession session(f.folder / file);
+        const auto probed = session.probe();
+        const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+        expect(probe != nullptr, name + ": the published file probes");
+        if (probe == nullptr)
+            continue;
+        std::vector<media::provider::StreamDescriptor> streams;
+        for (const auto& stream : probe->streams)
+            if (stream.kind != media::provider::MediaKind::Data)
+                streams.push_back(stream);
+        expect(streams.size() == written.size(),
+               name + ": the probe finds as many streams as the result lists");
+        std::uint64_t accounted = 0;
+        for (std::size_t index = 0; index < std::min(streams.size(), written.size()); ++index) {
+            const auto& w = written[index];
+            const auto& p = streams[index];
+            const auto label = name + " stream " + std::to_string(index) + " (" +
+                               host::exportWrittenStreamText(w) + ")";
+            const bool video = w.kind == host::ExportStreamKind::Video;
+            expect(video == (p.kind == media::provider::MediaKind::Video),
+                   label + ": the kind equals the probe's");
+            expect(w.codec == p.codec || (p.codec == "prores_ks" && w.codec == "prores"),
+                   label + ": the codec equals the probe's (" + p.codec + ")");
+            expect(p.profile.empty() || p.profile == "unknown" || w.profile == p.profile,
+                   label + ": the profile equals the probe's (" + p.profile + ")");
+            if (video) {
+                expect(w.width == p.width && w.height == p.height,
+                       label + ": the size equals the probe's (" + std::to_string(p.width) + "x" +
+                           std::to_string(p.height) + ")");
+                expect(w.frameRate.numerator == p.rate.numerator &&
+                           w.frameRate.denominator == p.rate.denominator,
+                       label + ": the frame rate equals the probe's (" +
+                           std::to_string(p.rate.numerator) + "/" +
+                           std::to_string(p.rate.denominator) + ")");
+                expect(w.codec == declared.videoCodec && w.profile == declared.videoProfile,
+                       label + ": the preset states this codec and profile (" +
+                           declared.videoCodec + " " + declared.videoProfile + ")");
+                expect(w.bitrate > 0, label + ": the bit rate is positive");
+                accounted += w.bitrate; // over one second
+            } else {
+                expect(w.channels == p.channelLayout.size() && w.sampleRate == p.sampleRate,
+                       label + ": the channels and sample rate equal the probe's (" +
+                           std::to_string(p.channelLayout.size()) + " ch, " +
+                           std::to_string(p.sampleRate) + " Hz)");
+                expect(w.codec == declared.audioCodec && w.profile == declared.audioProfile &&
+                           w.sampleRate == declared.audioSampleRate,
+                       label + ": the preset states this audio (" + declared.audioCodec + " " +
+                           declared.audioProfile + " " + std::to_string(declared.audioSampleRate) +
+                           " Hz)");
+                if (w.codec.starts_with("pcm_")) {
+                    const std::uint64_t bits = w.codec == "pcm_s16le" ? 16U : 24U;
+                    expect(w.bitrate == bits * w.sampleRate * w.channels,
+                           label + ": PCM's bit rate is its sample rate, depth and channels");
+                    expect(!declared.audioBitrateKbps, label + ": the preset states no PCM rate");
+                } else {
+                    expect(w.bitrate > 0 && declared.audioBitrateKbps == 192U,
+                           label + ": a lossy stream's rate is positive, and 192 kb/s is stated");
+                }
+                accounted += w.bitrate;
+            }
+        }
+        // ProRes: the MOV sample entry's four-character code names the profile on its own.
+        if (declared.videoCodec == "prores") {
+            std::ifstream in(f.folder / file, std::ios::binary);
+            const std::string bytes((std::istreambuf_iterator<char>(in)),
+                                    std::istreambuf_iterator<char>());
+            const std::string fourcc = declared.videoProfile == "Proxy"      ? "apco"
+                                       : declared.videoProfile == "LT"       ? "apcs"
+                                       : declared.videoProfile == "Standard" ? "apcn"
+                                       : declared.videoProfile == "HQ"       ? "apch"
+                                       : declared.videoProfile == "4444"     ? "ap4h"
+                                                                             : "ap4x";
+            expect(bytes.find(fourcc) != std::string::npos,
+                   name + ": the MOV sample entry is " + fourcc);
+        }
+        // One second of every stream fits in the file (headers and index on top).
+        const auto bytes = std::filesystem::file_size(f.folder / file);
+        expect(accounted / 8U <= bytes,
+               name + ": the streams' bytes fit in the file (" + std::to_string(accounted / 8U) +
+                   " of " + std::to_string(bytes) + ")");
+        const auto container = std::ranges::find(verification.checks, host::ExportCheck::Container,
+                                                 &host::ExportCheckResult::check);
+        const auto* observed = container == verification.checks.end()
+                                   ? nullptr
+                                   : std::get_if<std::string>(&container->observed);
+        expect(observed != nullptr && observed->starts_with(declared.container + "/"),
+               name + ": the preset states the container (" + declared.container + ")");
+        // The log carries the same list.
+        const auto entries = f.service->log(finished->id, 0).entries;
+        expect(static_cast<std::size_t>(std::ranges::count(entries, std::string("export.stream"),
+                                                           &host::ExportLogEntry::code)) ==
+                   written.size(),
+               name + ": the export log lists every written stream");
+    }
+    expect(walked + unavailable >= 10, "every built-in movie and WAV preset is walked");
+    return unavailable;
+}
+
 void testUndecodableSourceIsRefusedBeforeRendering() {
     Fixture f("adpcm", WavEncoding::ImaAdpcm);
     const auto expectedReason = "Audio asset " + std::to_string(f.audio.value()) +
@@ -1130,7 +1298,26 @@ void testSourceRoutingIsLogged() {
 #endif
 }
 
-int main() {
+int main(const int argc, char** argv) {
+    // #761: the per-preset stream walk is its own test (bloom.host.export-written-streams).
+    if (argc > 1 && std::string_view(argv[1]) == "--written-streams") {
+        std::size_t unavailable = 0;
+        try {
+            unavailable = testWrittenStreamsForEveryPreset();
+        } catch (const std::exception& error) {
+            std::cerr << "FAIL: " << error.what() << '\n';
+            return 1;
+        }
+        if (failures != 0)
+            return 1;
+        if (unavailable != 0) {
+            std::cout << "export written streams: " << unavailable
+                      << " built-in presets cannot be exported here; skipped\n";
+            return 77;
+        }
+        std::cout << "export written streams: ok\n";
+        return 0;
+    }
     try {
         testSourceRoutingIsLogged();
         testSourceFormatsAcrossPresets();

@@ -5,6 +5,7 @@
 
 #include <limits>
 #include <numeric>
+#include <string>
 
 namespace bloom::host {
 namespace {
@@ -73,6 +74,24 @@ ExportCheckResult exportTimingCheck(const ExportStreamRequest& requested,
     result.outcome = ExportCheckOutcome::Passed;
     result.code = "export.check.timing";
     return result;
+}
+
+std::string exportWrittenStreamText(const ExportWrittenStream& stream) {
+    std::string text = stream.kind == ExportStreamKind::Video ? "video " : "audio ";
+    text += stream.codec;
+    if (!stream.profile.empty())
+        text += " " + stream.profile;
+    if (stream.kind == ExportStreamKind::Video) {
+        text += " " + std::to_string(stream.width) + "x" + std::to_string(stream.height) + " " +
+                std::to_string(stream.frameRate.numerator);
+        if (stream.frameRate.denominator != 1)
+            text += "/" + std::to_string(stream.frameRate.denominator);
+        text += " fps";
+    } else {
+        text += " " + std::to_string(stream.channels) + " ch " + std::to_string(stream.sampleRate) +
+                " Hz";
+    }
+    return text + " " + std::to_string((stream.bitrate + 500U) / 1000U) + " kb/s";
 }
 
 ExportCheckResult exportAudioCheck(const ExportStreamRequest& requested,
