@@ -21,10 +21,10 @@
 //
 // `--path-nodes` (#344, #530, #509) is another non-writing run: a 512 x 288, six-frame composition
 // of the path nodes drawn by Shape Sources -- a Trim Path whose end is keyed, a Boolean Paths
-// subtraction, a dashed Path Stroke and its core through Glow -- previewed in the interactive
-// viewer and RAM-previewed through the same service. The viewer frame and every RAM frame must be
-// GPU-resident and match the CPU oracle, the warm replay must do no work, and an operand edit must
-// re-render every frame on the GPU against the edited CPU oracle.
+// subtraction, a dash-dot Path Stroke (#759) and its core through Glow -- previewed in the
+// interactive viewer and RAM-previewed through the same service. The viewer frame and every RAM
+// frame must be GPU-resident and match the CPU oracle, the warm replay must do no work, and an
+// operand edit must re-render every frame on the GPU against the edited CPU oracle.
 //
 // `--image-statistics` (#349) is another non-writing run of the same shape: a 512 x 288, four-frame
 // composition whose keyed Four Color Gradient goes through Denoise with Auto strength and then
@@ -357,7 +357,9 @@ struct NodeDocument final {
         connect(source, document::kValuePortName, stroke, "path");
         set(stroke, "width", 12.0);
         set(stroke, "dashLength", 18.0);
-        set(stroke, "dashGap", 6.0);
+        // #759: a dash-dot pattern, its round dots cap-only (dash 2 stays at its default 0).
+        set(stroke, "dashGap", 14.0);
+        set(stroke, "gap2", 14.0);
         set(stroke, "coreWidth", 40.0);
         static_cast<void>(shape(stroke, "path", {0.2, 0.4, 1.0, 1.0}));
         const auto core = shape(stroke, "core", {1.5, 1.5, 1.8, 1.0});

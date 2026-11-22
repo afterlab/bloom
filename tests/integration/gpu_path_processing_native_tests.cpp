@@ -926,6 +926,24 @@ int main(int argc, char** argv) {
         auto dashMiddle = referenceAt(expectations, keyedDash, 2, "keyed dash offset middle");
         auto dashEnd = referenceAt(expectations, keyedDash, 4, "keyed dash offset end");
         auto dashHolding = referenceAt(expectations, keyedDash, 6, "keyed dash offset holding");
+        // 6c. #759 reduced render scale: the pattern at half resolution, its own CPU reference.
+        std::optional<Reference> dashHalf;
+        if (dashMiddle) {
+            Reference half = *dashMiddle;
+            const auto extent = render::ImageExtent::create(48, 40);
+            half.request.resolution = runtime::ProxyResolution{*extent.value()};
+            auto oracle = half.request;
+            oracle.bypassOperationCache = true;
+            const auto evaluated =
+                runtime::CpuCompositionEvaluator{}.evaluate(half.plan, oracle, {});
+            expectations.expect(evaluated.frame() != nullptr &&
+                                    evaluated.frame()->processImage().pixels().size() == 48U * 40U,
+                                "dash pattern at half resolution: the CPU reference is half size");
+            if (evaluated.frame() != nullptr) {
+                half.frame = evaluated.frame();
+                dashHalf = std::move(half);
+            }
+        }
         if (dashStart && dashMiddle && dashEnd && dashHolding)
             expectations.expect(!samePixels(*dashStart, *dashMiddle) &&
                                     !samePixels(*dashMiddle, *dashEnd) &&
@@ -1096,6 +1114,8 @@ int main(int argc, char** argv) {
             gpuParity(expectations, run, *dashStart, "keyed dash offset start");
             gpuParity(expectations, run, *dashMiddle, "keyed dash offset middle");
             gpuParity(expectations, run, *dashEnd, "keyed dash offset end");
+            if (dashHalf)
+                gpuParity(expectations, run, *dashHalf, "dash pattern at half resolution");
             const auto holding = builder.build(dashHolding->plan, dashHolding->request);
             expectations.expect(holding.hasValue(), "keyed dash offset holding prepares");
             if (holding) {

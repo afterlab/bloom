@@ -13,7 +13,8 @@
 //
 // #509 runs the same routes again over the path-stroke features: the keyed path stroked as Diamond
 // stamps and outlined by Alpha Contour, a text whose Text Outline is stroked over it in a Merge, a
-// solid's mask stroked through Mask Path, and the Saber glowing path preset.
+// solid's mask stroked through Mask Path as a dash-dot pattern (#759), and the Saber glowing path
+// preset.
 
 #include "await_qt.hpp"
 #include "fixed_memory_budget.hpp"
@@ -428,6 +429,11 @@ commands::CommandResult edit(Authored& authored, Arguments&&... arguments) {
         static_cast<std::int64_t>(plateNode->value()));
     const auto maskStroke = add(document::kPathStrokeNodeType);
     set(maskStroke, "width", 2.0);
+    // #759: stroked as a dash-dot pattern (round cap-only dots) round the closed mask.
+    set(maskStroke, "dashLength", 4.0);
+    set(maskStroke, "dashGap", 3.0);
+    set(maskStroke, "dash2", 0.0);
+    set(maskStroke, "gap2", 3.0);
     connect(maskPath, "path", maskStroke, "path");
     const auto maskShape = add(document::kShapeSourceNodeType);
     set(maskShape, "kind", static_cast<std::int64_t>(document::ShapeKind::Path));
