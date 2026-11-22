@@ -51,7 +51,7 @@ option(BLOOM_BUILD_SPIKES "Build the throwaway design spikes under tools/spikes"
 # The label of the release this source tree builds: the version in the names of the package
 # files, and the version the application, bloom-cli and bloom-mcp report (bloom::core::version()).
 # project(VERSION) stays the numeric part. A build of another label passes its own.
-set(BLOOM_PACKAGE_VERSION "0.1.0-alpha.2" CACHE STRING
+set(BLOOM_PACKAGE_VERSION "0.1.0-alpha.3" CACHE STRING
     "The version the programs report and the package files carry")
 if(NOT BLOOM_PACKAGE_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+([-+][0-9A-Za-z.]+)?$")
     message(FATAL_ERROR

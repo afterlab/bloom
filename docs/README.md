@@ -205,9 +205,11 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- v0.1.0-alpha.2 was released on 2026-11-20: large projects that always save, agent work over MCP that
-  stays quiet and keeps the window responsive at scale, and crash reports kept on the user's
-  machine ([crash reports](user-guide/crash-reports.md)). v0.1.0-alpha.1, the first alpha, was
+- v0.1.0-alpha.3 is in preparation: subtitles, styled and animated text, filtered scaling, Image
+  Switch and exports that state their codecs. v0.1.0-alpha.2 was released on 2026-11-20: large
+  projects that always save, agent work over MCP that stays quiet and keeps the window responsive
+  at scale, and crash reports kept on the user's machine
+  ([crash reports](user-guide/crash-reports.md)). v0.1.0-alpha.1, the first alpha, was
   released on 2026-11-17 with installers for every platform and updates inside Bloom
   ([installing](user-guide/installing.md)). The three node groups come next, then tests and
   performance. The [roadmap](roadmap.md) holds the order.

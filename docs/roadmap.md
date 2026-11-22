@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-21
+Updated: 2026-11-22
 
 This roadmap records what has shipped, what is queued and in what order, and what is parked. It
 follows the [Bloom GitHub Project](https://github.com/orgs/afterlab/projects/2), which owns the
@@ -34,6 +34,7 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
+| v0.1.0-alpha.3 (in preparation): subtitles, styled and animated text, filtered and pixel-art scaling, coordinate spaces, Path Stroke dash patterns, Image Switch, export backgrounds, and presets that state their codecs, with the reliability fixes before them | #752 #757 #758 #742 #743 #591 #759 #531 #760 #761 |
 | v0.1.0-alpha.2 (2026-11-20): large projects that always save, agent work over MCP that stays quiet and responsive at scale, the MCP field-test bugs, and crash reports kept on the user's machine | the rows below, down to the save fix |
 | Crash reports: Crashpad's out-of-process handler in every package, a text report and a minidump kept on the user's machine, a notice on the next start, debug symbols kept as release-workflow artifacts | #736 |
 | Field-test bugs: a project Bloom lets you build always saves (edits that would make it too large are refused at the edit), Save a Copy names its cause, Corner Pin edge-on streaks, Crop against its picture, capture publication after the cache folder is cleared | #748 #738 #739 #740 |
