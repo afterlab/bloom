@@ -1488,6 +1488,13 @@ target_include_directories(bloom_text_animator_capture PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(bloom_text_animator_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_text_animator_capture)
 
+# #759 review captures of Path Stroke's dash pattern rows on Properties and the node card (a tool,
+# not a test): bloom_path_stroke_dash_capture <directory>, with QT_SCALE_FACTOR 1, 1.5 or 2.
+add_executable(bloom_path_stroke_dash_capture path_stroke_dash_capture.cpp)
+target_include_directories(bloom_path_stroke_dash_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_path_stroke_dash_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_path_stroke_dash_capture)
+
 # #591 review captures of the coordinate space nodes' Properties and cards (a tool, not a test):
 # bloom_coordinate_space_capture <directory>, with QT_SCALE_FACTOR 1 or 1.5.
 add_executable(bloom_coordinate_space_capture coordinate_space_capture.cpp)
@@ -3078,7 +3085,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
         TIMEOUT 300
         COMPOSITOR
     )
-    # #344 #530 #509: the path nodes (a keyed Trim Path, Boolean Paths, a dashed Path Stroke and its
+    # #344 #530 #509 #759: the path nodes (a keyed Trim Path, Boolean Paths, a dash-dot Path Stroke and its
     # core through Glow) in the interactive viewer and RAM preview on the real service: GPU-resident
     # frames against the CPU oracle, a warm replay with no work, and an operand edit re-rendered.
     bloom_add_test(

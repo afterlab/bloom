@@ -364,6 +364,15 @@ QString parameterRowLabel(const std::string_view schemaKey, const std::string_vi
         : schemaKey == document::kMaskPathSourceParameterSchemaKey ? QObject::tr("Masks of")
         : schemaKey == document::kTextOutlineSourceParameterSchemaKey
             ? QObject::tr("Text to outline")
+        // #759 Path Stroke's second and third dash and gap.
+        : schemaKey == document::kScalarOperandParameterSchemaKey && role == "dash2"
+            ? QObject::tr("Dash 2")
+        : schemaKey == document::kScalarOperandParameterSchemaKey && role == "gap2"
+            ? QObject::tr("Gap 2")
+        : schemaKey == document::kScalarOperandParameterSchemaKey && role == "dash3"
+            ? QObject::tr("Dash 3")
+        : schemaKey == document::kScalarOperandParameterSchemaKey && role == "gap3"
+            ? QObject::tr("Gap 3")
             : node_editor::displayTypeName(role);
 }
 
