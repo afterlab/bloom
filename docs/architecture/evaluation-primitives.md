@@ -711,7 +711,8 @@ geometry, so parity is the path coverage parity below.
 
 ### Styled Text Source
 
-A Text Source with markup, an outline or a background box (#757; [the layer and graph
+A Text Source with markup, an outline, a background box or fixed-width digits, or one a Text
+Animator draws (#757, #758; [the layer and graph
 model](layer-graph-model.md#text-and-mute-lowering)) is drawn by the Subtitles machinery instead of
 Text's glyph bitmap. `runtime/text_markup.cpp` turns the content into styled runs: with markup off,
 one literal run; with markup on, the cue-text tokenizer's tree, where `<b>`, `<i>` and `<u>` set the
@@ -722,7 +723,8 @@ resolve as Subtitles' do: a missing bold draws the regular face with the font-mi
 missing italic a synthesized oblique.
 
 `runtime/text_styled_frame.cpp` lays the runs out with `layoutStyledText` (Greedy wrap within the
-box width when the text wraps in a box), aligns each line within the box or the widest line, applies
+box width when the text wraps in a box; with Fixed-width digits every digit 0-9 takes its face's
+widest digit advance, its glyph centered in it, and a pair of digits is not kerned), aligns each line within the box or the widest line, applies
 the anchor mode's shift for point text and the vertical alignment within a box, then builds the
 frame's `SubtitlesLayer`s in paint order: the background (Per line: one rounded rectangle per line's
 advance box, grown by the padding at the sides and at the block's top and bottom so the lines'
@@ -739,6 +741,64 @@ draws at most 8,192 glyphs on this path; more fails the node with a message nami
 frame key holds the content, faces, layout and the resolved colors of only the paints the runs use,
 so editing an unused accent keeps the identity warm. Preparation checks cancellation in the layout,
 the outline building and each layer's coverage.
+
+### Text Animator
+
+A Text Animator (#758, `document/text_animator_nodes.hpp`) draws the Text Source on its `text`
+input with per-cluster changes. A cluster is one Unicode scalar of the laid-out text (carriage
+returns removed); when shaping (#345) lands, clusters become shaped clusters and no project
+changes. The node is not an operation of its own: the snapshot compiler walks a chain of Text
+Animators back to its Text Source, lowers that Text Source styled, and appends each animator that
+is not muted, nearest the Text Source first, to `CompiledTextStyle::animators`. The `CompiledText`
+takes the last animator's node id, so its diagnostics and evaluation belong to the node whose image
+it is. A Text Source or animator that only feeds animators is not lowered on its own. An animator
+whose chain reaches something other than a Text Source passes that image through with the
+`bloom.runtime.compile.text-animator-no-text` warning. Values that draw nothing (the rows of a
+selector that is off, a fill color while Change fill is off) lower at their defaults, so editing
+them keeps the identity.
+
+The layout runs once, in `StyledTextFrame` clusters mode: `styledTextClusterOutlines` returns each
+drawn cluster's outline with its line, paint, pen x, baseline and advance (an underline is split at
+glyph boundaries). `runtime/text_animator.cpp` holds the arithmetic, pure and the same on every
+route:
+
+- Units: Characters (every cluster but a line break), Characters excluding spaces, Words (runs of
+  non-space clusters) and Lines. A cluster a unit does not count takes the unit before it.
+- A selector's range runs from start + offset to end + offset, in percent of the unit count or in
+  unit indices, ordered. Square is the part of [k, k + 1) inside the range. The other shapes take
+  t = (k + 0.5 - s) / (e - s) at the unit's center: Ramp up 0, t, 1; Ramp down its mirror;
+  Triangle 1 - |2t - 1|, Round sqrt(1 - (2t - 1)^2) and Smooth (1 - cos 2 pi t) / 2 inside the
+  range, 0 outside. The ease is the cubic Hermite through (0, 0) and (1, 1) with slopes
+  1 - Ease low / 100 and 1 - Ease high / 100. Randomize order permutes the units with a SplitMix64
+  Fisher-Yates shuffle seeded by Seed. The amount is the eased shape times Amount / 100.
+- Selectors fold in order into 0: Add adds, Subtract subtracts, Intersect multiplies; the total is
+  clamped to [-1, 1]. An animator with no selector on gives every cluster 1.
+- Each animator then blends its properties by the cluster's amount a: opacity multiplies by
+  1 + a (O - 1); position adds a P; scale multiplies by 1 + a (S - 1); rotation and skew add a R and
+  a K; the fill and outline colors move clamp(a, 0, 1) of the way to the animator's when it changes
+  them; the outline width adds a W; tracking adds a T after the cluster.
+- The reveal shows unit k when k + 1 <= revealed (a percent of the units, or a count). Visibility
+  is the AND of every animator's reveal. A cursor is drawn after the last cluster an animator's
+  reveal shows (the start of the first line when none shows), in the text's color and first face;
+  it shows for the first half of each blink (a rate of 0 holds it on).
+
+Per cluster, its line's tracking moves it right by the tracking of the clusters before it, and the
+line moves back by its alignment's share of what it grew (none for Left, half for Center, all for
+Right). The cluster's outline is then mapped by p' = A + o + R S K (p + t - A) about A, its
+baseline center: K leans the top right for a positive skew, S scales, R turns clockwise on screen
+for a positive angle. A cluster whose values are neutral is not transformed, so a neutral animator
+draws the Text Source's own styled pixels. The clusters are grouped into `SubtitlesLayer`s by
+outline width and straight color (opacity folded into alpha): outlines first, then fills, then each
+cursor. At most 256 layers are drawn; more fails the node naming the limit, as the 8,192-glyph
+limit does. The frame's bounds and pivot come from the still layout's ink, so a reveal or a moving
+letter never shifts the layer; its window covers the animated ink.
+
+The frame key adds every resolved selector and property value, the reveal and whether each cursor
+shows, so the identity changes exactly when the drawing does, and a Text Source with no animator
+keeps the key it had. A chain is time-dependent when any animator value is keyed or driven, or a
+cursor blinks. The CPU reference and the GPU builder call the same preparation, so the GPU draws the
+same layers as native path coverage with parity; cancellation is checked between animators and
+between clusters.
 
 ### Path coverage
 

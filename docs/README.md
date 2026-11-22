@@ -178,7 +178,9 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 - [Camera Shake](user-guide/camera-shake.md) — seeded handheld, impact and gate-weave shake with
   loop, auto overscan, motion blur and offset and roll outputs for other parameters.
 - [Text layers](user-guide/text-layers.md) — what a text layer's Position names for Left, Center and
-  Right alignment, and how older projects keep their placement.
+  Right alignment, how older projects keep their placement, and fixed-width digits.
+- [Text Animator](user-guide/text-animator.md) — per-letter, per-word and per-line animation of a
+  text: selectors, properties, a type-on reveal with a cursor, and the counter and word-fade recipes.
 - [Sharpen](user-guide/sharpen.md) — the unsharp mask: amount, radius and threshold, and what it does
   to HDR highlights and alpha edges.
 - [Separate Channels and Combine Channels](user-guide/channels.md) — splitting an image into

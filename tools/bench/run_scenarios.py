@@ -674,6 +674,13 @@ class Builder:
                               name=layer.get("name", "Text"), text=spec["text"],
                               **(spec.get("args") or {}))
         self.set_keys(added["textNode"], layer.get("keys") or {})
+        # #758: each Text Animator on the link into the layer, after the ones before it.
+        for animator in layer.get("animators") or ():
+            node = self.transact("bloom.node.insert-on-link", composition=self.composition,
+                                 nodeType="bloom.text-animator", node=added["layerOutputNode"],
+                                 port="image")["node"]
+            self.set_values(node, "bloom.text-animator", animator.get("values") or {})
+            self.set_keys(node, animator.get("keys") or {})
 
     def generator(self, layer, output_merge):
         """A procedural source node (a Fields generator) whose `port` raster, through the

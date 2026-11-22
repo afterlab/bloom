@@ -32,7 +32,10 @@ area, and its layers from the bottom up. A layer is one of:
   each step in turn, #509);
 - a subtitles layer (#752): {"name", "subtitles": {"cues": [[start frame, end frame, markup], ...],
   "values": {role: value}}, "keys": {role: [[frame, value], ...]}}, a Subtitles node over the layers
-  below.
+  below;
+- a text layer (#757): {"name", "text": {"text", "args": {add-text argument: value}}, "keys": {role:
+  [[frame, value], ...]}, "animators": [{"values": {role: value}, "keys": {...}}, ...]}, the
+  animators (#758) Text Animators inserted in order between the Text Source and its layer.
 
 Every "keys" entry names a role of its node. A role whose schema can be animated is keyed; a
 value-graph operand whose schema cannot be (a path step's amount, a plot's range) is driven through its
@@ -268,6 +271,8 @@ def _layer_keys(layer, found):
         found.extend((name, layer["generator"][0], role) for role in layer.get("keys") or {})
     if "subtitles" in layer:
         found.extend((name, "bloom.subtitles", role) for role in layer.get("keys") or {})
+    for animator in layer.get("animators") or ():
+        found.extend((name, "bloom.text-animator", role) for role in animator.get("keys") or {})
     _effect_keys(name, layer.get("effects"), found)
     _effect_keys(name, layer.get("adjustment"), found)
     for entry in layer.get("merge") or ():
@@ -995,6 +1000,35 @@ SCENARIOS["text-styled-2k"] = {
                       "outlineWidth": 4.0, "outlineJoin": "round", "background": "per-line",
                       "backgroundRadius": 12.0}},
          "keys": {"outlineWidth": [[0, 2.0], [23, 8.0]]}},
+    ],
+}
+
+# #758: a caption typed on by a Text Animator while a second one rises and turns its words in
+# with a ramp, and a fixed-width-digit counter beside it. The keyed reveal and offset make every frame
+# new, so each frame costs one styled layout, the per-cluster pass and one coverage pass per color
+# group. Written, not run: it has no recorded numbers and no budget.
+SCENARIOS["text-animator-2k"] = {
+    "description": "A PNG16 plate under a two-line caption typed on with a cursor while a second "
+                   "Text Animator raises and turns its words in with a ramp, and a counter in "
+                   "fixed-width digits.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16"},
+        {"name": "Caption",
+         "text": {
+             "text": "The quick brown fox jumps\nover the lazy dog",
+             "args": {"size": 96.0, "position": [960.0, 880.0], "outlineWidth": 3.0}},
+         "animators": [
+             {"values": {"cursor": True},
+              "keys": {"reveal": [[0, 0.0], [23, 100.0]]}},
+             {"values": {"selector1Units": "Words", "selector1Shape": "Ramp down",
+                         "position": [0.0, 40.0], "rotation": 20.0, "opacity": 0.0},
+              "keys": {"selector1Offset": [[0, -100.0], [23, 100.0]]}},
+         ]},
+        {"name": "Counter",
+         "text": {"text": "1024.50",
+                  "args": {"size": 72.0, "position": [1600.0, 120.0], "fixedDigits": True}}},
     ],
 }
 

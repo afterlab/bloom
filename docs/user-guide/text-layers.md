@@ -32,6 +32,14 @@ old project looks exactly as it did when you reopen it, with no jump. Nothing is
 open a project; switch a text layer to Follow alignment when you want its Position to follow the
 alignment. Changing it moves the text, because Position then names a different point of the block.
 
+## Fixed-width digits
+
+**Fixed-width digits** (off by default) draws every digit 0 to 9 at the width of the font's widest
+digit, centered in it. A counter's digits then hold still as they change, and its decimal point
+stays in place: `1.00` and `8.00` line up. Fonts whose digits already share one width (DejaVu
+Sans, the default) draw the same either way. For per-letter animation, see
+[Text Animator](text-animator.md).
+
 ## Markup, accent colors, outline and background
 
 A Text node draws plain text until you turn one of these on, so a project saved before them draws
