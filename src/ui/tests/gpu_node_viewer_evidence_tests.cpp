@@ -149,6 +149,8 @@ struct Scenario final {
     std::vector<document::Cue> cues = {};
     // #752: values of the Layer Output itself (a scale, a rotation).
     Values layerValues = {};
+    // #531: more sources wired to the effect's input2, input3, ... (an Image Switch's options).
+    std::vector<std::pair<std::string, Values>> moreInputs = {};
 };
 
 [[nodiscard]] std::map<std::string, Scenario> scenarios() {
@@ -304,6 +306,17 @@ struct Scenario final {
     out["text-animated"].effectPort = "text";
     out["text-animated-transformed"] = out["text-animated"];
     out["text-animated-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
+    // #531: an Image Switch over a checker, a gradient and a text (a vector leaf), its index keyed
+    // from the first to the last, so a RAM preview shows each input in turn and evaluates only the
+    // one it shows; and the same on a scaled and rotated layer (the text redrawn through it).
+    out["image-switch"] = {"bloom.checker-source", {}, "bloom.image-switch", {}, "index", 1.0, 3.0};
+    out["image-switch"].effectPort = "input1";
+    out["image-switch"].moreInputs = {
+        {"bloom.four-color-gradient", {}},
+        {"bloom.text-source", {{"text", std::string("Switched")}, {"size", 120.0}}}};
+    out["image-switch-transformed"] = out["image-switch"];
+    out["image-switch-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}},
+                                                   {"rotation", 12.0}};
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
@@ -977,6 +990,14 @@ int main(int argc, char** argv) { // NOLINT(bugprone-exception-escape)
                                       scenario->sourcePort) &&
                               setValues(session, effect, scenario->effectValues),
                           "the effect node is added and wired");
+            for (std::size_t more = 0; more < scenario->moreInputs.size(); ++more) {
+                const auto& [type, values] = scenario->moreInputs[more];
+                const auto extra = addNode(session, type);
+                checks.expect(extra.isValid() && setValues(session, extra, values) &&
+                                  connect(session, extra, effect,
+                                          "input" + std::to_string(more + 2)),
+                              "the effect's input " + std::to_string(more + 2) + " is wired");
+            }
             last = effect;
         }
         if (!scenario->group)

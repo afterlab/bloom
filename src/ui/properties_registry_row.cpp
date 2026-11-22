@@ -193,6 +193,9 @@ bool propertiesRowInactive(const document::Composition& composition,
         Label{"bloom.field-rasterize.inspect", "Inspect"},
         Label{"bloom.field-rasterize.arrowSpacing", "Arrow spacing"},
         Label{"bloom.field-rasterize.arrowScale", "Arrow length per unit"},
+        // #531 Image Switch and Channel Set Switch.
+        Label{"bloom.image-switch.index", "Show input"},
+        Label{"bloom.image-switch.wrap", "Wrap around"},
     };
     const auto found = std::ranges::find(kLabels, schemaKey, &Label::key);
     if (found == kLabels.end())

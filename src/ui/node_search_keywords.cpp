@@ -53,6 +53,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.set-alpha", "Set Matte|Copy Alpha"},
     {"bloom.multiply-alpha", "Track Matte|Stencil Alpha"},
     {"bloom.alpha-association", "Premult|Unpremult|Remove Color Matting"},
+    {"bloom.image-switch", "Switch|Select|Choose|Variant|Version|Toggle|Which"},
     // Channels
     {"bloom.channel-copy", "Copy|ShuffleCopy|Set Channels"},
     {"bloom.channel-pass", "EXtractoR|Extract Layer"},
@@ -63,6 +64,7 @@ constexpr auto kNodeAliases = std::to_array<NodeAliases>({
     {"bloom.image-math", "Arithmetic|Expression|Add|Subtract|Multiply|Divide|Power|Min|Max|Abs"},
     {"bloom.image-map-range", "Remap|Normalize|Normalise|Range|Z Normalize|Mist Normalize"},
     {"bloom.image-clamp", "Limit|Min Max|HDR Clamp|Clip"},
+    {"bloom.channel-set-switch", "Switch|Pass Switch|Select Passes|Variant"},
     // Tracking & Analysis
     {"bloom.histogram", "Scope|Levels Scope|Distribution|Analyze"},
     {"bloom.audio-amplitude",

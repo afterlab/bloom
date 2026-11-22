@@ -1488,6 +1488,13 @@ target_include_directories(bloom_text_animator_capture PRIVATE ${CMAKE_CURRENT_S
 target_link_libraries(bloom_text_animator_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_text_animator_capture)
 
+# #531 review captures of the Image Switch's Properties and the two switches' cards (a tool, not
+# a test): bloom_image_switch_capture <directory>, with QT_SCALE_FACTOR 1, 1.5 or 2.
+add_executable(bloom_image_switch_capture image_switch_capture.cpp)
+target_include_directories(bloom_image_switch_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_image_switch_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_image_switch_capture)
+
 # #759 review captures of Path Stroke's dash pattern rows on Properties and the node card (a tool,
 # not a test): bloom_path_stroke_dash_capture <directory>, with QT_SCALE_FACTOR 1, 1.5 or 2.
 add_executable(bloom_path_stroke_dash_capture path_stroke_dash_capture.cpp)
@@ -2984,7 +2991,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
                               coordinate-space-axes subtitles subtitles-transformed
                               text-styled text-styled-transformed text-animated
-                              text-animated-transformed)
+                              text-animated-transformed image-switch image-switch-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2994,7 +3001,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #742, #743, #511, #528, #519, #527, #510, #591, #752, #757 and #758: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #743, #511, #528, #519, #527, #510, #591, #752, #757, #758 and #531: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
                               corner-pin-trilinear pixel-art-automatic
@@ -3012,7 +3019,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
                               coordinate-space-axes subtitles subtitles-transformed
                               text-styled text-styled-transformed text-animated
-                              text-animated-transformed)
+                              text-animated-transformed image-switch image-switch-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

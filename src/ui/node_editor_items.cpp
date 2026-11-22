@@ -1,6 +1,7 @@
 #include "node_editor_items.hpp"
 
 #include <bloom/document/node_group_nodes.hpp>
+#include <bloom/document/image_switch_nodes.hpp>
 #include "value_presentation.hpp"
 #include <QCoreApplication>
 #include <QPainterPathStroker>
@@ -85,6 +86,15 @@ QString displayTypeName(const std::string_view typeId) {
             name.insert(name.size() - 1, QLatin1Char(' '));
             return name;
         }
+    // #531: a switch's inputs "input1" ... "channels8" read as "Input 1" ... "Channels 8".
+    for (const auto& ports : {document::kImageSwitchInputPorts, document::kChannelSetSwitchInputPorts})
+        for (const auto port : ports)
+            if (typeId == port) {
+                QString name = QString::fromLatin1(port.data(), static_cast<int>(port.size()));
+                name[0] = name[0].toUpper();
+                name.insert(name.size() - 1, QLatin1Char(' '));
+                return name;
+            }
     if (typeId == "bloom.crop")
         return QCoreApplication::translate("node_editor", "Crop");
     if (typeId == "bloom.pad")

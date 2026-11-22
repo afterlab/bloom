@@ -645,13 +645,13 @@ void testSearchKeyboardAndMenus() {
                   "Radial Gradient", "Solid", "Test Card", "Video"},
                  "Sources holds what makes an image, and the audio effects beside the Audio source");
         hasGroup("Compositing",
-                 {"Adjustment", "Alpha Association", "Edge Extend", "Image Mix", "Layer", "Merge",
-                  "Multiply Alpha", "Set Alpha"},
+                 {"Adjustment", "Alpha Association", "Edge Extend", "Image Mix", "Image Switch",
+                  "Layer", "Merge", "Multiply Alpha", "Set Alpha"},
                  "Layers merged into Compositing");
         hasGroup("Channels",
-                 {"Channel Copy", "Combine Channels", "Image Clamp", "Image Map Range", "Image Math",
-                  "Image to Channel Set", "Pass", "Select Channels", "Separate Channels",
-                  "Shuffle"},
+                 {"Channel Copy", "Channel Set Switch", "Combine Channels", "Image Clamp",
+                  "Image Map Range", "Image Math", "Image to Channel Set", "Pass",
+                  "Select Channels", "Separate Channels", "Shuffle"},
                  "Channels holds the channel nodes");
         hasGroup("Keying & Mattes",
                  {"Cryptomatte", "HSL Qualifier", "Image to Mask", "Luma Key", "Mask", "Mask Combine", "Matte Blur",
