@@ -45,6 +45,7 @@
   "bloom.image-map-range": "The default ranges map 0 to 1 onto 0 to 1.",
   "bloom.image-math": "The default operation with its default operand leaves the image as it is.",
   "bloom.image-mix": "Both inputs are the gradient on the default graph, so any mix of them is the gradient.",
+  "bloom.image-switch": "The default index 1 shows input 1, which is the gradient on the default graph; choosing another input is covered by bloom.runtime.image_switch_render_native.",
   "bloom.layer-output": "A pass-through by design: it marks the layer's result.",
   "bloom.layer-stack": "A stack of the one gradient layer is that layer.",
   "bloom.lens-distortion": "The default distortion is zero.",
@@ -59,6 +60,7 @@
   "bloom.rolling-shutter": "The gradient does not move, so a rolling shutter has nothing to skew.",
   "bloom.st-map": "No ST map is connected by default, so nothing moves.",
   "bloom.stabilize": "No tracking data is set by default, so nothing moves.",
+  "bloom.text-animator": "On the default graph its text input reaches the gradient, not a Text Source, so it passes the picture through unchanged by design; its default selectors and properties (opacity 100 %, scale 100 %, no offset, rotation, skew, tracking or color change, full reveal, no cursor) are neutral as well. Animated text is covered by bloom.runtime.text_animator_render_native.",
   "bloom.transform-2d": "The default transform is the identity.",
   "bloom.vector-motion-blur": "No motion vectors are connected by default, so nothing blurs.",
   "bloom.z-defocus": "The gradient carries no depth, so nothing is defocused; the node is covered with a depth source by its own tests."

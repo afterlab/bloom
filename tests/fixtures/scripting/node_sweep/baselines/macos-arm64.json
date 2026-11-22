@@ -317,6 +317,12 @@
    "parity": "identical",
    "route": "gpu"
   },
+  "bloom.image-switch": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "parity": "identical",
+   "route": "gpu"
+  },
   "bloom.inner-glow": {
    "cpu": "sha256:955ab14e21bea9d86b86bb5a6ec8cf61fb22c9942afa391ea76365d3fa69f923",
    "gpu": "sha256:955ab14e21bea9d86b86bb5a6ec8cf61fb22c9942afa391ea76365d3fa69f923",
@@ -527,9 +533,21 @@
    "parity": "identical",
    "route": "gpu"
   },
+  "bloom.subtitles": {
+   "cpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "gpu": "sha256:482b06634aeaa4270793ed7370914f01e0bf95c2df9b9df67b0707191ab25b94",
+   "parity": "identical",
+   "route": "gpu"
+  },
   "bloom.test-card": {
    "cpu": "sha256:6a89f4c7ebf66ab50cec64637dd89039a48d6365a4ae75def717365dbe802552",
    "gpu": "sha256:6a89f4c7ebf66ab50cec64637dd89039a48d6365a4ae75def717365dbe802552",
+   "parity": "identical",
+   "route": "gpu"
+  },
+  "bloom.text-animator": {
+   "cpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
+   "gpu": "sha256:74faef300667e303f33fa5c3a7a770caf9bcbfc7ae76a14b4418aa36ded41b04",
    "parity": "identical",
    "route": "gpu"
   },
