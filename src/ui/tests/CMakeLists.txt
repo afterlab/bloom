@@ -1481,6 +1481,13 @@ target_include_directories(bloom_text_styling_capture PRIVATE ${CMAKE_CURRENT_SO
 target_link_libraries(bloom_text_styling_capture PRIVATE bloom_ui Qt6::Test)
 bloom_enable_warnings(bloom_text_styling_capture)
 
+# #758 review captures of the Text Animator's Properties, node card and timeline rows (a tool, not
+# a test): bloom_text_animator_capture <directory>, with QT_SCALE_FACTOR 1, 1.5 or 2.
+add_executable(bloom_text_animator_capture text_animator_capture.cpp)
+target_include_directories(bloom_text_animator_capture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/..)
+target_link_libraries(bloom_text_animator_capture PRIVATE bloom_ui Qt6::Test)
+bloom_enable_warnings(bloom_text_animator_capture)
+
 # #591 review captures of the coordinate space nodes' Properties and cards (a tool, not a test):
 # bloom_coordinate_space_capture <directory>, with QT_SCALE_FACTOR 1 or 1.5.
 add_executable(bloom_coordinate_space_capture coordinate_space_capture.cpp)
@@ -2969,7 +2976,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
                               coordinate-space-axes subtitles subtitles-transformed
-                              text-styled text-styled-transformed)
+                              text-styled text-styled-transformed text-animated
+                              text-animated-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario}
@@ -2979,7 +2987,7 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
             COMPOSITOR
         )
     endforeach()
-    # #742, #743, #511, #528, #519, #527, #510, #591, #752 and #757: a cold then a warm RAM preview over four keyed frames through the real RAM
+    # #742, #743, #511, #528, #519, #527, #510, #591, #752, #757 and #758: a cold then a warm RAM preview over four keyed frames through the real RAM
     # preview controller, every frame held to the CPU oracle, the warm pass dispatching nothing.
     foreach(scenario IN ITEMS transform-trilinear transform-anisotropic transform-nearest-shrunk
                               corner-pin-trilinear pixel-art-automatic
@@ -2996,7 +3004,8 @@ if(BLOOM_UI_VULKAN_AVAILABLE)
                               procedural-warp-turbulent procedural-warp-drizzle
                               procedural-warp-magnify-pull procedural-warp-ripple-pulse
                               coordinate-space-axes subtitles subtitles-transformed
-                              text-styled text-styled-transformed)
+                              text-styled text-styled-transformed text-animated
+                              text-animated-transformed)
         bloom_add_test(
             NAME bloom.ui.gpu_node_viewer_evidence.ram-${scenario}
             COMMAND bloom_ui_gpu_node_viewer_evidence_test --scenario ${scenario} --ram 4

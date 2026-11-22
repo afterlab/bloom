@@ -95,7 +95,7 @@ const std::vector<QString> kStylingOrder{
     "overflow",     "markup",          "accent1",           "accent2",
     "accent3",      "accent4",         "outlineColor",      "outlineWidth",
     "outlineJoin",  "background",      "backgroundColor",   "backgroundPadding",
-    "backgroundRadius"};
+    "backgroundRadius", "fixedDigits"};
 // The rows a text with Background Off and Outline width 0 does not read.
 const std::set<QString> kInactiveWhenPlain{"outlineColor", "outlineJoin", "backgroundColor",
                                            "backgroundPadding", "backgroundRadius"};
@@ -377,7 +377,8 @@ int main(int argc, char** argv) {
         failures += truncatedLabels(properties);
         for (const auto* label :
              {"Markup", "Accent 1", "Accent 4", "Outline color", "Outline width", "Outline join",
-              "Background", "Background color", "Background padding", "Background corner radius"})
+              "Background", "Background color", "Background padding", "Background corner radius",
+              "Fixed-width digits"})
             if (!hasLabel(properties, QString::fromLatin1(label))) {
                 ++failures;
                 std::cout << "missing row: " << label << '\n';
@@ -460,7 +461,7 @@ int main(int argc, char** argv) {
             button->click();
             settle();
             const auto* node = reopened.composition()->graph().findNode(*older);
-            if (node == nullptr || node->parameters.size() != 24 ||
+            if (node == nullptr || node->parameters.size() != 25 ||
                 !hasLabel(properties, QStringLiteral("Outline width")) ||
                 stylingButton(properties) != nullptr) {
                 ++failures;

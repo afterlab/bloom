@@ -279,6 +279,27 @@ struct Scenario final {
     out["text-styled"].animateSource = true;
     out["text-styled-transformed"] = out["text-styled"];
     out["text-styled-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
+    // #758: a Text Animator on an outlined Text Source: a triangle over the words turns, raises
+    // and recolors them, and the keyed reveal types the text on with its cursor, so a RAM preview
+    // draws a new frame every frame; and the same on a scaled and rotated layer.
+    out["text-animated"] = {"bloom.text-source",
+                            {{"text", std::string("Typed on, word by word")},
+                             {"size", 96.0},
+                             {"outlineWidth", 3.0}},
+                            "bloom.text-animator",
+                            {{"selector1Units", std::int64_t{2}},
+                             {"selector1Shape", std::int64_t{3}},
+                             {"rotation", 15.0},
+                             {"position", Vec2d{0.0, -24.0}},
+                             {"fill", true},
+                             {"fillColor", core::Color4d{1.0, 0.5, 0.0, 1.0}},
+                             {"cursor", true}},
+                            "reveal",
+                            10.0,
+                            100.0};
+    out["text-animated"].effectPort = "text";
+    out["text-animated-transformed"] = out["text-animated"];
+    out["text-animated-transformed"].layerValues = {{"scale", Vec2d{1.5, 1.5}}, {"rotation", 12.0}};
     out["hue-vibrance"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
                            {{"vibrance", 1.0}}};
     out["hue-colorize"] = {"bloom.four-color-gradient", {}, "bloom.hue-saturation",
