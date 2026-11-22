@@ -205,7 +205,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- v0.1.0-alpha.3 is in preparation: subtitles, styled and animated text, filtered scaling, Image
+- v0.1.0-alpha.3 was released on 2026-11-23: subtitles, styled and animated text, filtered scaling, Image
   Switch and exports that state their codecs. v0.1.0-alpha.2 was released on 2026-11-20: large
   projects that always save, agent work over MCP that stays quiet and keeps the window responsive
   at scale, and crash reports kept on the user's machine
