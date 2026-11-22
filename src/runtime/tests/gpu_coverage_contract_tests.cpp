@@ -1191,6 +1191,75 @@ displayProofRunner(const bool customView) {
             idBase += 100;
         }
     }
+    // #531: an Image Switch at each index (the source, the other input, a clamped and a wrapped
+    // index), each at full frame, an ROI and a half-scale proxy through the production builder.
+    const auto runSwitch = [](const std::shared_ptr<const bloom::runtime::CompiledCompositionPlan>& base,
+                              const CompiledOperation& other, const std::uint64_t idBase) {
+        FixtureRun combined;
+        combined.prepared = true;
+        const auto append = [&combined](FixtureRun frame) {
+            combined.prepared = combined.prepared && frame.prepared;
+            if (!frame.prepared)
+                combined.evidence += frame.evidence + "; ";
+            for (auto& value : frame.frames)
+                combined.frames.push_back(std::move(value));
+        };
+        for (const auto& [index, wrap] : std::array<std::pair<double, bool>, 4>{
+                 {{1.0, false}, {2.0, false}, {7.0, false}, {3.0, true}}}) {
+            const auto plan =
+                bloom::gpu_coverage_plans::switchedPlan(base, other, index, wrap, idBase);
+            const auto request = requestFor(*plan);
+            append(runBuilderWithRequest(plan, request));
+            auto regional = request;
+            const auto roiWindow = bloom::render::ImageWindow::create(3, 2, 9, 7);
+            regional.roi = *roiWindow.value();
+            append(runBuilderWithRequest(plan, regional));
+            auto proxy = request;
+            const auto proxyExtent = bloom::render::ImageExtent::create(8, 6);
+            proxy.resolution = bloom::runtime::ProxyResolution{*proxyExtent.value()};
+            append(runBuilderWithRequest(plan, proxy));
+        }
+        if (combined.prepared)
+            combined.evidence = "prepared indices 1, 2, clamped 7 and wrapped 3 at full frame, "
+                                "ROI and half-scale proxy";
+        return combined;
+    };
+    add("operation.CompiledImageSwitch", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Image Switch CPU and native parity tests", [runSwitch] {
+            return runSwitch(basePlan(), bloom::gpu_coverage_plans::gradient(false, 107010),
+                             107000);
+        });
+    add("node.bloom.image-switch", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Image Switch CPU and native parity tests", [runSwitch] {
+            // The other input is a Text leaf: its layer draws it through the switch.
+            return runSwitch(basePlan(), text(107110), 107100);
+        });
+    // #531: an animated Channel Set Switch lowers each Pass it feeds once per input and joins
+    // them with an Image Switch: here a Pass of the file's depth layer and a Shuffle of its
+    // diffuse layer, through the production channel gather.
+    add("node.bloom.channel-set-switch", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Image Switch CPU and native parity tests", [] {
+            const bloom::runtime::CpuCompositionEvaluator evaluator;
+            const auto& image = bloom::gpu_coverage_media::layeredImage();
+            const LayerValues layer{.position = {4.3, 3.1}, .opacity = 1.0};
+            const auto pass = bloom::gpu_coverage_media::channelShufflePlan(
+                image.asset, layer, 107200, bloom::gpu_coverage_media::ChannelFixture::Pass);
+            const auto shuffle = bloom::gpu_coverage_media::channelShufflePlan(
+                image.asset, layer, 107300, bloom::gpu_coverage_media::ChannelFixture::Shuffle);
+            FixtureRun combined;
+            combined.prepared = true;
+            for (const double index : {1.0, 2.0}) {
+                auto frame = runMediaBuilder(
+                    bloom::gpu_coverage_plans::switchedPlan(pass, shuffle->operations()[0], index,
+                                                            false, 107400),
+                    evaluator, bloom::gpu_coverage_media::gateDirectory());
+                combined.prepared = combined.prepared && frame.prepared;
+                combined.evidence += frame.evidence + "; ";
+                for (auto& value : frame.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            return combined;
+        });
     add("node.bloom.shape-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render PathRaster + shape source tests",
         [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000, true), 106000)); });

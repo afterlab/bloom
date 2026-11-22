@@ -59,6 +59,33 @@ using bloom::runtime::CompiledVec2Parameter;
 using bloom::runtime::ImageEffectKernel;
 using bloom::runtime::OperationIndex;
 
+// #531: `plan` with its first operation (a source) shown through an Image Switch whose input 1 is
+// that source and input 2 `other`, at a constant `index` (whole part from 1, clamped or wrapped).
+// The animated switch the compiler emits is the same operation; only its index varies per frame.
+[[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan>
+switchedPlan(const std::shared_ptr<const CompiledCompositionPlan>& plan, CompiledOperation other,
+             const double index, const bool wrap, const std::uint64_t idBase) {
+    auto definition = plan->copyDefinition();
+    std::vector<CompiledOperation> operations;
+    operations.push_back(definition.operations[0]);
+    operations.push_back(std::move(other));
+    operations.emplace_back(bloom::runtime::CompiledImageSwitch{
+        NodeId::fromRaw(idBase),
+        {OperationIndex::fromRaw(0), OperationIndex::fromRaw(1)},
+        CompiledScalarParameter{ParameterId::fromRaw(idBase + 1), index},
+        wrap});
+    for (std::size_t at = 1; at < definition.operations.size(); ++at) {
+        auto operation = definition.operations[at];
+        bloom::runtime::detail::remapOperationInputs(operation, [](const OperationIndex input) {
+            return OperationIndex::fromRaw(input.value() == 0 ? 2 : input.value() + 2);
+        });
+        operations.push_back(std::move(operation));
+    }
+    definition.operations = std::move(operations);
+    definition.output = OperationIndex::fromRaw(definition.output.value() + 2);
+    return publish(std::move(definition));
+}
+
 [[nodiscard]] inline std::shared_ptr<const CompiledCompositionPlan> basePlan() {
     return twoLayerPlan(format(16, 12), LayerValues{.position = {4.3, 3.1}},
                         LayerValues{.position = {11.5, 8.2}, .opacity = 0.75}, 6.0, 5.0, 90000);

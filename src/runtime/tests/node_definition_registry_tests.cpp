@@ -173,8 +173,9 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize; #527 adds Dither; #510 adds Procedural Warp; #642 adds Vector Artwork;
     // #627 adds Number List; #632 to #635 add Audio Bands, Audio Sample, Audio Features, Audio
     // Beat and Audio Pitch. #591 adds Coordinate Space, Space Readout, To Space, From Space and
-    // Place in Space. #752 adds Subtitles. #758 adds Text Animator.
-    expectations.expect(registry.definitions().size() == 266,
+    // Place in Space. #752 adds Subtitles. #758 adds Text Animator. #531 adds Image Switch and
+    // Channel Set Switch.
+    expectations.expect(registry.definitions().size() == 268,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
