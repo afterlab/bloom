@@ -18,6 +18,7 @@
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
 #include <bloom/document/text_animator_definition.hpp>
+#include <bloom/document/image_switch_definition.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
@@ -646,6 +647,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #514 Denoise & Smooth: the closed mode and frame count, radius and strength in domain.
     if (schemaKey.starts_with("bloom.denoise."))
         return isDenoiseParameterValueValid(schemaKey, constant.value);
+    // #531 Image Switch and Channel Set Switch: a finite index within its domain, a Wrap switch.
+    if (schemaKey.starts_with("bloom.image-switch."))
+        return isImageSwitchParameterValueValid(schemaKey, constant.value);
     // #486 Sharpen: every parameter within its document domain.
     if (sharpenParameterSpec(schemaKey) != nullptr)
         return isSharpenParameterValueValid(schemaKey, constant.value);
@@ -960,6 +964,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isLightRaysScalarSchemaKey(schemaKey) || isRollingShutterScalarSchemaKey(schemaKey) ||
            isWarpScalarSchemaKey(schemaKey) || sharpenParameterSpec(schemaKey) != nullptr ||
            schemaKey == kDenoiseRadiusSchemaKey || schemaKey == kDenoiseStrengthSchemaKey ||
+           schemaKey == kImageSwitchIndexSchemaKey ||
            isMotionScalarAnimatableSchemaKey(schemaKey) || isImagePixelScalarSchemaKey(schemaKey) ||
            isColorCleanupScalarSchemaKey(schemaKey) ||
            isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Scalar) ||
@@ -1094,6 +1099,9 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
     // #514 Denoise & Smooth (denoise_nodes.hpp).
     if (schemaKey.starts_with("bloom.denoise."))
         return isDenoiseScalarWithinDomain(schemaKey, value);
+    // #531 Image Switch (image_switch_nodes.hpp).
+    if (schemaKey == kImageSwitchIndexSchemaKey)
+        return isImageSwitchIndexWithinDomain(value);
     if (schemaKey == kLayerMaskFeatherSchemaKey)
         return value >= 0.0 && value <= kMaximumLayerMaskFeatherPixels;
     if (schemaKey == kLayerMaskExpansionSchemaKey)

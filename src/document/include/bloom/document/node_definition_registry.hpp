@@ -467,6 +467,10 @@ enum class NodeLoweringKind {
     // #758: a Text Animator (text_animator_nodes.hpp): the Text Source its chain reads, drawn with
     // per-cluster selectors, properties and a reveal.
     TextAnimator,
+    // #531: Image Switch and Channel Set Switch (image_switch_nodes.hpp): one of several inputs,
+    // chosen per frame by an index. A constant index wires the chosen input directly; an animated or
+    // driven one lowers to runtime::CompiledImageSwitch.
+    Switch,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -527,6 +531,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::FourColorGradient:
     case NodeLoweringKind::Subtitles:
     case NodeLoweringKind::TextAnimator:
+    case NodeLoweringKind::Switch:
         return false;
     }
     return false;

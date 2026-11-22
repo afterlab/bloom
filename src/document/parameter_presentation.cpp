@@ -21,6 +21,7 @@
 #include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/text_animator_nodes.hpp>
+#include <bloom/document/image_switch_nodes.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/denoise_nodes.hpp>
@@ -634,6 +635,21 @@ std::optional<ParameterPresentation> sharpenPresentation(const std::string_view 
                   spec->decimals, spec->unit, spec->displayScale);
 }
 
+// #531 Image Switch: the index a whole number counted from 1 (a slider over the eight inputs, any
+// stored number allowed), Wrap a switch.
+std::optional<ParameterPresentation> imageSwitchPresentation(const std::string_view schemaKey) {
+    if (schemaKey == kImageSwitchIndexSchemaKey)
+        return number(-kMaximumImageSwitchIndexMagnitude, kMaximumImageSwitchIndexMagnitude, 1.0,
+                      static_cast<double>(kImageSwitchInputCount), 1.0, 0);
+    if (schemaKey == kImageSwitchWrapSchemaKey) {
+        ParameterPresentation other;
+        other.kind = Kind::Other;
+        other.named = true;
+        return other;
+    }
+    return std::nullopt;
+}
+
 // #514 Denoise & Smooth: the mode a choice, the frame count a whole number, radius and strength
 // numbers over their domains.
 std::optional<ParameterPresentation> denoisePresentation(const std::string_view schemaKey) {
@@ -910,6 +926,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *sharpen;
     if (auto denoise = denoisePresentation(schemaKey))
         return *denoise;
+    if (auto switcher = imageSwitchPresentation(schemaKey))
+        return *switcher;
     for (const auto& entry : table())
         if (entry.schemaKey == schemaKey)
             return entry.presentation;

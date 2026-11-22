@@ -3,6 +3,7 @@
 #include <bloom/document/node_group_nodes.hpp>
 
 #include <bloom/document/audio_effect_nodes.hpp>
+#include <bloom/document/image_switch_definition.hpp>
 #include <bloom/document/merge_entries.hpp>
 #include <bloom/document/project.hpp>
 #include <bloom/document/value_nodes.hpp>
@@ -153,6 +154,20 @@ class GraphView final {
     [[nodiscard]] bool consumesEdge(const NodeRecord& node, const EdgeRecord& edge) const {
         if (const auto* stack = merge(node.id); stack && !stack->enabled())
             return false;
+        // #531: a switch reads only the input it shows when its index is a constant, and a muted
+        // one only its first input (the compiler's rule).
+        if (isImageSwitchNodeType(node.typeId))
+            if (const auto* input = std::get_if<NodeInputRef>(&edge.destination)) {
+                const auto& ports = imageSwitchInputPorts(node.typeId);
+                if (std::ranges::find(ports, input->port) != ports.end()) {
+                    if (isMuted(node.id))
+                        return input->port == ports.front();
+                    const auto shown = imageSwitchConstantPort(composition_, node);
+                    return !shown || *shown == input->port;
+                }
+                if (isMuted(node.id))
+                    return false;
+            }
         if (isMuted(node.id)) {
             const auto input = firstImageInput(node);
             if (!input || *input != edge.destination)

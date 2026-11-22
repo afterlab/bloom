@@ -20,6 +20,7 @@
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
 #include <bloom/document/text_animator_definition.hpp>
+#include <bloom/document/image_switch_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
@@ -874,6 +875,10 @@ template <typename Definition>
     // #758 Text Animator: the exact generated shape.
     case NodeLoweringKind::TextAnimator:
         return definition == textAnimatorDefinition();
+    // #531 Image Switch and Channel Set Switch: the exact generated shape.
+    case NodeLoweringKind::Switch:
+        return isImageSwitchNodeType(definition.key.typeId) &&
+               definition == imageSwitchDefinition(definition.key.typeId);
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -1987,6 +1992,8 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         fourColorGradientDefinition(),
         subtitlesDefinition(),
         textAnimatorDefinition(),
+        imageSwitchDefinition(kImageSwitchNodeType),
+        imageSwitchDefinition(kChannelSetSwitchNodeType),
         vectorArtworkDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),

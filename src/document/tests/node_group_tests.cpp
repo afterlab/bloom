@@ -66,6 +66,11 @@ void everyGroupIsNamed() {
     expect(nodeGroupOf("bloom.text-animator") == NodeGroup::TextPaths &&
                nodeGroupMembers(NodeGroup::TextPaths)[1] == "bloom.text-animator",
            "bloom.text-animator is in Text & Paths, after the Text Source");
+    // #531: the Image Switch picks a layer's image; the Channel Set Switch picks its passes.
+    expect(nodeGroupOf("bloom.image-switch") == NodeGroup::Compositing,
+           "bloom.image-switch is in Compositing");
+    expect(nodeGroupOf("bloom.channel-set-switch") == NodeGroup::Channels,
+           "bloom.channel-set-switch is in Channels");
 }
 
 // The group is presentation. Grouping must not reach the effect mask, which is part of the node's

@@ -19,15 +19,15 @@ constexpr std::array<std::string_view, 15> kSources{
     "bloom.test-card",
     "bloom.audio-equalizer",    "bloom.audio-compressor", "bloom.audio-auto-level",
     "bloom.audio-mono",         "bloom.audio-hiss"};
-// Planned: Image Switch.
-constexpr std::array<std::string_view, 8> kCompositing{
+constexpr std::array<std::string_view, 9> kCompositing{
     "bloom.layer-stack", "bloom.adjustment",     "bloom.layer-output",     "bloom.image-mix",
-    "bloom.set-alpha",   "bloom.multiply-alpha", "bloom.alpha-association", "bloom.edge-extend"};
-constexpr std::array<std::string_view, 10> kChannels{
+    "bloom.set-alpha",   "bloom.multiply-alpha", "bloom.alpha-association", "bloom.edge-extend",
+    "bloom.image-switch"};
+constexpr std::array<std::string_view, 11> kChannels{
     "bloom.channel-copy",        "bloom.channel-pass",      "bloom.channel-remove",
     "bloom.channel-shuffle",     "bloom.separate-channels", "bloom.combine-channels",
     "bloom.image-to-channel-set", "bloom.image-math", "bloom.image-map-range",
-    "bloom.image-clamp"};
+    "bloom.image-clamp",         "bloom.channel-set-switch"};
 // Planned: Channel Key, Chroma Key, Despill, Matte Refine, Transition/Wipe Matte.
 constexpr std::array<std::string_view, 9> kKeyingMattes{
     "bloom.luma-key",      "bloom.cryptomatte", "bloom.mask",         "bloom.mask-combine",
