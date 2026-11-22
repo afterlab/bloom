@@ -400,9 +400,21 @@ lower(const std::vector<document::NodeId>& order) {
                 emptyImages_.insert(id);
             continue;
         }
+        // #531: a Channel Set Switch carries no pixels; an Image Switch is empty when what it can
+        // show is (a muted one is classified below by its first input, as every muted node is).
+        if (definition->lowering == runtime::NodeLoweringKind::Switch) {
+            if (node->typeId != document::kImageSwitchNodeType)
+                continue;
+            if (!isMuted(id)) {
+                if (imageSwitchEmpty(*node))
+                    emptyImages_.insert(id);
+                continue;
+            }
+        }
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput &&
             definition->lowering != runtime::NodeLoweringKind::ImageEffect &&
-            definition->lowering != runtime::NodeLoweringKind::TextAnimator)
+            definition->lowering != runtime::NodeLoweringKind::TextAnimator &&
+            definition->lowering != runtime::NodeLoweringKind::Switch)
             continue;
         auto input = firstImageInput(*node);
         // #479 Combine Channels' first CONNECTED input is its base, which owns every window: the
@@ -522,6 +534,14 @@ lower(const std::vector<document::NodeId>& order) {
             indices.emplace(nodeId, index);
             continue;
         }
+        // #531: an Image Switch wires the input a constant index shows, or switches every input per
+        // frame; a Channel Set Switch compiles into the channel expressions that read it.
+        if (definition->second->lowering == runtime::NodeLoweringKind::Switch) {
+            if (node->typeId == document::kImageSwitchNodeType &&
+                !lowerImageSwitch(*node, operations, indices))
+                return {};
+            continue;
+        }
         if (!lowerFieldImageInputs(*node, *definition->second, operations, indices))
             return {};
         // #502: an Adjustment's operation is the stack below its entry.
@@ -543,7 +563,9 @@ lower(const std::vector<document::NodeId>& order) {
                                    hasReachableOutput(nodeId, document::kChannelPassImagePort);
             if (!shuffleImage && !passImage)
                 continue;
-            const auto shuffled = lowerChannelShuffle(*node, operations, indices);
+            // #531: once per input of an animated or driven Channel Set Switch it reads.
+            const auto shuffled = lowerThroughChannelSwitches(
+                operations, [&] { return lowerChannelShuffle(*node, operations, indices); });
             if (!shuffled)
                 return {};
             indices.emplace(nodeId, *shuffled);
@@ -1679,6 +1701,7 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
     case NodeLoweringKind::Subtitles:
         return lowerSubtitles(node);
     case NodeLoweringKind::TextAnimator: // #758: lowered in the main loop (lowerTextAnimator())
+    case NodeLoweringKind::Switch: // #531: lowered in the main loop (lowerImageSwitch())
         break;
     case NodeLoweringKind::LayerOutput:
         return lowerLayerOutput(node, indices);
@@ -2991,6 +3014,37 @@ lowerChannelStep(const document::OutputPortRef& output,
         if (!layer)
             return std::nullopt;
         step.layer = *layer;
+    } else if (node->typeId == document::kChannelSetSwitchNodeType) {
+        // #531: the input the switch shows -- its first when muted, the one a constant index
+        // names, or the one a Shuffle or Channel Pass is being lowered for -- and an empty set
+        // for an unconnected one.
+        const auto& ports = document::kChannelSetSwitchInputPorts;
+        auto shown = isMuted(node->id) ? std::optional<std::string_view>(ports.front())
+                                       : document::imageSwitchConstantPort(*composition_, *node);
+        if (!shown) {
+            if (const auto choice = channelSwitchChoices_.find(node->id);
+                choice != channelSwitchChoices_.end() && choice->second < ports.size()) {
+                shown = ports[choice->second];
+            } else if (forkingChannelSwitches_) {
+                if (!pendingChannelSwitch_)
+                    pendingChannelSwitch_ = node->id;
+                return std::nullopt;
+            } else {
+                addTopologyFailure(
+                    node->id,
+                    "An animated or driven Channel Set Switch can feed only a Shuffle or a Channel "
+                    "Pass. Switch their images, or give the switch a constant index.");
+                return std::nullopt;
+            }
+        }
+        const auto* edge = fixedInputEdge(node->id, *shown);
+        if (edge != nullptr) {
+            const auto through = lowerChannelStep(edge->source, expression, memo, depth + 1, indices);
+            if (through)
+                memo.emplace(memoKey, *through);
+            return through;
+        }
+        imageSource(std::nullopt, {});
     } else {
         addTopologyFailure(node->id, "Node does not produce a channel set.");
         return std::nullopt;
@@ -3141,6 +3195,128 @@ lowerCryptomatte(const document::NodeRecord& node) {
 // Image to Channel Set channels and constants become exact Channel Select / Channel Combine effects
 // over the image operations; every other mapping is the evaluation-time gather, which also reports
 // the refusals (Color on a data channel, image channels mixed with file channels).
+// #531: the inputs an Image Switch counts (the first up to the last connected one).
+[[nodiscard]] std::size_t switchInputCount(const document::NodeRecord& node) const {
+    const auto& ports = document::imageSwitchInputPorts(node.typeId);
+    std::size_t count = 0;
+    for (std::size_t position = 0; position < ports.size(); ++position)
+        if (fixedInputEdge(node.id, ports[position]) != nullptr)
+            count = position + 1;
+    return count;
+}
+
+// #531: whether an unmuted Image Switch shows nothing at every frame: the input a constant index
+// names is unconnected or empty, or with an animated or driven index every input is.
+[[nodiscard]] bool imageSwitchEmpty(const document::NodeRecord& node) const {
+    const auto empty = [&](const std::string_view port) {
+        const auto* edge = fixedInputEdge(node.id, port);
+        return edge == nullptr || emptyImages_.contains(edge->source.nodeId);
+    };
+    if (const auto shown = document::imageSwitchConstantPort(*composition_, node))
+        return empty(*shown);
+    return std::ranges::all_of(document::imageSwitchInputPorts(node.typeId), empty);
+}
+
+[[nodiscard]] std::optional<runtime::CompiledImageSwitch>
+compiledSwitch(const document::NodeRecord& node) {
+    const auto index =
+        compiledScalarParameter(findParameterBinding(node, document::kImageSwitchIndexRole));
+    const auto* wrap =
+        parameterConstant<bool>(findParameterBinding(node, document::kImageSwitchWrapRole));
+    if (!index || wrap == nullptr) {
+        addTopologyFailure(node.id, "Switch parameters could not be lowered.");
+        return std::nullopt;
+    }
+    return runtime::CompiledImageSwitch{node.id, {}, *index, *wrap};
+}
+
+// #531 Image Switch. A muted switch, or one whose index is a constant, is the input it shows (the
+// reachable graph holds no other input). An animated or driven one is a CompiledImageSwitch over its
+// inputs, an unconnected or empty one an empty Merge, so a frame shows exactly one of them and
+// evaluates only that one.
+[[nodiscard]] bool lowerImageSwitch(const document::NodeRecord& node,
+                                    std::vector<runtime::CompiledOperation>& operations,
+                                    std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    const auto& ports = document::imageSwitchInputPorts(node.typeId);
+    const auto shown = isMuted(node.id) ? std::optional<std::string_view>(ports.front())
+                                        : document::imageSwitchConstantPort(*composition_, node);
+    if (shown) {
+        const auto source = findInputOperation(node.id, *shown, indices);
+        if (!source) {
+            addTopologyFailure(node.id, "Image Switch input was not lowered.");
+            return false;
+        }
+        indices.emplace(node.id, *source);
+        return true;
+    }
+    auto switcher = compiledSwitch(node);
+    if (!switcher)
+        return false;
+    const auto count = switchInputCount(node);
+    for (std::size_t position = 0; position < count; ++position) {
+        auto input = findInputOperation(node.id, ports[position], indices);
+        if (!input) {
+            input = runtime::OperationIndex::fromRaw(operations.size());
+            operations.emplace_back(runtime::CompiledMerge{node.id, {}});
+        }
+        switcher->inputs.push_back(*input);
+    }
+    if (switcher->inputs.empty()) {
+        addTopologyFailure(node.id, "Image Switch has no input.");
+        return false;
+    }
+    indices.emplace(node.id, runtime::OperationIndex::fromRaw(operations.size()));
+    operations.emplace_back(std::move(*switcher));
+    return true;
+}
+
+// #531: lowers an image-producing reader of a channel set (`lower`), once for each input of the
+// first animated or driven Channel Set Switch its channel expression meets, and switches those
+// images with that switch's index: passes follow the switch exactly as an Image Switch's images do,
+// and a frame evaluates only the chosen input's reader. Nested switches fork in turn, up to
+// kMaximumChannelSwitchReaders readers.
+template <typename Lower>
+[[nodiscard]] std::optional<runtime::OperationIndex>
+lowerThroughChannelSwitches(std::vector<runtime::CompiledOperation>& operations, Lower&& lower,
+                            const std::size_t readers = 1) {
+    constexpr std::size_t kMaximumChannelSwitchReaders = 64;
+    const auto wasForking = forkingChannelSwitches_;
+    forkingChannelSwitches_ = true;
+    pendingChannelSwitch_.reset();
+    auto lowered = lower();
+    forkingChannelSwitches_ = wasForking;
+    const auto pending = pendingChannelSwitch_;
+    pendingChannelSwitch_.reset();
+    if (lowered || !pending)
+        return lowered;
+    const auto* node = findNode(*pending);
+    if (node == nullptr)
+        return std::nullopt;
+    const auto count = switchInputCount(*node);
+    if (count == 0 || readers * count > kMaximumChannelSwitchReaders) {
+        addTopologyFailure(*pending, count == 0 ? "Channel Set Switch has no input."
+                                                : "Channel Set Switches multiply into more than 64 "
+                                                  "readers of one channel set.");
+        return std::nullopt;
+    }
+    auto switcher = compiledSwitch(*node);
+    if (!switcher)
+        return std::nullopt;
+    for (std::size_t position = 0; position < count; ++position) {
+        channelSwitchChoices_[*pending] = position;
+        const auto option = lowerThroughChannelSwitches(operations, lower, readers * count);
+        if (!option) {
+            channelSwitchChoices_.erase(*pending);
+            return std::nullopt;
+        }
+        switcher->inputs.push_back(*option);
+    }
+    channelSwitchChoices_.erase(*pending);
+    const auto index = runtime::OperationIndex::fromRaw(operations.size());
+    operations.emplace_back(std::move(*switcher));
+    return index;
+}
+
 [[nodiscard]] std::optional<runtime::OperationIndex>
 lowerChannelShuffle(const document::NodeRecord& node,
                     std::vector<runtime::CompiledOperation>& operations,

@@ -5,6 +5,7 @@
 #include <bloom/document/codec_degrade_nodes.hpp>
 #include <bloom/document/auto_exposure_nodes.hpp>
 #include <bloom/document/image_math_parameters.hpp>
+#include <bloom/document/image_switch_nodes.hpp>
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/core/color.hpp>
 #include <bloom/document/composition_settings.hpp>
@@ -1964,6 +1965,25 @@ struct CompiledMerge {
     friend bool operator==(const CompiledMerge&, const CompiledMerge&) = default;
 };
 
+// #531 Image Switch: one of `inputs` (in input order; an unconnected or empty input is lowered to an
+// empty Merge) chosen each frame by `index`. The index's whole part counts the inputs from 1 and is
+// clamped to [1, inputs.size()], or with `wrap` taken modulo inputs.size() (imageSwitchPosition).
+// Its pixels, bounds and cache identity are exactly the chosen input's, and only the chosen input is
+// evaluated, on the CPU reference and in GPU preparation (image_switch_liveness.hpp). Only an
+// animated or driven index reaches the plan: a constant one is resolved by the compiler, which wires
+// the chosen input directly.
+struct CompiledImageSwitch {
+    document::NodeId sourceNodeId;
+    std::vector<OperationIndex> inputs;
+    CompiledScalarParameter index;
+    bool wrap = false;
+
+    friend bool operator==(const CompiledImageSwitch&, const CompiledImageSwitch&) = default;
+};
+
+// #531: the one selection rule (image_switch_nodes.hpp), shared with the compiler.
+using document::imageSwitchPosition;
+
 struct CompiledCompositionOutput {
     document::NodeId sourceNodeId;
     OperationIndex input;
@@ -1981,7 +2001,8 @@ using CompiledOperation =
     std::variant<CompiledSolid, CompiledChecker, CompiledText, CompiledImageSource,
                  CompiledVideoSource, CompiledLayerOutput, CompiledMerge, CompiledCompositionOutput,
                  CompiledShape, CompiledCompositionSource, CompiledImageEffect,
-                 CompiledChannelShuffle, CompiledCryptomatte, CompiledSubtitles>;
+                 CompiledChannelShuffle, CompiledCryptomatte, CompiledSubtitles,
+                 CompiledImageSwitch>;
 
 // ADR 0024 time clocks. Clock 0 is the plan's own clock (the request time). A Layer clock maps its
 // parent clock through a layer's start time and speed; a Content clock (whose parent is that Layer

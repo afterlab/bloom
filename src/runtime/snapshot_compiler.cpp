@@ -48,6 +48,7 @@
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
 #include <bloom/document/text_animator_nodes.hpp>
+#include <bloom/document/image_switch_definition.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
@@ -1365,6 +1366,12 @@ class CompilePass final {
     const runtime::CancellationToken& cancellation_;
     runtime::detail::CompileCheckpointObserver* checkpointObserver_ = nullptr;
     const document::Composition* composition_ = nullptr;
+    // #531: the input each animated or driven Channel Set Switch shows while a Shuffle or Channel
+    // Pass is lowered once per input (lowerThroughChannelSwitches()), the switch that lowering met
+    // without a choice, and whether a fork can resolve it.
+    std::unordered_map<document::NodeId, std::size_t> channelSwitchChoices_{};
+    std::optional<document::NodeId> pendingChannelSwitch_{};
+    bool forkingChannelSwitches_ = false;
     document::NodeGroupExpansion expansion_;
     // #642: the composition with every Vector Artwork node expanded (composition_ points into it).
     document::VectorArtworkExpansion artwork_;

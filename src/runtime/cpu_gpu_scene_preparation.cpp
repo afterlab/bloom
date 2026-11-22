@@ -13,6 +13,7 @@
 #include "gpu_scene_preparation_leaf_emission.hpp"
 #include "gpu_scene_preparation_private.hpp"
 #include "gpu_scene_subtitles_emission.hpp"
+#include "image_switch_liveness.hpp"
 #include "gpu_scene_vector_emission.hpp"
 
 #include "operation_key.hpp"
@@ -86,7 +87,9 @@ using detail::GpuSceneVectorChain;
            std::holds_alternative<CompiledChannelShuffle>(operation) ||
            std::holds_alternative<CompiledCryptomatte>(operation) ||
            // #752: its colors are working-space values, premultiplied like a Text's.
-           std::holds_alternative<CompiledSubtitles>(operation);
+           std::holds_alternative<CompiledSubtitles>(operation) ||
+           // #531: its chosen input, unchanged.
+           std::holds_alternative<CompiledImageSwitch>(operation);
 }
 
 // Retained scene storage past the stated allowance is claimed in steps, so a dense scene takes the
@@ -269,6 +272,14 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
     const detail::ResolvedEvaluation& frameResolved = *checked.resolved;
     detail::pruneIdentityCodecInputs(*plan, frameResolved, request.time, request.output.value(),
                                      reachable);
+    // #531: an Image Switch's unchosen inputs are not prepared: nothing of them is decoded,
+    // uploaded, emitted or dispatched, exactly as the CPU reference evaluates only the chosen one.
+    if (detail::planHasImageSwitch(*plan)) {
+        const auto live =
+            detail::liveOperations(*plan, frameResolved, request.time, request.output.value());
+        for (std::size_t index = 0; index < reachable.size(); ++index)
+            reachable[index] = reachable[index] && live[index];
+    }
     if (frameResolved.imageDescriptor.dataWindow().extent().width() == 0) {
         return fail(PreparedGpuSceneDiagnosticCode::InternalInvariant,
                     "Preflight produced an invalid process descriptor");
@@ -771,6 +782,22 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
             continue;
         }
 
+        // #531: an Image Switch emits nothing of its own; it is its chosen input's command, key,
+        // window, bounds and deferred vector leaf, as an identity effect is its input's.
+        if (const auto* switcher = std::get_if<CompiledImageSwitch>(&operation)) {
+            if (const auto chosen = detail::selectedSwitchInput(*switcher, *plan, frameResolved,
+                                                                request.time, operationIndex)) {
+                const auto from = chosen->value();
+                commandForOperation[index] = commandForOperation[from];
+                keyOf[index] = keyOf[from];
+                outputWindowOf[index] = outputWindowOf[from];
+                bounds[index].local = bounds[from].output;
+                bounds[index].output = bounds[index].local;
+                vectors[index] = vectors[from];
+            }
+            continue;
+        }
+
         if (const auto* checker = std::get_if<CompiledChecker>(&operation)) {
             if (const auto error = detail::emitCheckerCommand(
                     *checker, *plan, resolved, index, operationIndex, fullDisplayWindow,
@@ -1254,7 +1281,10 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 // optimized translation command; every other vector layer emits coverage.
                 const std::size_t chainSource = inputVec->source;
                 const auto& leafOperation = plan->operations()[chainSource];
-                const bool direct = chainSource == inputIndexValue;
+                // #531: through an Image Switch, the leaf it shows is direct.
+                const bool direct = chainSource == detail::shownOperation(*plan, frameResolved,
+                                                                          request.time,
+                                                                          inputIndexValue);
                 if (direct && !layer->parent &&
                     std::holds_alternative<CompiledSolid>(leafOperation) && nativeGrid) {
                     const auto delta = detail::translationOnlyDeviceDelta(

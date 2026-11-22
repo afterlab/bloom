@@ -1,4 +1,5 @@
 #include <bloom/document/cue_markup.hpp>
+#include <bloom/document/image_switch_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/runtime/animation_sampling.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
@@ -549,6 +550,8 @@ class Evaluator final {
                        const runtime::CompiledValueShake& kernel);
     void evaluateSubtitles(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValueSubtitles& kernel);
+    void evaluateSwitchSelection(const runtime::CompiledValueOperation& operation,
+                                 const runtime::CompiledValueSwitchSelection& kernel);
     void evaluatePromotion(const runtime::CompiledValueOperation& operation,
                            const runtime::CompiledValuePromotion& kernel);
     void evaluateUtility(const runtime::CompiledValueOperation& operation,
@@ -626,6 +629,8 @@ void Evaluator::evaluateOperation(const runtime::CompiledValueOperation& operati
                 evaluateShake(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueSubtitles>) {
                 evaluateSubtitles(operation, kernel);
+            } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueSwitchSelection>) {
+                evaluateSwitchSelection(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledValueUtility>) {
                 evaluateUtility(operation, kernel);
             } else if constexpr (std::is_same_v<Kernel, runtime::CompiledBoundsReadout>) {
@@ -1650,6 +1655,22 @@ void Evaluator::evaluateSubtitles(const runtime::CompiledValueOperation& operati
     const double span = first.end.toSeconds() - first.start.toSeconds();
     const double into = time_.toSeconds() - first.start.toSeconds();
     write(operation, 4, span > 0.0 ? std::clamp(into / span, 0.0, 1.0) : 0.0);
+}
+
+// #531: the input a switch shows, counted from 1 (0 when it shows nothing), by the rule its image
+// follows.
+void Evaluator::evaluateSwitchSelection(const runtime::CompiledValueOperation& operation,
+                                        const runtime::CompiledValueSwitchSelection& kernel) {
+    const auto* index = asScalar(operandOf(kernel.index));
+    if (index == nullptr) {
+        fail(operation, kernel.index.id, "Switch index is not a scalar",
+             "The index must reach the switch as a Scalar.");
+        write(operation, 0, std::int64_t{0});
+        return;
+    }
+    const auto position =
+        document::imageSwitchPosition(static_cast<std::size_t>(kernel.count), *index, kernel.wrap);
+    write(operation, 0, position ? static_cast<std::int64_t>(*position) + 1 : std::int64_t{0});
 }
 
 void Evaluator::evaluateShake(const runtime::CompiledValueOperation& operation,

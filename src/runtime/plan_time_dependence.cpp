@@ -285,6 +285,10 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                 else if constexpr (std::is_same_v<Step, CompiledMerge>)
                     return std::ranges::any_of(
                         step.entries, [&](const auto& entry) { return input(entry.input); });
+                // #531: which input shows changes with an animated or driven index.
+                else if constexpr (std::is_same_v<Step, CompiledImageSwitch>)
+                    return parameter(step.index) ||
+                           std::ranges::any_of(step.inputs, [&](const auto at) { return input(at); });
                 else
                     return input(step.input);
             },

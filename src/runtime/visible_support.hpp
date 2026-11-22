@@ -32,6 +32,7 @@
 
 #include "cpu_composition_evaluator_support.hpp"
 #include "cpu_composition_resolution.hpp"
+#include "image_switch_liveness.hpp"
 #include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
 #include "separable_image_effect.hpp"
@@ -188,6 +189,21 @@ class UnclippedPictures final {
         }
         if (const auto* effect = std::get_if<CompiledImageEffect>(&operation))
             effectPicture(*effect, index, resolved, *operandTime, h, v, out);
+        // #531: an Image Switch's picture is its chosen input's (nothing when it shows nothing).
+        if (const auto* switcher = std::get_if<CompiledImageSwitch>(&operation)) {
+            const auto chosen = selectedSwitchInput(*switcher, plan_, frameResolved_, requestTime_,
+                                                    operationIndex);
+            if (!chosen) {
+                out.supported = true;
+            } else if (chosen->value() < index) {
+                // A raster chain stops at a switch, as it does on both routes.
+                const auto copy = at(chosen->value());
+                out = copy;
+                out.known = true;
+                out.chain.reset();
+            }
+            return;
+        }
         // Anything else (text, media, nested compositions, ...) is not covered.
     }
 
@@ -689,8 +705,11 @@ visibleSupportWindows(const CompiledCompositionPlan& plan, const ResolvedEvaluat
             everyInput(unbounded);
             continue;
         }
+        // #531: an Image Switch reads its chosen input exactly where it is read (only the chosen
+        // one is read at all, image_switch_liveness.hpp).
         if (std::holds_alternative<CompiledCompositionOutput>(operation) ||
-            std::holds_alternative<CompiledMerge>(operation)) {
+            std::holds_alternative<CompiledMerge>(operation) ||
+            std::holds_alternative<CompiledImageSwitch>(operation)) {
             everyInput(asked);
             continue;
         }

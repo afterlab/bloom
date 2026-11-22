@@ -62,6 +62,7 @@ struct DriverReference final {
         case runtime::NodeLoweringKind::Shape:
         case runtime::NodeLoweringKind::Text:
         case runtime::NodeLoweringKind::TextAnimator:
+        case runtime::NodeLoweringKind::Switch:
         case runtime::NodeLoweringKind::CompositionSource:
     case runtime::NodeLoweringKind::VideoSource:
     case runtime::NodeLoweringKind::ImageEffect:
@@ -420,6 +421,20 @@ lowerSubtitlesValueKernel(const document::NodeRecord& node,
     kernel.cues = *std::move(cues);
     kernel.speakerPrefix = speaker != nullptr && *speaker == document::kSubtitlesSpeakerPrefix;
     return runtime::CompiledValueKernel{std::move(kernel)};
+}
+
+// #531: an Image Switch's or Channel Set Switch's `selected` output: the input it shows by the
+// rule its image follows, over the inputs it counts (up to its highest connected one).
+[[nodiscard]] std::optional<runtime::CompiledValueKernel>
+lowerSwitchSelectionKernel(const document::NodeRecord& node,
+                           const runtime::NodeDefinition& definition) {
+    auto index = valueOperand(node, definition, document::kImageSwitchIndexRole);
+    const auto* wrap = parameterConstant<bool>(
+        runtime::detail::findParameterBinding(node, document::kImageSwitchWrapRole));
+    if (!index || wrap == nullptr)
+        return std::nullopt;
+    return runtime::CompiledValueKernel{runtime::CompiledValueSwitchSelection{
+        *std::move(index), static_cast<std::uint64_t>(switchInputCount(node)), *wrap}};
 }
 
 // #568 Rolling Shutter: the Camera Shake behind its camera offset and roll, read at three moments of
@@ -1070,6 +1085,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::VectorArtwork:
     case runtime::NodeLoweringKind::Subtitles:
     case runtime::NodeLoweringKind::TextAnimator:
+    case runtime::NodeLoweringKind::Switch:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:
@@ -1172,22 +1188,27 @@ void swapValueProgram(FunctionBodyBuild& build) {
         const bool shake = node != nullptr && node->typeId == document::kCameraShakeNodeType;
         // #752: a Subtitles node is an image node that also publishes values.
         const bool subtitles = node != nullptr && node->typeId == document::kSubtitlesNodeType;
+        // #531: a switch is an image node whose `selected` output is a value.
+        const bool switcher = node != nullptr && document::isImageSwitchNodeType(node->typeId);
         if (node != nullptr && definition != definitions_.end() &&
             node->typeId == document::kRollingShutterNodeType) {
             return appendRollingShutterSamples(*node, *definition->second);
         }
         if (node == nullptr || definition == definitions_.end() ||
-            (!isValueNode(nodeId) && !shake && !subtitles)) {
+            (!isValueNode(nodeId) && !shake && !subtitles && !switcher)) {
             return true;
         }
         auto kernel = shake       ? lowerShakeKernel(*node, *definition->second)
                       : subtitles ? lowerSubtitlesValueKernel(*node, *definition->second)
+                      : switcher  ? lowerSwitchSelectionKernel(*node, *definition->second)
                                   : lowerValueKernel(*node, *definition->second);
         if (!kernel.has_value()) {
             addTopologyFailure(nodeId, "A reachable value node could not be lowered.");
             return false;
         }
-        const std::size_t outputCount = shake ? 3 : definition->second->outputs.size();
+        // A switch's first output is its image or channel set; it publishes one value.
+        const std::size_t outputCount =
+            shake ? 3 : (switcher ? 1 : definition->second->outputs.size());
         const auto first = runtime::ValueOutputIndex::fromRaw(valueOutputCount_);
         bool requiresPostImage =
             std::holds_alternative<runtime::CompiledBoundsReadout>(*kernel);
@@ -1204,6 +1225,10 @@ void swapValueProgram(FunctionBodyBuild& build) {
                                   runtime::ValueOutputIndex::fromRaw(valueOutputCount_));
             valueOutputs_.emplace(ValueOutputKey{nodeId, std::string(document::kCameraShakeRollPort)},
                                   runtime::ValueOutputIndex::fromRaw(valueOutputCount_ + 1));
+        } else if (switcher) {
+            valueOutputs_.emplace(
+                ValueOutputKey{nodeId, std::string(document::kImageSwitchSelectedPort)},
+                runtime::ValueOutputIndex::fromRaw(valueOutputCount_));
         } else {
             for (std::size_t slot = 0; slot < outputCount; ++slot) {
                 valueOutputs_.emplace(

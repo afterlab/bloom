@@ -97,6 +97,7 @@ BLOOM_GPU_REQUIRED_OPERATION(CompiledImageEffect, "image effect");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledChannelShuffle, "channel shuffle (ADR 0026)");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledCryptomatte, "Cryptomatte matte (#364)");
 BLOOM_GPU_REQUIRED_OPERATION(CompiledSubtitles, "subtitles (#752)");
+BLOOM_GPU_REQUIRED_OPERATION(CompiledImageSwitch, "image switch: only the chosen input (#531)");
 
 #define BLOOM_GPU_REQUIRED_EFFECT(Alternative, Label)                                              \
     template <> struct GpuImageEffectCoverageTraits<Alternative> final {                           \
@@ -785,6 +786,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::Subtitles:
     // #758: a Text Animator draws its chain's Text Source.
     case NodeLoweringKind::TextAnimator:
+    // #531: an Image Switch shows its chosen input.
+    case NodeLoweringKind::Switch:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -858,6 +861,9 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
         return "operation.CompiledChannelShuffle";
     case NodeLoweringKind::Cryptomatte:
         return "operation.CompiledCryptomatte";
+    // #531: an animated or driven index; a constant one is the chosen input's own operation.
+    case NodeLoweringKind::Switch:
+        return "operation.CompiledImageSwitch";
     case NodeLoweringKind::VideoSource:
         return "operation.CompiledVideoSource";
     case NodeLoweringKind::CompositionSource:

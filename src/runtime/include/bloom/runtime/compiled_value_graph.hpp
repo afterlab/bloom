@@ -559,6 +559,19 @@ struct CompiledValueImageStatistics final {
                            const CompiledValueImageStatistics&);
 };
 
+// #531: the input an Image Switch or a Channel Set Switch shows, as an Integer counted from 1: its
+// index's whole part over its `count` counted inputs, clamped or wrapped (document::
+// imageSwitchPosition), and 0 when it shows nothing (no counted input, or an index that is not
+// finite). Its value outputs read the same rule its image does.
+struct CompiledValueSwitchSelection final {
+    CompiledValueOperand index;
+    std::uint64_t count = 0;
+    bool wrap = false;
+
+    friend bool operator==(const CompiledValueSwitchSelection&,
+                           const CompiledValueSwitchSelection&) = default;
+};
+
 using CompiledValueKernel =
     std::variant<CompiledValuePassthrough, CompiledValueTime, CompiledValueScalarMath,
                  CompiledValueVectorMath, CompiledValueVectorReduce, CompiledValueMapRange,
@@ -569,7 +582,8 @@ using CompiledValueKernel =
                  CompiledValuePathCurve, CompiledValueGroupBoundary, CompiledValueFunction,
                  CompiledValueFunctionPlot, CompiledValueAudioAmplitude,
                  CompiledValueImageStatistics, CompiledValueWarpFunction,
-                 CompiledValueAudioTable, CompiledValueSubtitles>;
+                 CompiledValueAudioTable, CompiledValueSubtitles,
+                 CompiledValueSwitchSelection>;
 
 // Every operand one kernel reads, in declaration order. Written once, here beside the kernels, so a
 // caller that has to walk them -- the evaluator's preflight, which has to know which animation
@@ -600,6 +614,8 @@ template <typename Visit> void forEachValueOperand(const CompiledValueKernel& ke
                 // The statistics are of a picture: no operand of this plan.
             } else if constexpr (std::is_same_v<Step, CompiledValueSubtitles>) {
                 visit(step.cues);
+            } else if constexpr (std::is_same_v<Step, CompiledValueSwitchSelection>) {
+                visit(step.index);
             } else if constexpr (std::is_same_v<Step, CompiledValueShake>) {
                 visit(step.amplitudeX);
                 visit(step.amplitudeY);

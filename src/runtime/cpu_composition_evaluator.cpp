@@ -16,6 +16,7 @@
 #include "histogram_image_effect.hpp"
 #include "image_effect.hpp"
 #include "image_source.hpp"
+#include "image_switch_liveness.hpp"
 #include "layer_mask_sampling.hpp"
 #include "layer_parent_transform.hpp"
 #include "lens_flare_image_effect.hpp"
@@ -121,6 +122,9 @@ static_assert(document::kMaximumTextSizePixels == render::kMaximumTextPixelSize,
             [&subject](const CompiledMerge& stack) { subject.nodeId = stack.sourceNodeId; },
             [&subject](const CompiledCompositionOutput& output) {
                 subject.nodeId = output.sourceNodeId;
+            },
+            [&subject](const CompiledImageSwitch& switcher) {
+                subject.nodeId = switcher.sourceNodeId;
             },
         },
         operation);
@@ -1015,7 +1019,8 @@ enum class ScalarDomain : std::uint8_t {
                            std::holds_alternative<CompiledVideoSource>(input) ||
                            std::holds_alternative<CompiledCompositionSource>(input) ||
                            std::holds_alternative<CompiledLayerOutput>(input) ||
-                           std::holds_alternative<CompiledMerge>(input);
+                           std::holds_alternative<CompiledMerge>(input) ||
+                           std::holds_alternative<CompiledImageSwitch>(input);
                 };
                 if (layer.parent && (layer.parent->value() >= index ||
                                      !std::holds_alternative<CompiledLayerOutput>(
@@ -1101,6 +1106,22 @@ enum class ScalarDomain : std::uint8_t {
                     }
                 }
                 return true;
+            },
+            // #531: every input an earlier image operation (never the Composition Output).
+            [&plan, index, &failure](const CompiledImageSwitch& switcher) {
+                const bool valid =
+                    !switcher.inputs.empty() &&
+                    std::ranges::all_of(switcher.inputs, [&](const OperationIndex input) {
+                        return input.value() < index &&
+                               !std::holds_alternative<CompiledCompositionOutput>(
+                                   plan.operations()[input.value()]);
+                    });
+                if (!valid)
+                    failure = diagnostic(
+                        EvaluationDiagnosticCode::InvalidPlan,
+                        "Image Switch has an invalid input", {},
+                        subjectFor(OperationIndex::fromRaw(index), plan.operations()[index]));
+                return valid;
             },
             [&plan, index, &failure](const CompiledCompositionOutput& output) {
                 if (output.input.value() >= index || !std::holds_alternative<CompiledMerge>(
@@ -1798,6 +1819,10 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                 [](const CompiledVideoSource&) {},
                 [](const CompiledMerge&) {},
                 [](const CompiledCompositionOutput&) {},
+                [&](const CompiledImageSwitch& switcher) {
+                    static_cast<void>(registerScalar(switcher.index, "index",
+                                                     ScalarDomain::Unbounded, operationSubject));
+                },
             },
             plan->operations()[index]);
     }
@@ -3270,6 +3295,12 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                        "Layer Stack image could not be published");
             return std::move(*frozen.value());
         };
+        // #531: what this frame reads -- through only the chosen input of each Image Switch. An
+        // unread operation is neither evaluated nor looked up, and publishes nothing.
+        const auto live = detail::planHasImageSwitch(*plan)
+                              ? detail::liveOperations(*plan, frameResolved, request.time,
+                                                       request.output.value())
+                              : std::vector<bool>(plan->operations().size(), true);
         auto steps =
             foldMerges ? detail::mergeFoldSteps(*plan) : std::vector<detail::EvaluationStep>{};
         if (!foldMerges) {
@@ -3288,7 +3319,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                 const auto& entry = stack.entries[*step.foldEntry];
                 const auto input = entry.input.value();
                 const auto mergeIndex = OperationIndex::fromRaw(merge);
-                const bool present = detail::timeForClock(frameResolved, request.time,
+                const bool present = live[merge] &&
+                                     detail::timeForClock(frameResolved, request.time,
                                                           plan->operationClock(mergeIndex)) &&
                                      detail::timeForClock(frameResolved, request.time,
                                                           plan->placementClock(mergeIndex));
@@ -3338,6 +3370,32 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                             plan->placementClock(operationIndex));
             if (!operandTime || !placementTime) {
                 contentHashes[index] = "absent-layer-time";
+                releaseInputs(index);
+                continue;
+            }
+            if (!live[index]) {
+                contentHashes[index] = "unread-switch-input";
+                releaseInputs(index);
+                continue;
+            }
+            // #531: an Image Switch is its chosen input: the same image, bounds, vector leaf and
+            // identity, so what reads it keys and caches exactly as if wired to that input.
+            if (const auto* switcher = std::get_if<CompiledImageSwitch>(&plan->operations()[index])) {
+                if (const auto chosen = detail::selectedSwitchInput(*switcher, *plan, frameResolved,
+                                                                    request.time, operationIndex)) {
+                    const auto from = chosen->value();
+                    slots[index] = slots[from];
+                    bounds[index].local = bounds[from].output;
+                    bounds[index].output = bounds[index].local;
+                    vectors[index] = vectors[from];
+                    contentHashes[index] = contentHashes[from];
+                } else {
+                    contentHashes[index] = "switch-shows-nothing";
+                }
+                reportProgress(progress, {.stage = EvaluationProgressStage::Operation,
+                                          .operation = operationIndex,
+                                          .completed = 1,
+                                          .total = 1});
                 releaseInputs(index);
                 continue;
             }
@@ -5715,7 +5773,11 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                         std::floor(m.x * resolved.horizontalScale) &&
                                     m.y * resolved.verticalScale ==
                                         std::floor(m.y * resolved.verticalScale);
-                                if (!nativeGrid || chain.source != layer.input.value()) {
+                                // #531: through an Image Switch, the leaf it shows is direct.
+                                if (!nativeGrid ||
+                                    chain.source != detail::shownOperation(*plan, frameResolved,
+                                                                           request.time,
+                                                                           layer.input.value())) {
                                     // ADR 0024: the vector leaf resolves its own operands on its
                                     // own (content) clock, not on this layer's clock.
                                     const auto& sourceResolved = detail::resolvedForClock(
@@ -6134,6 +6196,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                                       .completed = 1,
                                                       .total = 1});
                         },
+                        // #531: published before this visit (it is its chosen input).
+                        [](const CompiledImageSwitch&) {},
                     },
                     plan->operations()[index]);
 

@@ -161,6 +161,11 @@ void forEachInput(const CompiledOperation& operation, Function&& function) {
                        }
                    },
                    [&function](const CompiledCompositionOutput& output) { function(output.input); },
+                   // #531: every input the switch may show (liveOperations() narrows a frame's).
+                   [&function](const CompiledImageSwitch& switcher) {
+                       for (const auto input : switcher.inputs)
+                           function(input);
+                   },
                },
                operation);
 }

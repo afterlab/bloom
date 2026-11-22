@@ -89,6 +89,20 @@ firstImageInput(const document::NodeRecord& node) const {
     // not part of this plan.
     if (node.typeId == document::kImageStatisticsNodeType)
         return false;
+    // #531: a switch reads only the input it shows when its index is a constant, and a muted one
+    // only its first input.
+    if (document::isImageSwitchNodeType(node.typeId))
+        if (const auto* input = std::get_if<document::NodeInputRef>(&edge.destination)) {
+            const auto& ports = document::imageSwitchInputPorts(node.typeId);
+            if (std::ranges::find(ports, input->port) != ports.end()) {
+                if (isMuted(node.id))
+                    return input->port == ports.front();
+                const auto shown = document::imageSwitchConstantPort(*composition_, node);
+                return !shown || *shown == input->port;
+            }
+            if (isMuted(node.id))
+                return false;
+        }
     if (isMuted(node.id)) {
         const auto input = firstImageInput(node);
         if (!input || *input != edge.destination)

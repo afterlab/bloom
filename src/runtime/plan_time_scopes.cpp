@@ -75,6 +75,10 @@ void forEachScopedInput(const CompiledOperation& operation, const std::uint32_t 
                   for (const auto& entry : merge.entries)
                       function(entry.input, clock);
               },
+              [&](const CompiledImageSwitch& switcher) {
+                  for (const auto input : switcher.inputs)
+                      function(input, clock);
+              },
               [&](const CompiledCompositionOutput& output) {
                   function(output.input, clock);
                   // #480: the images of Image to Channel Set layers written beside RGBA.
@@ -124,6 +128,10 @@ void remapInputs(CompiledOperation& operation, Function&& function) {
                      [&](CompiledMerge& merge) {
                          for (auto& entry : merge.entries)
                              entry.input = function(entry.input, false);
+                     },
+                     [&](CompiledImageSwitch& switcher) {
+                         for (auto& input : switcher.inputs)
+                             input = function(input, false);
                      },
                      [&](CompiledCompositionOutput& output) {
                          output.input = function(output.input, false);
