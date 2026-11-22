@@ -8,7 +8,9 @@
 //   * the same Adjustment at its defaults with a Difference blend (the blended Merge only);
 //   * entry layers with a frame pivot, a parent and a track matte, beside a chain Layer whose blend
 //     mode the Merge reads through an effect;
-//   * consecutive raster Layer nodes, concatenated into one resample, the later one parented.
+//   * consecutive raster Layer nodes, concatenated into one resample, the later one parented;
+//   * #760: the partial Adjustment and the entry layers exported over a composition background
+//     (the compiler's full-frame Solid under a Normal Merge), still and at a later frame.
 // Without the packaged tools or a device the test reports SKIP (77), or FAIL under
 // --require-device.
 
@@ -29,6 +31,7 @@
 #include <filesystem>
 #include <iostream>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -222,24 +225,38 @@ int main(int argc, char** argv) {
         std::shared_ptr<const bloom::runtime::PreparedGpuScene> scene;
     };
     std::vector<Case> cases;
-    for (const auto& [name, project] :
-         {std::pair{std::string("partial adjustment"), partialAdjustment()},
-          std::pair{std::string("blended adjustment"), blendedAdjustment()},
-          std::pair{std::string("entry layers"), entryLayers()},
-          std::pair{std::string("concatenated layers"), concatenatedLayers()},
-          std::pair{std::string("child matte (entry layers)"), childMatte(true)},
-          std::pair{std::string("child matte (layer nodes)"), childMatte(false)}}) {
-        const auto compiled = bloom::merge_entry_test::compile(project);
+    struct Scene final {
+        std::string name;
+        bloom::document::Project project;
+        std::optional<bloom::core::Color4d> background;
+    };
+    constexpr bloom::core::Color4d kBackground{0.2, 0.4, 0.6, 1.0};
+    for (const auto& [name, project, background] :
+         {Scene{"partial adjustment", partialAdjustment(), std::nullopt},
+          Scene{"blended adjustment", blendedAdjustment(), std::nullopt},
+          Scene{"entry layers", entryLayers(), std::nullopt},
+          Scene{"concatenated layers", concatenatedLayers(), std::nullopt},
+          Scene{"child matte (entry layers)", childMatte(true), std::nullopt},
+          Scene{"child matte (layer nodes)", childMatte(false), std::nullopt},
+          Scene{"partial adjustment over the export background", partialAdjustment(), kBackground},
+          Scene{"entry layers over the export background", entryLayers(), kBackground}}) {
+        const auto compiled = bloom::merge_entry_test::compile(project, background);
         expect(compiled.plan != nullptr, name + " compiles");
         if (!compiled.plan)
             continue;
-        for (const bool roi : {false, true}) {
+        for (const int variant : {0, 1, 2}) {
+            // 0 full frame, 1 ROI, 2 (an export background only) a later frame.
+            const bool roi = variant == 1;
+            if (variant == 2 && !background)
+                continue;
             auto request = bloom::gpu_coverage_fixtures::requestFor(*compiled.plan);
+            if (variant == 2)
+                request.time = bloom::core::RationalTime::fromInteger(2);
             if (roi) {
                 const auto window = bloom::render::ImageWindow::create(3, 2, 9, 7);
                 request.roi = *window.value();
             }
-            const auto label = name + (roi ? " (ROI)" : "");
+            const auto label = name + (roi ? " (ROI)" : variant == 2 ? " (frame 2)" : "");
             const auto prepared = builder.build(compiled.plan, request);
             expect(static_cast<bool>(prepared),
                    label +

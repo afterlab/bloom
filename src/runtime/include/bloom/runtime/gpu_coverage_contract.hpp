@@ -342,6 +342,12 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.text.box", "text background box axis", GpuCoverageDisposition::Required,
         "src/runtime styled Text Source CPU and native parity tests"});
+    // #760: an export output's background, lowered by the compiler to a full-frame constant Solid
+    // under a Normal Merge, on the still, sequence, video and headless routes.
+    out.push_back(GpuFeatureCoverageEntry{
+        "feature.export.background", "export composition background axis",
+        GpuCoverageDisposition::Required,
+        "src/runtime export background lowering and merge entry native parity tests"});
     // #758: each Text Animator property, the reveal with its cursor, stacked selectors and
     // animators, and fixed-width digits, each drawn by native coverage.
     for (const auto& [id, description] :

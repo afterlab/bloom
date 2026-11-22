@@ -282,10 +282,14 @@ struct Compiled final {
     std::vector<runtime::CompileDiagnostic> diagnostics;
 };
 
-[[nodiscard]] inline Compiled compile(document::Project project) {
+// #760: `background` is an export output's background (a straight working-space color).
+[[nodiscard]] inline Compiled compile(document::Project project,
+                                      const std::optional<core::Color4d> background = {}) {
     const document::Document document(std::move(project));
     const runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
-    auto result = compiler.compile({document.snapshot(), kCompositionId}, {});
+    runtime::SnapshotCompileRequest compileRequest{document.snapshot(), kCompositionId};
+    compileRequest.exportBackground = background;
+    auto result = compiler.compile(compileRequest, {});
     if (!result.plan)
         for (const auto& diagnostic : result.diagnostics)
             std::cerr << "compile: " << diagnostic.summary << ": " << diagnostic.detail << '\n';

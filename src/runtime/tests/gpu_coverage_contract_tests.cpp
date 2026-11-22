@@ -3997,6 +3997,45 @@ displayProofRunner(const bool customView) {
             return combined;
         },
         {}, FixturePrerequisite::PackagedShaderTools);
+    // #760: a real document compiled with an export background (the compiler's full-frame Solid
+    // under a Normal Merge), prepared by the production builder for the frame requests each export
+    // route makes: a still (frame 0), a sequence (frames 0 to 2), a video's frames (frames 1 and 3)
+    // and a headless render's still (frame 2).
+    add(
+        "feature.export.background", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime export background lowering and merge entry native parity tests",
+        [] {
+            using bloom::merge_entry_test::Builder;
+            Builder builder;
+            const auto blue = builder.solid({0.1, 0.2, 0.9, 0.75}, 6.0, 4.0);
+            const auto [blueNode, blueLayer] = builder.layerNode(
+                blue, {.position = {6.0, 5.0}, .pivot = bloom::document::LayerPivot::Content});
+            builder.slot(builder.root(), blueNode, blueLayer);
+            builder.slot(builder.root(), builder.solid({0.8, 0.1, 0.05, 0.5}, 8.0, 12.0));
+            const auto compiled = bloom::merge_entry_test::compile(
+                builder.project(), bloom::core::Color4d{0.2, 0.4, 0.6, 1.0});
+            FixtureRun combined;
+            if (!compiled.plan) {
+                combined.evidence = "the export background document did not compile";
+                return combined;
+            }
+            combined.prepared = true;
+            for (const std::int64_t frame : {0, 0, 1, 2, 1, 3, 2}) {
+                auto request = requestFor(*compiled.plan);
+                request.time = bloom::core::RationalTime::fromInteger(frame);
+                auto run = runBuilderWithRequest(compiled.plan, request);
+                combined.prepared = combined.prepared && run.prepared;
+                if (!run.prepared)
+                    combined.evidence += run.evidence + "; ";
+                for (auto& value : run.frames)
+                    combined.frames.push_back(std::move(value));
+            }
+            if (combined.prepared)
+                combined.evidence = "production export background: still, sequence, video and "
+                                    "headless frame requests";
+            return combined;
+        },
+        {}, FixturePrerequisite::PackagedShaderTools);
     return list;
 }
 

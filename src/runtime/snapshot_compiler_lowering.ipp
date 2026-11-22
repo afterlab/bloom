@@ -1094,6 +1094,37 @@ lower(const std::vector<document::NodeId>& order) {
         planOutput = runtime::OperationIndex::fromRaw(operations.size());
         operations.emplace_back(runtime::CompiledCompositionOutput{outputNodeId, mergeIndex});
     }
+    // #760: an export output's background. The root's picture goes over a full-frame constant
+    // Solid of the composition's Background Color (in the working space) in a Normal Merge, under a
+    // copy of the Composition Output, so the frame is opaque and every route evaluates it with the
+    // ordinary Solid and Merge. Never for an inspection plan or a nested composition.
+    if (request_.exportBackground && !request_.channelInspection) {
+        const auto* finished =
+            std::get_if<runtime::CompiledCompositionOutput>(&operations[planOutput.value()]);
+        if (finished == nullptr) {
+            addTopologyFailure(outputNodeId, "The export background has no composition output.");
+            return {};
+        }
+        auto outputCopy = *finished;
+        const auto& format = composition_->format();
+        // The Solid takes the Composition Output's slot (everything the output read comes before
+        // it), so the plan still has exactly one Composition Output, at its end.
+        const auto background = planOutput;
+        operations[background.value()] = runtime::CompiledSolid{
+            outputNodeId,
+            runtime::CompiledColorParameter{document::ParameterId{}, *request_.exportBackground},
+            runtime::CompiledScalarParameter{document::ParameterId{},
+                                             static_cast<double>(format.width())},
+            runtime::CompiledScalarParameter{document::ParameterId{},
+                                             static_cast<double>(format.height())}};
+        // Entries are top first: the picture, then the background under it.
+        const auto merge = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(
+            runtime::CompiledMerge{outputNodeId, {{{}, {}, outputCopy.input}, {{}, {}, background}}});
+        outputCopy.input = merge;
+        planOutput = runtime::OperationIndex::fromRaw(operations.size());
+        operations.emplace_back(std::move(outputCopy));
+    }
     runtime::CompiledCompositionPlanDefinition definition{
         request_.snapshot.revision(),
         request_.snapshot.project().id(),

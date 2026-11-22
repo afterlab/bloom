@@ -130,6 +130,13 @@ struct SnapshotCompileRequest {
     // has no image consumer to act as a probe's sink). Each is compiled with what it reads, as a
     // Layer Bounds readout is; a node that does not exist is ignored.
     std::vector<document::NodeId> valueReadouts{};
+    // #760: an export output's background, the root composition's Background Color as a straight
+    // working-space color (alpha 1). The root's frame is composited over it: a full-frame constant
+    // Solid becomes the bottom entry of a Normal Merge under the Composition Output, evaluated by
+    // the ordinary Solid and Merge on the CPU reference and the GPU route alike. Absent for the
+    // Viewer, RAM Preview, queries and every nested composition (never propagated), so their plans
+    // are unchanged.
+    std::optional<core::Color4d> exportBackground{};
 };
 
 struct SnapshotCompileResult {

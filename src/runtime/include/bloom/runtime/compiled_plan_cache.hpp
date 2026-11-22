@@ -83,6 +83,8 @@ class CompiledPlanCache final {
         std::optional<ChannelInspection> channelInspection{};
         // #645: a plan the Viewer's isolation dims is not the exported plan.
         std::vector<document::LayerId> isolation{};
+        // #760: an export's background plan is not the Viewer's plan.
+        std::optional<core::Color4d> exportBackground{};
         std::uint64_t fontEpoch = 0;
     };
 
