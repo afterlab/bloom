@@ -46,6 +46,7 @@ Bloom is in alpha. Download the latest alpha from the
    [`architecture/project-format.md`](architecture/project-format.md),
    [`architecture/fonts.md`](architecture/fonts.md),
    [`architecture/subtitles.md`](architecture/subtitles.md),
+   [`architecture/image-switch.md`](architecture/image-switch.md),
    [`architecture/project-session.md`](architecture/project-session.md),
    [`architecture/color-management.md`](architecture/color-management.md),
    [`architecture/frame-output.md`](architecture/frame-output.md),
@@ -180,6 +181,8 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
   loop, auto overscan, motion blur and offset and roll outputs for other parameters.
 - [Text layers](user-guide/text-layers.md) — what a text layer's Position names for Left, Center and
   Right alignment, how older projects keep their placement, and fixed-width digits.
+- [Image Switch](user-guide/image-switch.md) — showing one of several images or channel sets by a
+  keyed or driven number, wrap around, the Selected output, and passes that follow the beauty.
 - [Text Animator](user-guide/text-animator.md) — per-letter, per-word and per-line animation of a
   text: selectors, properties, a type-on reveal with a cursor, and the counter and word-fade recipes.
 - [Sharpen](user-guide/sharpen.md) — the unsharp mask: amount, radius and threshold, and what it does

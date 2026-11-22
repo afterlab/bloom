@@ -1055,6 +1055,26 @@ SCENARIOS["text-animator-2k"] = {
     ],
 }
 
+# #531: an Image Switch over three plates (the shot's plate, an 8-bit plate and the mist pass), its
+# index keyed across all three, then a wide Gaussian Blur. Each frame decodes and blurs only the
+# plate it shows: the two others are neither read nor prepared. Written, not run: it has no recorded
+# numbers and no budget.
+SCENARIOS["image-switch-2k"] = {
+    "description": "An Image Switch over a PNG16 plate, a PNG8 plate and a mist pass, its index "
+                   "keyed through all three, then a Gaussian Blur.",
+    "tier": "1080p",
+    "frames": 24,
+    "layers": [
+        {"name": "Plate", "media": "png16",
+         "passes": {"Switch plate B": {"media": "png8"},
+                    "Switch plate C": {"media": "png16_mist", "colorSpace": "Raw"}},
+         "effects": [["bloom.image-switch", {},
+                      {"keys": {"index": [[0, 1.0], [23, 3.99]]},
+                       "inputs": {"input2": "Switch plate B", "input3": "Switch plate C"}}],
+                     ["bloom.gaussian-blur", {"radius": 48}]]},
+    ],
+}
+
 # #509: Alpha Contour over a keyed plate matte: Luma Key makes the alpha, and the contour's keyed
 # width makes every frame new and its distance transform reach the widest band the domains allow
 # (the costly case). Written, not run: it has no recorded numbers and no budget.
