@@ -9,7 +9,8 @@ bloom-cli open <file>
 bloom-cli run <script.json>
 bloom-cli render [--project <file>] (--frame N | --range A-B) \
   --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace] \
-  [--require-device] [--subtitles srt,vtt,ttml] [--subtitle-nodes <id>,...]
+  [--require-device] [--subtitles srt,vtt,ttml] [--subtitle-nodes <id>,...] \
+  [--background transparent|composition]
 bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save] \
   [--subtitles srt,vtt,ttml] [--embed-subtitles] [--subtitle-nodes <id>,...]
 bloom-cli help [<name>] [--json]
@@ -84,7 +85,7 @@ its value and the actual amount, for example `(limit subtitleCues 50000, actual 
 never reloads a linked subtitle file. A file that changed, is missing or cannot be read prints
 `warning[bloom.subtitles.linked-file-changed]`, and the render uses the cues saved in the project.
 
-`render` selects the first composition when no project is supplied. Output keeps alpha; the composition background colour is display-only and is not rendered. A frame writes `frame.png` or
+`render` selects the first composition when no project is supplied. Output keeps alpha unless `--background composition`, which composites every frame over the composition's Background Color in the working space so the output is opaque (`--background transparent` is the default). A frame writes `frame.png` or
 `frame.exr`; a range writes zero-padded `frame.XXXX` sequence files. The command prints the output
 preservation report and only exits successfully after publication completes. A file that already
 exists is replaced only with `--replace`; without it the command fails and leaves the file as it
@@ -192,8 +193,8 @@ adds one H.264 MP4 output at `Exports/{name}.mp4`.
 
 Nothing replaces a file silently: an unattended script sets the output's overwrite policy to
 `replace` or calls `export.confirm-replace`. `bloom-cli export` renders a saved project's queue
-headlessly, prints the verification and import results as JSON and exits non-zero unless every
-selected job succeeds; a `--job` id the project does not have is refused before anything renders.
+headlessly, prints the verification and import results as JSON (a movie's or WAV's `streams`,
+read back from the written file, are part of the verification) and exits non-zero unless every selected job succeeds; a `--job` id the project does not have is refused before anything renders.
 `--replace` confirms existing destinations and `--save` writes asset imports back to the project.
 Its scratch files go in a new temporary folder only your user can open, removed when the command
 ends. Export runs on Linux, macOS and Windows.

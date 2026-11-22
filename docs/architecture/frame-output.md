@@ -120,12 +120,31 @@ primitive-semantics versions, and process cache identity. Its color identity is 
 working-space id plus the qualified OCIO config revision. A config alias, role, display name, or
 approximate transform does not reinterpret that process frame.
 
-The composition Background Color is not a process input: it is Viewer presentation
-(`docs/ux/ui-grammar.md`, "Viewer canvas and empty state") and is classified as such in
-`sameEvaluationInputs`, so it never enters the process frame or a cache identity. No frame output
-route composites it: the still, the sequence/range and a video format that carries alpha all keep
-the process frame's alpha. The scripted still route pins this on the CPU reference and
-the GPU route with a non-black background (`bloom.scripting.render-injected-provider`).
+The composition Background Color is not a process input of the Viewer, RAM Preview or a nested
+composition: it is Viewer presentation (`docs/ux/ui-grammar.md`, "Viewer canvas and empty state")
+and is classified as such in `sameEvaluationInputs`, so it never enters their process frames or
+cache identities. An export output chooses its background (#760, `ExportOutputSettings.background`):
+
+- `Transparent` (the default, not written to the project) keeps the process frame's alpha on the
+  still, the sequence/range and a video format that carries alpha. The scripted still route pins
+  this on the CPU reference and the GPU route with a non-black background
+  (`bloom.scripting.render-injected-provider`).
+- `CompositionColor` ("background": "composition") composites the frame over the exported
+  composition's Background Color in the working space, before the output transform. The host
+  converts the display-encoded color to a straight working-space color through the project's
+  configuration default display and view (the conversion the color chip uses) and passes it as
+  `SnapshotCompileRequest::exportBackground`. The compiler lowers it to a full-frame constant
+  `CompiledSolid` at the bottom of a Normal `CompiledMerge` under the Composition Output, so the
+  existing Solid and Merge kernels evaluate it on the CPU reference and the GPU route alike; there
+  is no separate finishing kernel. The background is part of the export plan's identity only (the
+  plan cache keys it); a nested composition compiles from its own request and never draws its
+  background. The preservation report (`background=composition (opaque over composition
+  background)`), the media analysis's Alpha facet and the run log (`export.background`) say the
+  output is opaque. Required coverage axis `feature.export.background` holds the still, sequence,
+  video and headless frame requests; `bloom.runtime.export_background` holds the CPU reference to
+  the frame over the constant, `bloom.runtime.gpu_merge_entry_native` the GPU to the CPU reference,
+  `bloom.ui.viewer_export_background_parity` the still and sequence routes against the Viewer, and
+  `bloom.host.export-background-video` the video route.
 
 The frame presets are closed, versioned contracts:
 

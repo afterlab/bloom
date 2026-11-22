@@ -458,6 +458,17 @@ worker writes and checks them.
 - **Windows.** The Media Foundation generation codes only pictures; its packets, the subtitle
   tracks and the reopen check are libavformat's and the software generation's, unchanged.
 
+Written streams (#761). After the trailer, every encode route (the FFmpeg worker on Linux,
+Windows and macOS, and the macOS system encoder) reads the file's video and audio streams back
+with `ffmpeg::readWrittenStreams`: the codec and profile names FFmpeg reports, the picture size
+and reduced frame rate or the channels and sample rate, and a bit rate counted from the packet
+bytes over the stream's duration. They are returned as `EncodeQcV1::streams` (media worker
+protocol schema 13), and the reopen fails unless there is one video stream (for a movie) and one
+audio stream (when the output carries audio). The host copies them to the export result, logs one
+`export.stream` line each, and the MCP, Python and bloom-cli results list them. ProRes takes its
+profile from `prores_ks`'s private `profile` option, and the reopen requires the written profile
+to be the one the preset names.
+
 The two encoders are enabled in the FFmpeg configuration; see
 [dependency-intake.md](dependency-intake.md). `bloom.media.subtitle-encode` covers H.264 MP4
 and MOV, ProRes MOV and VP9 WebM: the frame time base, languages, titles, the enabled flag and the

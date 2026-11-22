@@ -397,6 +397,15 @@ too. A malformed `subtitles` raises `ValueError`. An image carries no subtitle t
 formats; an export queue output embeds tracks through its saved settings
 ([Export](exporting-video.md#subtitles)).
 
+`background="composition"` composites every frame over the composition's Background Color in the
+working space, so the images are opaque; the default `background="transparent"` keeps alpha, and
+any other value raises `ValueError`. The preservation report then ends in
+`background=composition (opaque over composition background)`
+([Export](exporting-video.md#background)). `RenderResult.streams` lists a movie's or WAV's
+streams as read back from the written file, each a dict with `kind`, `codec`, `profile`, then
+`width`, `height` and `frame_rate` (`[numerator, denominator]`) for video or `channels` and
+`sample_rate` for audio, and `bitrate` in bits per second; it is empty for images.
+
 Long Python work uses a dedicated Python worker and a bounded queue:
 
 ```python

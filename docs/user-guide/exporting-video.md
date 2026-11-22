@@ -36,15 +36,34 @@ the first and last file, the size Bloom can estimate (nothing when it cannot) an
 blocks it. **Start All** is the one blue button while a checked job is ready, and **Stop All**
 shows only while something renders. A control that cannot act now says why in its tooltip.
 
-Rendered output keeps alpha. The composition's background colour is display-only, like the
-Viewer's transparency grid: it is never rendered into an export, a still render or an MCP capture.
-To get a solid background in the output, add a solid layer at the bottom of the composition.
+Rendered output keeps alpha by default. To render the composition's Background Color behind the
+picture, set the output's **Background** to **Composition color** (see [Background](#background)).
 
 ## Jobs and outputs
 
-Output keeps alpha: a composition's Background Color is only shown in the Viewer behind the
-composition, so exports and renders of a format that can carry transparency keep it, as in other
-layer-based compositors.
+An output keeps alpha unless its **Background** is **Composition color**: by default a
+composition's Background Color is only shown in the Viewer behind the composition, so exports and
+renders of a format that can carry transparency keep it, as in other layer-based compositors.
+
+### Background
+
+**Background** in the Output Module's first group (every format except WAV) chooses what each frame
+is composited over:
+
+- **Transparent** (the default) keeps alpha. A format without alpha (H.264, DPX and the like) shows
+  the picture as it would look over black.
+- **Composition color** composites every frame over the composition's **Background Color** before
+  the display or output color transform, in the working color space, so the output is opaque and
+  matches what the Viewer shows behind the frame. The Background Color you pick is converted into
+  the working space the same way the color chip converts it. Only the exported composition's own
+  color is used: a nested composition never draws its background into its parent.
+
+The background is part of the export only. The Viewer, RAM Preview and nested compositions are
+unchanged, and a job's **Details…** and log say "Opaque over composition background". It is saved
+with the output and with a preset you save from it, and the GPU and the CPU reference render it
+alike. The same choice is the `background` argument (`transparent` or `composition`) of the MCP
+`render`, `capture` and `export` tools, `background=` in Python's `bloom.render`, and
+`--background` in `bloom-cli render`.
 
 A new job renders the composition's work area (or the whole composition when it has none) to one
 **H.264 MP4** output at `Exports/{name}.mp4` beside the project. The H.264 encoder ships with
@@ -140,10 +159,34 @@ the composition has no audio layer, because players and delivery specifications 
 track. Turn **Include audio** off (the `audio` argument of the `export` tool) for a movie without
 one.
 
-MP4 movies carry AAC audio; WebM movies carry Opus (shipped with Bloom) at 48 kHz, whatever the
-output's audio sample rate; MOV and MXF carry PCM. Movie containers are tagged from the output's
-color intent: an sRGB display is tagged with the sRGB transfer, a Rec.1886/Rec.709 display with
-BT.709, P3 and Rec.2100 displays with their own code points.
+### Containers and codecs
+
+Each preset names the container and codecs it writes:
+
+| Container | Video codecs (profile) | Audio |
+| --- | --- | --- |
+| MP4 | H.264 (High), HEVC (Main or Main 10), AV1 (Main) | AAC-LC at 192 kb/s, at the output's sample rate |
+| MOV | H.264 (High), HEVC, ProRes (Proxy, LT, Standard, HQ, 4444, XQ) | PCM 16-bit, or 24-bit when an audio source is deeper |
+| WebM | VP9 (Profile 0 or Profile 2), AV1 (Main) | Opus at 192 kb/s, always 48 kHz whatever the output's sample rate |
+| MXF | DNxHR (HQ) | PCM 16-bit, or 24-bit when an audio source is deeper |
+| WAV | none | PCM 16-bit or 24-bit, as the profile says |
+
+AAC and Opus are lossy; PCM is exact. The MCP `export.presets` tool lists the same facts for each
+preset (`container`, `videoCodec`, `videoProfile`, `audioCodec`, `audioProfile`,
+`audioBitrateKbps`, `audioSampleRate`, `pcmDepth` and an `audio` sentence), and `help` for
+`export` and `export.presets` names the audio codec per container.
+
+After a movie or WAV is written, Bloom reopens it and reads back the streams it actually holds.
+A job's log has one **Written stream** line per stream, for example "video prores HQ 1920x1080 24 fps
+…" and "audio pcm_s16le 2 ch 48000 Hz …", and the result of the MCP `export` tool and
+`export.status`, Python's `bloom.render` result and `bloom-cli export`'s JSON list them as
+`streams`: each one's kind, codec, profile, width, height and frame rate (video) or channels and
+sample rate (audio), and its bit rate in bits per second. An export whose file holds other streams
+than the preset declares fails verification.
+
+Movie containers are tagged from the output's color intent: an sRGB display is tagged with the sRGB
+transfer, a Rec.1886/Rec.709 display with BT.709, P3 and Rec.2100 displays with their own code
+points.
 
 ## Destinations
 
@@ -277,9 +320,10 @@ differed. The job's log lists every file with its SHA-256.
 
 `bloom-cli export --project shot.bloom --all` renders the saved queue headlessly and prints the
 verification and import results as JSON; `--job <id>` selects jobs, `--replace` confirms existing
-destinations, and `--save` writes asset imports back to the project. `bloom-cli render` and
-`export` take `--subtitles srt,vtt,ttml`, `--embed-subtitles` and `--subtitle-nodes` for the
-subtitle tracks. See
+destinations, and `--save` writes asset imports back to the project; each movie's and WAV's
+written streams are part of the JSON. `bloom-cli render` and `export` take
+`--subtitles srt,vtt,ttml`, `--embed-subtitles` and `--subtitle-nodes` for the subtitle tracks,
+and `bloom-cli render --background composition` renders over the composition's Background Color. See
 [headless scripting](scripting.md) and [MCP](mcp.md). **Copy as bloom-cli Command** and **Copy as Python** on a job's context
 menu produce a script that recreates the job and starts it.
 
