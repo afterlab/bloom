@@ -65,6 +65,11 @@ constexpr std::array<std::pair<ExportOverwritePolicy, std::string_view>, 3> kOve
     {ExportOverwritePolicy::Refuse, "refuse"},
 }};
 
+constexpr std::array<std::pair<ExportBackground, std::string_view>, 2> kBackgrounds{{
+    {ExportBackground::Transparent, "transparent"},
+    {ExportBackground::CompositionColor, "composition"},
+}};
+
 constexpr std::array<std::pair<ExportSubtitleFormat, std::string_view>, 3> kSubtitleFormats{{
     {ExportSubtitleFormat::Srt, "srt"},
     {ExportSubtitleFormat::WebVtt, "vtt"},
@@ -139,6 +144,13 @@ std::string_view exportOverwriteToken(const ExportOverwritePolicy policy) noexce
 }
 std::optional<ExportOverwritePolicy> parseExportOverwrite(const std::string_view token) noexcept {
     return parseToken(kOverwrite, token);
+}
+
+std::string_view exportBackgroundToken(const ExportBackground background) noexcept {
+    return tokenFor(kBackgrounds, background);
+}
+std::optional<ExportBackground> parseExportBackground(const std::string_view token) noexcept {
+    return parseToken(kBackgrounds, token);
 }
 
 std::string_view exportSubtitleFormatToken(const ExportSubtitleFormat format) noexcept {
@@ -265,6 +277,8 @@ ValidationResult validateExportOutput(const ExportOutput& output) {
     }
     if (exportEncoderToken(settings.encoder).empty())
         result.add(ValidationCode::InvalidValue, "settings.encoder", "Unknown encoder preference");
+    if (exportBackgroundToken(settings.background).empty())
+        result.add(ValidationCode::InvalidValue, "settings.background", "Unknown background");
     if (settings.naming.framePadding < 1 || settings.naming.framePadding > 12)
         result.add(ValidationCode::InvalidValue, "settings.naming.framePadding",
                    "Frame padding must be 1..12 digits");

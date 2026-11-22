@@ -145,6 +145,16 @@ struct ExportSubtitles final {
     friend bool operator==(const ExportSubtitles&, const ExportSubtitles&) = default;
 };
 
+// #760: what an output's frames are composited over. Transparent keeps the process frame's alpha
+// (#433: the composition Background Color is Viewer presentation), the default, so saved jobs and
+// presets are unchanged. CompositionColor composites every frame over the composition's Background
+// Color in the working space, before the output transform, so the output is opaque. A nested
+// composition never draws its own background either way.
+enum class ExportBackground : std::uint8_t {
+    Transparent = 1,      // "transparent"
+    CompositionColor = 2, // "composition"
+};
+
 // Everything an output needs to encode, independent of any preset still existing. Empty strings
 // mean "the format's or configuration's default", never "unknown". Members that do not apply to
 // the chosen format are kept (so switching format back restores them) and ignored by the runner.
@@ -179,6 +189,8 @@ struct ExportOutputSettings final {
     ExportSequenceNaming naming;
     // #752: persisted only when set; a file without the member exports no subtitle track.
     std::optional<ExportSubtitles> subtitles;
+    // #760: persisted only when CompositionColor; a file without the member keeps alpha.
+    ExportBackground background = ExportBackground::Transparent;
     friend bool operator==(const ExportOutputSettings&, const ExportOutputSettings&) = default;
 };
 
@@ -254,6 +266,8 @@ struct ExportQueue final {
 [[nodiscard]] std::string_view exportEncoderToken(ExportEncoderPreference encoder) noexcept;
 [[nodiscard]] std::optional<ExportEncoderPreference>
 parseExportEncoder(std::string_view token) noexcept;
+[[nodiscard]] std::string_view exportBackgroundToken(ExportBackground background) noexcept;
+[[nodiscard]] std::optional<ExportBackground> parseExportBackground(std::string_view token) noexcept;
 [[nodiscard]] std::string_view exportSubtitleFormatToken(ExportSubtitleFormat format) noexcept;
 [[nodiscard]] std::optional<ExportSubtitleFormat>
 parseExportSubtitleFormat(std::string_view token) noexcept;

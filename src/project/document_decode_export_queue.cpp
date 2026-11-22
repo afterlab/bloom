@@ -151,6 +151,10 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     const bool hasSubtitles = node.findMember("subtitles") != nullptr;
     if (hasSubtitles)
         keys.push_back("subtitles");
+    // Optional (#760): absent means Transparent.
+    const bool hasBackground = node.findMember("background") != nullptr;
+    if (hasBackground)
+        keys.push_back("background");
     std::vector<const JsonValue*> fields;
     if (!closed(node, keys, state, path, fields))
         return false;
@@ -207,6 +211,15 @@ bool decodeSettings(const JsonValue& node, DecodeState& state, const std::string
     if (hasSubtitles &&
         !decodeSubtitles(*fields[at + 1], state, joinPath(path, "subtitles"), out.subtitles))
         return false;
+    if (hasBackground) {
+        const auto backgroundPath = joinPath(path, "background");
+        if (!token(*fields[at + (hasSubtitles ? 2 : 1)], state, backgroundPath,
+                   document::parseExportBackground, out.background))
+            return false;
+        // #760: transparent is the absent member, never written (the schema's enum agrees).
+        if (out.background == document::ExportBackground::Transparent)
+            return fail(state, backgroundPath);
+    }
     const auto& naming = *fields[at];
     const auto namingPath = joinPath(path, "naming");
     std::vector<std::string_view> namingKeys;

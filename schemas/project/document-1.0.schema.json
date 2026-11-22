@@ -3247,6 +3247,11 @@
                         }
                     },
                     "unevaluatedProperties": false
+                },
+                "background": {
+                    "enum": [
+                        "composition"
+                    ]
                 }
             },
             "unevaluatedProperties": false

@@ -436,6 +436,8 @@ void testUserPresets() {
             document::ExportOutputSettings settings;
             settings.format = document::ExportFormat::ProResMov;
             settings.codecProfile = "4444";
+            // #760: a preset keeps its background.
+            settings.background = document::ExportBackground::CompositionColor;
             status = catalogue->saveUserPreset("Alpha master", settings);
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
         }
@@ -476,6 +478,13 @@ void testUserPresets() {
                last.settings.codecProfile == "4444" &&
                last.category == host::ExportPresetCategory::User,
            "user presets persist in the versioned store");
+    {
+        std::ifstream store(folder / "export-presets.json", std::ios::binary);
+        const std::string text{std::istreambuf_iterator<char>(store), {}};
+        expect(last.settings.background == document::ExportBackground::CompositionColor &&
+                   text.find("\"background\":\"composition\"") != std::string::npos,
+               "a preset's composition background persists in the store");
+    }
     second.beginShutdown();
     while (!second.isQuiescent())
         std::this_thread::sleep_for(std::chrono::milliseconds(1));

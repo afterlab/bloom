@@ -331,6 +331,14 @@ std::optional<document::ExportOutputSettings> settingsFrom(const Json& json) {
         }
         out.subtitles = std::move(parsed);
     }
+    // Optional (#760): "background": "composition"; absent keeps alpha.
+    if (const auto* background = json.find("background")) {
+        const auto* token = std::get_if<std::string>(&background->value);
+        const auto parsed = token ? document::parseExportBackground(*token) : std::nullopt;
+        if (!parsed)
+            return std::nullopt;
+        out.background = *parsed;
+    }
     out.audioSampleRate = static_cast<std::uint32_t>(*rate);
     out.encoder = *parsedEncoder;
     if (const auto* start = string(*naming, "startFrame")) {
@@ -406,6 +414,10 @@ std::string exportSettingsJson(const document::ExportOutputSettings& settings) {
             out += "]";
         }
         out += "}";
+    }
+    if (settings.background != document::ExportBackground::Transparent) {
+        out += ",\"background\":";
+        quote(out, document::exportBackgroundToken(settings.background));
     }
     out += "}";
     return out;

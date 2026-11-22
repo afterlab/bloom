@@ -87,6 +87,10 @@
         if (!state.ok(writer.endObject()))
             return false;
     }
+    // Optional (#760): absent means Transparent, so older files stay canonical.
+    if (settings.background != ExportBackground::Transparent &&
+        !emitStringMember(state, "background", exportBackgroundToken(settings.background)))
+        return false;
     if (!state.ok(writer.endObject()))
         return false;
     const auto& destination = output.destination;

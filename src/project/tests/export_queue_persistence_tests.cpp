@@ -270,6 +270,46 @@ void testSubtitles() {
            "embedding is persisted for any format and applies to MOV, MP4 and WebM");
 }
 
+// #760: `background` is an optional member of an output's settings; absent means transparent, so
+// every earlier file opens and re-saves unchanged.
+void testBackground() {
+    const auto plain = encode(makeDocument(true));
+    expect(plain.find("\"background\"") == std::string::npos,
+           "a transparent output writes no background member");
+    auto seed = makeNewProject("Export queue", "Main", core::RationalTime::fromInteger(2));
+    auto backed = job(1, seed.initialCompositionId);
+    backed.outputs[0].settings.background = ExportBackground::CompositionColor;
+    seed.project.setExportQueue({{backed}});
+    const Document withBackground{std::move(seed.project)};
+    const auto text = encode(withBackground);
+    expect(text.find("\"background\": \"composition\"") != std::string::npos,
+           "a composition background is written");
+    const auto decoded = decodeQueue(text);
+    expect(decoded && *decoded == withBackground.snapshot().project().exportQueue() &&
+               decoded->jobs[0].outputs[0].settings.background ==
+                   ExportBackground::CompositionColor &&
+               decoded->jobs[0].outputs[1].settings.background == ExportBackground::Transparent,
+           "the background round-trips per output");
+    expect(decoded && encode(Document{[&] {
+                          auto again = makeNewProject("Export queue", "Main",
+                                                      core::RationalTime::fromInteger(2));
+                          again.project.setExportQueue(*decoded);
+                          return std::move(again.project);
+                      }()}) == text,
+           "the background re-saves byte for byte");
+    expect(!decodeQueue(replaceOnce(text, "\"background\": \"composition\"",
+                                    "\"background\": \"black\"")),
+           "an unknown background is refused");
+    expect(!decodeQueue(replaceOnce(text, "\"background\": \"composition\"",
+                                    "\"background\": \"transparent\"")),
+           "transparent is the absent member, never written");
+    expect(parseExportBackground("composition") == ExportBackground::CompositionColor &&
+               parseExportBackground("transparent") == ExportBackground::Transparent &&
+               !parseExportBackground("opaque") &&
+               exportBackgroundToken(ExportBackground::CompositionColor) == "composition",
+           "the background tokens");
+}
+
 void testRejects() {
     const auto text = encode(makeDocument(true));
     for (const auto& [from, to, message] :
@@ -343,6 +383,7 @@ int main() {
         testRoundTrip();
         testLoudness();
         testSubtitles();
+    testBackground();
         testRejects();
         testUseCachedFrames();
         testWebmFormats();
