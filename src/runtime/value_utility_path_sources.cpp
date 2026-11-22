@@ -136,7 +136,8 @@ ValueUtilityOutcome textOutline(const ValueUtilityInvocation& invocation) {
                                                                   .verticalAlignment =
                                                                       fixed.verticalAlignment,
                                                                   .anchorMode = fixed.anchorMode,
-                                                                  .overflow = fixed.overflow};
+                                                                  .overflow = fixed.overflow,
+                                                                  .fixedDigits = fixed.fixedDigits};
         auto laid = bloom::runtime::detail::layoutStyledTextSource(input, stop);
         if (auto* message = std::get_if<std::string>(&laid)) {
             if (support::stopRequested(invocation))

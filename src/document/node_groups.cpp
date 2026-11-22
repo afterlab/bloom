@@ -69,10 +69,10 @@ constexpr std::array<std::string_view, 2> kColorManagement{"bloom.ocio-colour-sp
                                                            "bloom.ocio-file-transform"};
 // Planned: Time Offset, Frame Hold, Time Remap, Flow Retime.
 constexpr std::array<std::string_view, 2> kTime{"bloom.echo", "bloom.frame-rate-hold"};
-// Planned: Text Layout, Text Animator, Text On Path, Text To Shape. #642 Vector Artwork is the
+// Planned: Text Layout, Text On Path, Text To Shape. #642 Vector Artwork is the
 // planned SVG Vector Source; it is made by importing an SVG, never from the Add menu.
-constexpr std::array<std::string_view, 20> kTextPaths{
-    "bloom.text-source",   "bloom.subtitles",          "bloom.shape-source",       "bloom.vector-artwork", "bloom.function-plot", "bloom.axes",
+constexpr std::array<std::string_view, 21> kTextPaths{
+    "bloom.text-source",   "bloom.text-animator",      "bloom.subtitles",          "bloom.shape-source",       "bloom.vector-artwork", "bloom.function-plot", "bloom.axes",
     "bloom.axis-tick",     "bloom.transform-path",     "bloom.trim-path",     "bloom.offset-path",
     "bloom.boolean-paths", "bloom.merge-paths",        "bloom.round-corners", "bloom.path-stroke",
     "bloom.mask-path",     "bloom.text-outline",       "bloom.resample-path", "bloom.warp-path",

@@ -19,6 +19,7 @@
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
+#include <bloom/document/text_animator_definition.hpp>
 #include <bloom/document/vector_artwork_nodes.hpp>
 #include <bloom/document/light_rays_definition.hpp>
 #include <bloom/document/image_math_nodes.hpp>
@@ -870,6 +871,9 @@ template <typename Definition>
     // #752 Subtitles: the exact generated shape.
     case NodeLoweringKind::Subtitles:
         return definition == subtitlesDefinition();
+    // #758 Text Animator: the exact generated shape.
+    case NodeLoweringKind::TextAnimator:
+        return definition == textAnimatorDefinition();
     case NodeLoweringKind::Solid:
         return hasImageOutput(definition, kSolidSourceOutputPort) &&
                (definition.parameters.size() == 3 &&
@@ -1982,6 +1986,7 @@ bool registerBuiltInNodeDefinitions(NodeDefinitionRegistry& registry) {
         testCardDefinition(),
         fourColorGradientDefinition(),
         subtitlesDefinition(),
+        textAnimatorDefinition(),
         vectorArtworkDefinition(),
         lightRaysDefinition(),
         sharpenDefinition(),

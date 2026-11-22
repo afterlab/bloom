@@ -1,4 +1,5 @@
 #include <bloom/core/color.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/channel_nodes.hpp>
 #include <bloom/document/font_id.hpp>
 #include <bloom/document/graph.hpp>
@@ -172,8 +173,8 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     // adds Resample Path; #598 adds Warp Path and Warp Path (Function); #597 adds Shape Morph; #511 adds Tile & Mirror; #528 adds Inner Shadow and Inner Glow; #519 adds Quantize; #527 adds Dither; #510 adds Procedural Warp; #642 adds Vector Artwork;
     // #627 adds Number List; #632 to #635 add Audio Bands, Audio Sample, Audio Features, Audio
     // Beat and Audio Pitch. #591 adds Coordinate Space, Space Readout, To Space, From Space and
-    // Place in Space. #752 adds Subtitles.
-    expectations.expect(registry.definitions().size() == 265,
+    // Place in Space. #752 adds Subtitles. #758 adds Text Animator.
+    expectations.expect(registry.definitions().size() == 266,
                         "startup contribution includes every built-in definition");
     for (const auto* type :
          {"bloom.linear-gradient", "bloom.radial-gradient", "bloom.flip", "bloom.rotate-90",
@@ -972,7 +973,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
     expectations.expect(text != nullptr && text->lowering == runtime::NodeLoweringKind::Text,
                         "Text is a lowered capability with its own compiled operation");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 24 &&
+        text != nullptr && text->parameters.size() == 25 &&
             text->parameters[0].role == document::kTextParameterRole &&
             text->parameters[0].schemaKey == document::kTextParameterSchemaKey &&
             text->parameters[0].valueKind == runtime::ParameterValueKind::String &&
@@ -988,7 +989,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !text->parameters[6].required && !text->parameters[6].supportsAnimation,
         "the text schema includes a defaulted, non-animatable font reference");
     expectations.expect(
-        text != nullptr && text->parameters.size() == 24 &&
+        text != nullptr && text->parameters.size() == 25 &&
             text->parameters[1].defaultValue ==
                 document::ParameterValue{document::kDefaultTextSizePixels} &&
             text->parameters[2].defaultValue ==
@@ -996,10 +997,10 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             text->parameters[6].defaultValue ==
                 document::ParameterValue{document::encodeFontId(document::defaultFontId())},
         "a new text layer defaults to 72 px opaque white and a DejaVu Sans reference");
-    // #757: twelve optional styling parameters follow the twelve layout ones, so a node saved
-    // without them still validates and draws as before.
+    // #757: twelve optional styling parameters follow the twelve layout ones (#758: and Fixed-width
+    // digits), so a node saved without them still validates and draws as before.
     expectations.expect(
-        text != nullptr && text->parameters.size() == 24 &&
+        text != nullptr && text->parameters.size() == 25 &&
             std::ranges::none_of(std::span(text->parameters).subspan(12),
                                  [](const auto& parameter) { return parameter.required; }) &&
             text->parameters[12].role == "markup" &&
@@ -1017,8 +1018,10 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             roles == std::vector<std::string>{"markup", "accent1", "accent2", "accent3", "accent4",
                                               "outlineColor", "outlineWidth", "outlineJoin",
                                               "background", "backgroundColor",
-                                              "backgroundPadding", "backgroundRadius"},
-            "the styling rows run Markup, the accents, the outline, then the background");
+                                              "backgroundPadding", "backgroundRadius",
+                                              "fixedDigits"},
+            "the styling rows run Markup, the accents, the outline, the background, then Fixed-width "
+            "digits");
         std::vector<std::string> sockets;
         for (const auto& input : std::span(text->inputs).subspan(12))
             sockets.push_back(input.name);
@@ -1057,6 +1060,38 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
                 }),
             "a Text Source whose sockets or styling rows do not match is refused");
     }
+    // #758: the Text Animator: a Text input, an image output, the table's parameters in order, and a
+    // socket for exactly the socketed ones (the numbers, colors, choices and Randomize order).
+    {
+        const auto* animator = registry.find(document::kTextAnimatorNodeType,
+                                             document::kTextAnimatorNodeSchemaVersion);
+        const auto specs = document::textAnimatorParameters();
+        bool rows = animator != nullptr && animator->parameters.size() == specs.size();
+        std::size_t socketed = 0;
+        for (std::size_t index = 0; rows && index < specs.size(); ++index) {
+            rows = animator->parameters[index].role == specs[index].role &&
+                   animator->parameters[index].supportsAnimation == specs[index].animatable;
+            socketed += specs[index].socketed ? 1U : 0U;
+        }
+        expectations.expect(
+            rows && animator->lowering == runtime::NodeLoweringKind::TextAnimator &&
+                animator->inputs.size() == 1 + socketed &&
+                animator->inputs.front().name == document::kTextAnimatorTextPort &&
+                animator->inputs.front().valueKind == runtime::SocketValueKind::Image &&
+                animator->outputs.size() == 1 &&
+                animator->outputs.front().valueKind == runtime::SocketValueKind::Image &&
+                specs.size() == 4 * document::text_animator_parameters::kSelectorParameterCount + 17,
+            "the Text Animator holds four selectors, the properties and the reveal, and sockets "
+            "for its drivable values");
+        if (animator != nullptr) {
+            auto changed = *animator;
+            std::swap(changed.parameters[1], changed.parameters[2]);
+            runtime::NodeDefinitionRegistry scratch;
+            expectations.expect(scratch.registerDefinition(std::move(changed)) ==
+                                    runtime::NodeRegistrationStatus::InvalidDefinition,
+                                "a Text Animator whose rows do not match the table is refused");
+        }
+    }
     const auto* layer =
         registry.find(document::kLayerOutputNodeType, document::kLayerOutputNodeSchemaVersion);
     // ADAPTED (task S4): the Layer Output schema grew from two parameters to five, so this
@@ -1076,7 +1111,7 @@ void testFreezeAndBuiltIns(Expectations& expectations) {
             !layer->parameters[7].required && !layer->parameters[8].supportsAnimation &&
             !layer->parameters[8].required && solid != nullptr &&
             solid->parameters.front().supportsAnimation && text != nullptr &&
-            text->parameters.size() == 24 && !text->parameters[0].supportsAnimation &&
+            text->parameters.size() == 25 && !text->parameters[0].supportsAnimation &&
             text->parameters[1].supportsAnimation && text->parameters[2].supportsAnimation,
         "animation support is an explicit per-parameter evaluator capability");
     const auto declarationMatchesSchema = [](const auto& definition) {

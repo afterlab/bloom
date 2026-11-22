@@ -344,6 +344,8 @@ struct CompiledTextOutlineSource final {
     // letters as they draw. The glyphs only: the outline width and the background add nothing.
     bool styled = false;
     bool markup = false;
+    // #758: every digit at its face's widest digit advance, as the text draws them.
+    bool fixedDigits = false;
     std::array<render::TextFont, 4> faces{
         render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans,
         render::EmbeddedFace::DejaVuSans, render::EmbeddedFace::DejaVuSans};

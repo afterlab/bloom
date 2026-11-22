@@ -1,14 +1,15 @@
 #pragma once
 
-// #757 Text Source styling: inline markup, accent colors, outline and background box. The twelve
-// parameters follow the twelve layout parameters of the Text Source definition (schema 2): an
+// #757 Text Source styling: inline markup, accent colors, outline and background box, and (#758)
+// fixed-width digits. The thirteen parameters follow the twelve layout parameters of the Text Source definition (schema 2): an
 // unbound role lowers at its default, so a node saved before they existed draws exactly as it did
 // (docs/architecture/project-format.md, "Node Version Validation"). Schema keys are
 // "bloom.text.<role>". The table is the one description the definition, validation, presentation
 // and automation read. docs/architecture/evaluation-primitives.md, "Styled Text Source".
 //
 // The table's order is the order Properties, the node card and the timeline show the rows in,
-// grouped by function: Markup, the accents, the outline, the background. The animatable parameters
+// grouped by function: Markup, the accents, the outline, the background, then Fixed-width digits.
+// The animatable parameters
 // carry an operand socket (they are drivable); Markup, Outline join and Background are constants
 // with none, so the definition check matches each socket to its parameter by role and kind rather
 // than reading the socketed parameters as a prefix.
@@ -144,6 +145,12 @@ inline constexpr std::array kParameters{
                              .softMaximum = 64.0,
                              .step = 0.5,
                              .decimals = 1},
+    // #758: every digit takes the widest digit advance of the face, so a counter does not jitter.
+    TextStylingParameterSpec{.role = "fixedDigits",
+                             .kind = Kind::Boolean,
+                             .value = 0.0,
+                             .maximum = 1.0,
+                             .label = "Fixed-width digits"},
 };
 
 // The number of socketed (animatable) parameters.

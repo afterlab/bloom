@@ -236,6 +236,34 @@ void CompiledCompositionPlan::analyzeTimeDependence() {
                              parameter(step.style->backgroundRadius) ||
                              std::ranges::any_of(step.style->accents, [&](const auto& accent) {
                                  return parameter(accent);
+                             }) ||
+                             // #758: an animated or driven animator value, or a blinking cursor.
+                             std::ranges::any_of(step.style->animators, [&](const auto& animator) {
+                                 const auto choice = [&](const CompiledTextChoice& value) {
+                                     return driven(value.driven);
+                                 };
+                                 const bool selectors = std::ranges::any_of(
+                                     animator.selectors, [&](const auto& selector) {
+                                         return choice(selector.mode) || choice(selector.units) ||
+                                                choice(selector.rangeBy) || choice(selector.shape) ||
+                                                driven(selector.randomize.driven) ||
+                                                parameter(selector.start) || parameter(selector.end) ||
+                                                parameter(selector.offset) ||
+                                                parameter(selector.amount) ||
+                                                parameter(selector.easeHigh) ||
+                                                parameter(selector.easeLow) || parameter(selector.seed);
+                                     });
+                                 const auto* blink = std::get_if<double>(&animator.cursorBlink.source);
+                                 return selectors || parameter(animator.opacity) ||
+                                        parameter(animator.position) || parameter(animator.scale) ||
+                                        parameter(animator.rotation) || parameter(animator.skew) ||
+                                        parameter(animator.fillColor) ||
+                                        parameter(animator.outlineColor) ||
+                                        parameter(animator.outlineWidth) ||
+                                        parameter(animator.tracking) || choice(animator.revealBy) ||
+                                        choice(animator.revealUnits) || parameter(animator.reveal) ||
+                                        (animator.cursor &&
+                                         (blink == nullptr || *blink > 0.0));
                              })));
                 // A driven blend mode is consumed by the Layer Stack rather than by this step, but
                 // it is a property of the LAYER, so the layer's operation is what varies with time

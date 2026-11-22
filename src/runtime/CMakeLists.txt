@@ -332,6 +332,7 @@ target_sources(
         subtitles_frame.cpp
         subtitles_frame.hpp
         text_markup.cpp
+        text_animator.cpp
         text_styled_frame.cpp
         text_styled_frame.hpp
         gpu_scene_subtitles_emission.hpp

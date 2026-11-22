@@ -47,6 +47,7 @@
 #include <bloom/document/rolling_shutter_nodes.hpp>
 #include <bloom/document/chromatic_aberration_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/denoise_nodes.hpp>
 #include <bloom/document/four_color_gradient_nodes.hpp>
@@ -1392,6 +1393,8 @@ class CompilePass final {
     std::size_t valueOutputCount_ = 0;
     std::multimap<DiagnosticKey, runtime::CompileDiagnostic> diagnostics_;
     std::unordered_set<document::NodeId> emptyImages_;
+    // #758: the Text Sources whose warnings this compile gave (lowerText()).
+    std::unordered_set<document::NodeId> textDiagnosed_;
     // #436: the Layer Outputs whose audio the mix lowers (collectAudibleLayers()).
     std::unordered_set<document::NodeId> audibleLayers_;
     // #630: the same for the sound each reachable analysis node reads, by analysis node.

@@ -401,7 +401,8 @@ lower(const std::vector<document::NodeId>& order) {
             continue;
         }
         if (!isMuted(id) && definition->lowering != runtime::NodeLoweringKind::LayerOutput &&
-            definition->lowering != runtime::NodeLoweringKind::ImageEffect)
+            definition->lowering != runtime::NodeLoweringKind::ImageEffect &&
+            definition->lowering != runtime::NodeLoweringKind::TextAnimator)
             continue;
         auto input = firstImageInput(*node);
         // #479 Combine Channels' first CONNECTED input is its base, which owns every window: the
@@ -435,8 +436,10 @@ lower(const std::vector<document::NodeId>& order) {
         // (task FIX1, item B). The artist wires a Layer node up by hand, so "added but not yet fed"
         // is an ordinary intermediate state; it draws nothing and says nothing, rather than failing
         // the whole compile on a required input.
+        // #758: a Text Animator with no text draws nothing, as an unfed Layer does.
         if ((edge == reachableEdges_.end() &&
-             (isMuted(id) || definition->lowering == runtime::NodeLoweringKind::LayerOutput)) ||
+             (isMuted(id) || definition->lowering == runtime::NodeLoweringKind::LayerOutput ||
+              definition->lowering == runtime::NodeLoweringKind::TextAnimator)) ||
             (edge != reachableEdges_.end() && emptyImages_.contains((*edge)->source.nodeId))) {
             emptyImages_.insert(id);
         }
@@ -497,6 +500,26 @@ lower(const std::vector<document::NodeId>& order) {
         if (definition->second->lowering == runtime::NodeLoweringKind::Field) {
             if (!lowerFieldNode(*node, operations, indices))
                 return {};
+            continue;
+        }
+        // #758: a Text Animator lowers to the text its chain reads, the chain's animators in its
+        // style; a Text Source or a Text Animator that feeds only Text Animators is drawn by the
+        // last animator of its chain, so it is not lowered on its own (nothing would read it).
+        if ((definition->second->lowering == runtime::NodeLoweringKind::TextAnimator ||
+             definition->second->lowering == runtime::NodeLoweringKind::Text) &&
+            !inspectedPicture && feedsOnlyTextAnimators(nodeId))
+            continue;
+        if (definition->second->lowering == runtime::NodeLoweringKind::TextAnimator) {
+            auto lowered = lowerTextAnimator(*node, indices);
+            if (!lowered)
+                return {};
+            if (const auto* passed = std::get_if<runtime::OperationIndex>(&*lowered)) {
+                indices.emplace(nodeId, *passed);
+                continue;
+            }
+            const auto index = runtime::OperationIndex::fromRaw(operations.size());
+            operations.push_back(std::move(std::get<runtime::CompiledOperation>(*lowered)));
+            indices.emplace(nodeId, index);
             continue;
         }
         if (!lowerFieldImageInputs(*node, *definition->second, operations, indices))
@@ -1624,6 +1647,8 @@ lowerNode(const document::NodeRecord& node, const runtime::NodeDefinition& defin
         return lowerText(node);
     case NodeLoweringKind::Subtitles:
         return lowerSubtitles(node);
+    case NodeLoweringKind::TextAnimator: // #758: lowered in the main loop (lowerTextAnimator())
+        break;
     case NodeLoweringKind::LayerOutput:
         return lowerLayerOutput(node, indices);
     case NodeLoweringKind::LayerStack:
@@ -3629,9 +3654,12 @@ lowerSubtitles(const document::NodeRecord& node) {
     return faces;
 }
 
+// `styled`: lower the styling even when the node draws plain (#758: a Text Animator's chain).
+// The node's warnings are given once per compile, however many chains read it.
 [[nodiscard]] std::optional<runtime::CompiledOperation>
-lowerText(const document::NodeRecord& node) {
+lowerText(const document::NodeRecord& node, const bool styled = false) {
     using namespace document;
+    const bool diagnose = textDiagnosed_.insert(node.id).second;
     const auto* contentBinding = findParameterBinding(node, kTextParameterRole);
     const auto* sizeBinding = findParameterBinding(node, kTextSizeParameterRole);
     const auto* colorBinding = findParameterBinding(node, kTextColorParameterRole);
@@ -3656,7 +3684,8 @@ lowerText(const document::NodeRecord& node) {
         } else {
             auto diagnosticSubject = subject(node.id, "font");
             diagnosticSubject.parameterId = fontBinding->parameterId;
-            addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
+            if (diagnose)
+                addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
                        "Text font is unavailable",
                        "The Font parameter does not hold a font ID; DejaVu Sans was used.");
         }
@@ -3681,7 +3710,8 @@ lowerText(const document::NodeRecord& node) {
             // The font stays in the project; installing it later restores it with no edit.
             auto diagnosticSubject = subject(node.id, "font");
             diagnosticSubject.parameterId = fontBinding->parameterId;
-            addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
+            if (diagnose)
+                addWarning(runtime::CompileDiagnosticCode::FontMissing, std::move(diagnosticSubject),
                        "Text font is missing", resolution.diagnostic);
         }
     }
@@ -3793,8 +3823,11 @@ lowerText(const document::NodeRecord& node) {
             return value == nullptr ? static_cast<std::int64_t>(specFor(role)->value) : *value;
         };
         const auto* markupValue = parameterConstant<bool>(findParameterBinding(node, "markup"));
+        const auto* fixedDigitsValue =
+            parameterConstant<bool>(findParameterBinding(node, "fixedDigits"));
         runtime::CompiledTextStyle style;
         style.markup = markupValue != nullptr && *markupValue;
+        style.fixedDigits = fixedDigitsValue != nullptr && *fixedDigitsValue;
         style.outlineJoin = discrete("outlineJoin");
         style.background = discrete("background");
         const auto outlineWidth = scalar("outlineWidth");
@@ -3821,7 +3854,8 @@ lowerText(const document::NodeRecord& node) {
         style.backgroundRadius = *radius;
         const auto* widthConstant = std::get_if<double>(&style.outlineWidth.source);
         const bool outlined = widthConstant == nullptr || *widthConstant != 0.0;
-        if (style.markup || outlined || style.background != document::kTextBackgroundOff) {
+        if (styled || style.markup || style.fixedDigits || outlined ||
+            style.background != document::kTextBackgroundOff) {
             style.faces = styledTextFaces(fontId, result.font, fontMissing);
             if (style.markup && !result.drivenContent) {
                 // What the markup draws as written, named on the node (a driven text is read
@@ -3830,7 +3864,8 @@ lowerText(const document::NodeRecord& node) {
                 for (const auto& warning : runs.warnings) {
                     auto diagnosticSubject = subject(node.id, "text");
                     diagnosticSubject.parameterId = contentBinding->parameterId;
-                    addWarning(runtime::CompileDiagnosticCode::TextMarkupIgnored,
+                    if (diagnose)
+                        addWarning(runtime::CompileDiagnosticCode::TextMarkupIgnored,
                                std::move(diagnosticSubject), "Text markup is drawn as written",
                                "Markup is on: " + warning + ".");
                 }
@@ -3838,7 +3873,8 @@ lowerText(const document::NodeRecord& node) {
                     !fontMissing) {
                     auto diagnosticSubject = subject(node.id, "font");
                     diagnosticSubject.parameterId = fontBinding->parameterId;
-                    addWarning(runtime::CompileDiagnosticCode::FontMissing,
+                    if (diagnose)
+                        addWarning(runtime::CompileDiagnosticCode::FontMissing,
                                std::move(diagnosticSubject), "Text bold face is missing",
                                "The font has no bold style; bold runs draw at the regular weight.");
                 }
@@ -3847,6 +3883,193 @@ lowerText(const document::NodeRecord& node) {
         }
     }
     return result;
+}
+
+// #758: whether every reachable edge out of `nodeId` goes into a Text Animator's text input (and
+// at least one does): the node is then drawn by the last animator of its chain.
+[[nodiscard]] bool feedsOnlyTextAnimators(const document::NodeId nodeId) const {
+    bool any = false;
+    for (const auto* edge : reachableEdges_) {
+        if (edge->source.nodeId != nodeId)
+            continue;
+        const auto* input = std::get_if<document::NodeInputRef>(&edge->destination);
+        const auto* consumer = input == nullptr ? nullptr : findNode(input->nodeId);
+        if (consumer == nullptr || consumer->typeId != document::kTextAnimatorNodeType ||
+            input->port != document::kTextAnimatorTextPort)
+            return false;
+        any = true;
+    }
+    return any;
+}
+
+// #758: one Text Animator's values. A value the node does not read now
+// (document::isParameterInactive) lowers at its default with no curve, as an unbound one does.
+[[nodiscard]] std::optional<runtime::CompiledTextAnimator>
+lowerTextAnimatorValues(const document::NodeRecord& node) {
+    using document::TextAnimatorParameterKind;
+    const auto specFor = [](const std::string_view role) {
+        return document::textAnimatorParameterSpecForRole(role);
+    };
+    const auto unread = [&](const std::string_view role) {
+        const auto* binding = findParameterBinding(node, role);
+        const auto* parameter = binding == nullptr ? nullptr : findParameter(binding->parameterId);
+        return binding == nullptr ||
+               (parameter != nullptr &&
+                document::isParameterInactive(*composition_, node, parameter->schemaKey, role));
+    };
+    bool ok = true;
+    const auto scalar = [&](const std::string_view role) {
+        if (unread(role))
+            return runtime::CompiledScalarParameter{{}, specFor(role)->value};
+        const auto lowered = compiledScalarParameter(findParameterBinding(node, role));
+        ok = ok && lowered.has_value();
+        return lowered.value_or(runtime::CompiledScalarParameter{{}, specFor(role)->value});
+    };
+    const auto vector = [&](const std::string_view role) {
+        const document::Vec2d fallback{specFor(role)->value, specFor(role)->value};
+        if (unread(role))
+            return runtime::CompiledVec2Parameter{{}, fallback};
+        const auto lowered = compiledVec2Parameter(findParameterBinding(node, role));
+        ok = ok && lowered.has_value();
+        return lowered.value_or(runtime::CompiledVec2Parameter{{}, fallback});
+    };
+    const auto color = [&](const std::string_view role) {
+        if (unread(role))
+            return runtime::CompiledColorParameter{{}, specFor(role)->color};
+        const auto lowered = compiledColorParameter(findParameterBinding(node, role));
+        ok = ok && lowered.has_value();
+        return lowered.value_or(runtime::CompiledColorParameter{{}, specFor(role)->color});
+    };
+    const auto choice = [&](const std::string_view role) {
+        runtime::CompiledTextChoice result{{}, static_cast<std::int64_t>(specFor(role)->value)};
+        if (unread(role))
+            return result;
+        const auto* binding = findParameterBinding(node, role);
+        result.id = binding->parameterId;
+        if (const auto* value = parameterConstant<std::int64_t>(binding))
+            result.value = *value;
+        result.driven = drivenOutput(binding, runtime::SocketValueKind::Integer);
+        return result;
+    };
+    const auto flag = [&](const std::string_view role) {
+        runtime::CompiledTextSwitch result{{}, specFor(role)->value != 0.0};
+        if (unread(role))
+            return result;
+        const auto* binding = findParameterBinding(node, role);
+        result.id = binding->parameterId;
+        if (const auto* value = parameterConstant<bool>(binding))
+            result.value = *value;
+        result.driven = drivenOutput(binding, runtime::SocketValueKind::Boolean);
+        return result;
+    };
+    const auto constantFlag = [&](const std::string_view role) {
+        const auto* value = parameterConstant<bool>(findParameterBinding(node, role));
+        return value != nullptr ? *value : specFor(role)->value != 0.0;
+    };
+    runtime::CompiledTextAnimator animator;
+    animator.sourceNodeId = node.id;
+    for (std::size_t index = 1; index <= document::kTextAnimatorSelectorCount; ++index) {
+        const auto prefix = "selector" + std::to_string(index);
+        if (!constantFlag(prefix))
+            continue;
+        runtime::CompiledTextSelector selector;
+        selector.mode = choice(prefix + "Mode");
+        selector.units = choice(prefix + "Units");
+        selector.rangeBy = choice(prefix + "RangeBy");
+        selector.shape = choice(prefix + "Shape");
+        selector.randomize = flag(prefix + "Randomize");
+        selector.start = scalar(prefix + "Start");
+        selector.end = scalar(prefix + "End");
+        selector.offset = scalar(prefix + "Offset");
+        selector.amount = scalar(prefix + "Amount");
+        selector.easeHigh = scalar(prefix + "EaseHigh");
+        selector.easeLow = scalar(prefix + "EaseLow");
+        selector.seed = scalar(prefix + "Seed");
+        animator.selectors.push_back(std::move(selector));
+    }
+    animator.opacity = scalar("opacity");
+    animator.position = vector("position");
+    animator.scale = vector("scale");
+    animator.rotation = scalar("rotation");
+    animator.skew = scalar("skew");
+    animator.fill = constantFlag("fill");
+    animator.fillColor = color("fillColor");
+    animator.outline = constantFlag("outline");
+    animator.outlineColor = color("outlineColor");
+    animator.outlineWidth = scalar("outlineWidth");
+    animator.tracking = scalar("tracking");
+    animator.revealBy = choice("revealBy");
+    animator.revealUnits = choice("revealUnits");
+    animator.reveal = scalar("reveal");
+    animator.cursor = constantFlag("cursor");
+    if (const auto* character =
+            parameterConstant<std::string>(findParameterBinding(node, "cursorCharacter")))
+        animator.cursorCharacter = *character;
+    else
+        animator.cursorCharacter = "|";
+    animator.cursorBlink = scalar("cursorBlink");
+    if (!ok) {
+        addTopologyFailure(node.id, "Validated Text Animator values could not be lowered.");
+        return std::nullopt;
+    }
+    return animator;
+}
+
+// #758: a Text Animator draws the Text Source up its chain of Text Animators with every animator
+// of the chain, nearest the Text Source first; a muted one is passed over. On anything other than a
+// Text Source it passes its input through unchanged, and says so.
+[[nodiscard]] std::optional<std::variant<runtime::CompiledOperation, runtime::OperationIndex>>
+lowerTextAnimator(const document::NodeRecord& node,
+                  const std::unordered_map<document::NodeId, runtime::OperationIndex>& indices) {
+    std::vector<const document::NodeRecord*> chain;
+    const document::NodeRecord* current = &node;
+    while (true) {
+        chain.push_back(current);
+        const auto* edge = fixedInputEdge(current->id, document::kTextAnimatorTextPort);
+        if (edge == nullptr) {
+            addTopologyFailure(node.id, "A Text Animator chain lost its text input.");
+            return std::nullopt;
+        }
+        const auto* upstream = findNode(edge->source.nodeId);
+        if (upstream != nullptr && upstream->typeId == document::kTextAnimatorNodeType &&
+            chain.size() < 4096) {
+            current = upstream;
+            continue;
+        }
+        if (upstream == nullptr || upstream->typeId != document::kTextSourceNodeType ||
+            isMuted(upstream->id)) {
+            addWarning(runtime::CompileDiagnosticCode::TextAnimatorNoText, subject(current->id, "text"),
+                       "Text Animator reads no Text Source",
+                       "A Text Animator animates the Text Source on its Text input, directly or "
+                       "through other Text Animators; this image passes through unchanged.");
+            const auto source = sourceOperation(edge->source, indices);
+            if (!source) {
+                addTopologyFailure(node.id, "Text Animator input was not lowered.");
+                return std::nullopt;
+            }
+            return std::variant<runtime::CompiledOperation, runtime::OperationIndex>{*source};
+        }
+        auto lowered = lowerText(*upstream, true);
+        if (!lowered)
+            return std::nullopt;
+        auto* text = std::get_if<runtime::CompiledText>(&*lowered);
+        if (text == nullptr || !text->style) {
+            addTopologyFailure(node.id, "A Text Animator's Text Source could not be lowered.");
+            return std::nullopt;
+        }
+        for (auto link = chain.rbegin(); link != chain.rend(); ++link) {
+            if (isMuted((*link)->id))
+                continue;
+            auto animator = lowerTextAnimatorValues(**link);
+            if (!animator)
+                return std::nullopt;
+            text->style->animators.push_back(std::move(*animator));
+        }
+        // The animated image is the last animator's: its diagnostics and evaluation belong to it.
+        text->sourceNodeId = node.id;
+        return std::variant<runtime::CompiledOperation, runtime::OperationIndex>{
+            std::move(*lowered)};
+    }
 }
 
 #include "snapshot_compiler_entries.ipp"

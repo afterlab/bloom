@@ -17,6 +17,7 @@
 #include <bloom/document/warp_definition.hpp>
 #include <bloom/document/chromatic_aberration_definition.hpp>
 #include <bloom/document/test_card_definition.hpp>
+#include <bloom/document/text_animator_definition.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/four_color_gradient_definition.hpp>
 #include <bloom/document/subtitles_definition.hpp>
@@ -585,6 +586,9 @@ constantMatchesSchema(const std::string_view schemaKey,
     // #752 Subtitles: every parameter within its document domain.
     if (isSubtitlesSchemaKey(schemaKey))
         return isSubtitlesParameterValueValid(schemaKey, constant.value);
+    // #758 Text Animator: every parameter within its document domain.
+    if (isTextAnimatorSchemaKey(schemaKey))
+        return isTextAnimatorParameterValueValid(schemaKey, constant.value);
     // #757 Text Source styling: every parameter within its document domain.
     if (const auto* styling = textStylingParameterSpec(schemaKey)) {
         switch (styling->kind) {
@@ -837,6 +841,7 @@ constantMatchesSchema(const std::string_view schemaKey,
          bloom::document::isTestCardConstantSchemaKey(schemaKey) ||
          bloom::document::isSubtitlesConstantSchemaKey(schemaKey) ||
          bloom::document::isTextStylingConstantSchemaKey(schemaKey) ||
+         bloom::document::isTextAnimatorConstantSchemaKey(schemaKey) ||
          bloom::document::isLightRaysConstantSchemaKey(schemaKey) ||
          bloom::document::isMotionConstantSchemaKey(schemaKey) ||
          bloom::document::isImagePixelConstantSchemaKey(schemaKey) ||
@@ -903,7 +908,8 @@ bool isVec2AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isWarpPointSchemaKey(schemaKey) || isSpaceVec2SchemaKey(schemaKey) ||
            isFieldVec2AnimatableSchemaKey(schemaKey) || isDepthVec2AnimatableSchemaKey(schemaKey) ||
            isLensFlareVec2SchemaKey(schemaKey) || isMotionVec2AnimatableSchemaKey(schemaKey) ||
-           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Offset);
+           isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Offset) ||
+           isTextAnimatorAnimatableSchemaKey(schemaKey, TextAnimatorParameterKind::Vec2);
 }
 
 bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -958,6 +964,7 @@ bool isScalarAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isColorCleanupScalarSchemaKey(schemaKey) ||
            isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Scalar) ||
            isTextStylingAnimatableSchemaKey(schemaKey, TextStylingParameterKind::Scalar) ||
+           isTextAnimatorAnimatableSchemaKey(schemaKey, TextAnimatorParameterKind::Scalar) ||
            schemaKey == kLayerMaskFeatherSchemaKey || schemaKey == kLayerMaskExpansionSchemaKey ||
            schemaKey == kLayerMaskOpacitySchemaKey;
 }
@@ -971,7 +978,8 @@ bool isColor4AnimatableSchemaKey(const std::string_view schemaKey) noexcept {
            isLensFlareColorSchemaKey(schemaKey) || isImagePixelColorSchemaKey(schemaKey) ||
            isFourColorGradientColorSchemaKey(schemaKey) ||
            isSubtitlesAnimatableSchemaKey(schemaKey, SubtitlesParameterKind::Color) ||
-           isTextStylingAnimatableSchemaKey(schemaKey, TextStylingParameterKind::Color);
+           isTextStylingAnimatableSchemaKey(schemaKey, TextStylingParameterKind::Color) ||
+           isTextAnimatorAnimatableSchemaKey(schemaKey, TextAnimatorParameterKind::Color);
 }
 
 bool isAnimatableSchemaKey(const std::string_view schemaKey) noexcept {
@@ -1107,6 +1115,8 @@ bool isScalarWithinSchemaDomain(const std::string_view schemaKey,
         return isSubtitlesScalarWithinDomain(schemaKey, value);
     if (isTextStylingSchemaKey(schemaKey))
         return isTextStylingScalarWithinDomain(schemaKey, value);
+    if (isTextAnimatorSchemaKey(schemaKey))
+        return isTextAnimatorScalarWithinDomain(schemaKey, value);
     if (hasUnitDomainSchemaKey(schemaKey)) {
         return value >= 0.0 && value <= 1.0;
     }

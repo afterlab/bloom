@@ -6,6 +6,7 @@
 #include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/node_group_nodes.hpp>
 #include <bloom/document/resample_path_nodes.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/value_utility_nodes.hpp>
 #include <bloom/document/warp_path_nodes.hpp>
@@ -16,6 +17,7 @@
 #include <initializer_list>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <variant>
 
 namespace bloom::document {
@@ -104,6 +106,39 @@ bool isParameterInactive(const Composition& composition, const NodeRecord& node,
                                        : constantNumberOf(composition, node, "outlineWidth");
             return width == 0.0 && !inputConnected(composition, node, "outlineWidth");
         }
+        return false;
+    }
+    // #758 Text Animator: a selector's values are read only while it is on; the fill and outline
+    // colors only while they are changed; the cursor's character and blink only with a cursor; a
+    // selector's seed only while its order can be randomized (a constant off is never).
+    if (node.typeId == kTextAnimatorNodeType) {
+        const auto* spec = textAnimatorParameterSpec(schemaKey);
+        if (spec == nullptr)
+            return false;
+        const auto onOf = [&](const std::string_view role) {
+            const auto* defaultSpec = textAnimatorParameterSpecForRole(role);
+            const auto fallback = defaultSpec != nullptr && defaultSpec->value != 0.0 ? 1 : 0;
+            return constantOf(composition, node, role).value_or(fallback) != 0;
+        };
+        if (const auto selector = textAnimatorSelectorOf(spec->role); selector != 0) {
+            const std::string prefix = "selector" + std::to_string(selector);
+            if (spec->role == prefix)
+                return false;
+            if (!onOf(prefix))
+                return true;
+            if (spec->role == prefix + "Seed") {
+                const auto randomize = prefix + "Randomize";
+                return !onOf(randomize) && constantOf(composition, node, randomize).has_value() &&
+                       !inputConnected(composition, node, randomize);
+            }
+            return false;
+        }
+        if (spec->role == "fillColor")
+            return !onOf("fill");
+        if (spec->role == "outlineColor")
+            return !onOf("outline");
+        if (spec->role == "cursorCharacter" || spec->role == "cursorBlink")
+            return !onOf("cursor");
         return false;
     }
     if (schemaKey == "bloom.blur.radius-y")

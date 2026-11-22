@@ -1620,6 +1620,46 @@ hasDisjointCurveIds(const std::span<const LeftCurve> leftCurves,
                         color(style.accents[1], "accent2");
                         color(style.accents[2], "accent3");
                         color(style.accents[3], "accent4");
+                        // #758: the animator chain's operands.
+                        const auto vector = [&](const CompiledVec2Parameter& parameter,
+                                                const char* field) {
+                            if (parameter.id.isValid())
+                                static_cast<void>(
+                                    registerVec2(parameter, field, operationSubject));
+                        };
+                        const auto discrete = [&](const document::ParameterId id) {
+                            if (id.isValid())
+                                static_cast<void>(registerParameter(id, operationSubject));
+                        };
+                        for (const auto& animator : style.animators) {
+                            for (const auto& selector : animator.selectors) {
+                                discrete(selector.mode.id);
+                                discrete(selector.units.id);
+                                discrete(selector.rangeBy.id);
+                                discrete(selector.shape.id);
+                                discrete(selector.randomize.id);
+                                scalar(selector.start, "selectorStart");
+                                scalar(selector.end, "selectorEnd");
+                                scalar(selector.offset, "selectorOffset");
+                                scalar(selector.amount, "selectorAmount");
+                                scalar(selector.easeHigh, "selectorEaseHigh");
+                                scalar(selector.easeLow, "selectorEaseLow");
+                                scalar(selector.seed, "selectorSeed");
+                            }
+                            scalar(animator.opacity, "opacity");
+                            vector(animator.position, "position");
+                            vector(animator.scale, "scale");
+                            scalar(animator.rotation, "rotation");
+                            scalar(animator.skew, "skew");
+                            color(animator.fillColor, "fillColor");
+                            color(animator.outlineColor, "animatorOutlineColor");
+                            scalar(animator.outlineWidth, "animatorOutlineWidth");
+                            scalar(animator.tracking, "tracking");
+                            discrete(animator.revealBy.id);
+                            discrete(animator.revealUnits.id);
+                            scalar(animator.reveal, "reveal");
+                            scalar(animator.cursorBlink, "cursorBlink");
+                        }
                     }
                 },
                 [&](const CompiledSubtitles& subtitles) {
@@ -3268,7 +3308,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
             if (const auto* text = std::get_if<CompiledText>(&plan->operations()[index]);
                 text != nullptr && text->style) {
                 auto prepared =
-                    detail::prepareStyledTextFrame(*text, *plan, resolved, cancellation);
+                    detail::prepareStyledTextFrame(*text, *plan, resolved, *operandTime, cancellation);
                 if (const auto* failure = std::get_if<detail::SubtitlesFailure>(&prepared)) {
                     if (failure->kind == detail::SubtitlesFailureKind::Cancelled ||
                         cancellation.isCancellationRequested())

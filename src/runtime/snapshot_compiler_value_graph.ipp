@@ -61,6 +61,7 @@ struct DriverReference final {
         case runtime::NodeLoweringKind::Gradient:
         case runtime::NodeLoweringKind::Shape:
         case runtime::NodeLoweringKind::Text:
+        case runtime::NodeLoweringKind::TextAnimator:
         case runtime::NodeLoweringKind::CompositionSource:
     case runtime::NodeLoweringKind::VideoSource:
     case runtime::NodeLoweringKind::ImageEffect:
@@ -915,6 +916,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
                 if (text->style) {
                     textSource->styled = true;
                     textSource->markup = text->style->markup;
+                    textSource->fixedDigits = text->style->fixedDigits;
                     textSource->faces = text->style->faces.faces;
                     textSource->oblique = text->style->faces.oblique;
                 }
@@ -1067,6 +1069,7 @@ lowerValueKernel(const document::NodeRecord& node, const runtime::NodeDefinition
     case runtime::NodeLoweringKind::NodeGroup:
     case runtime::NodeLoweringKind::VectorArtwork:
     case runtime::NodeLoweringKind::Subtitles:
+    case runtime::NodeLoweringKind::TextAnimator:
     case runtime::NodeLoweringKind::Field:
     case runtime::NodeLoweringKind::Shape:
     case runtime::NodeLoweringKind::Solid:

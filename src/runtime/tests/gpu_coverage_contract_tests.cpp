@@ -1159,6 +1159,38 @@ displayProofRunner(const bool customView) {
             return runStyledText(bloom::gpu_coverage_plans::styledText(105300, true, 0.5, 1),
                                  105300);
         });
+    // #758: the Text Animator node and each of its axes through the same frames.
+    add("node.bloom.text-animator", GpuCoverageFixtureCriterion::Prepared,
+        "src/runtime Text Animator CPU and native parity tests", [runStyledText] {
+            return runStyledText(bloom::gpu_coverage_plans::animatedText(105400, "stacked"),
+                                 105400);
+        });
+    {
+        std::uint64_t idBase = 105500;
+        for (const auto& [id, axis] :
+             std::array<std::pair<std::string_view, std::string_view>, 12>{{
+                 {"feature.text.animator.opacity", "opacity"},
+                 {"feature.text.animator.position", "position"},
+                 {"feature.text.animator.scale", "scale"},
+                 {"feature.text.animator.rotation", "rotation"},
+                 {"feature.text.animator.skew", "skew"},
+                 {"feature.text.animator.fill", "fill"},
+                 {"feature.text.animator.outline", "outline"},
+                 {"feature.text.animator.tracking", "tracking"},
+                 {"feature.text.reveal", "reveal"},
+                 {"feature.text.selectors", "stacked"},
+                 {"feature.text.fixed-digits", "digits"},
+                 {"feature.text.animator.neutral", "neutral"},
+             }}) {
+            add(std::string(id), GpuCoverageFixtureCriterion::Prepared,
+                "src/runtime Text Animator CPU and native parity tests",
+                [runStyledText, axis, idBase] {
+                    return runStyledText(bloom::gpu_coverage_plans::animatedText(idBase, axis),
+                                         idBase);
+                });
+            idBase += 100;
+        }
+    }
     add("node.bloom.shape-source", GpuCoverageFixtureCriterion::Prepared,
         "src/render PathRaster + shape source tests",
         [] { return runBuilder(withSource(shape(ShapeKind::Rectangle, 106000, true), 106000)); });

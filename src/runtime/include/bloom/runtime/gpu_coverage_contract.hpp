@@ -342,6 +342,26 @@ gpuShapeKindFeatureLabel(const document::ShapeKind kind) noexcept {
     out.push_back(GpuFeatureCoverageEntry{
         "feature.text.box", "text background box axis", GpuCoverageDisposition::Required,
         "src/runtime styled Text Source CPU and native parity tests"});
+    // #758: each Text Animator property, the reveal with its cursor, stacked selectors and
+    // animators, and fixed-width digits, each drawn by native coverage.
+    for (const auto& [id, description] :
+         std::array<std::pair<std::string_view, std::string_view>, 12>{{
+             {"feature.text.animator.opacity", "text animator opacity axis"},
+             {"feature.text.animator.position", "text animator position axis"},
+             {"feature.text.animator.scale", "text animator scale axis"},
+             {"feature.text.animator.rotation", "text animator rotation axis"},
+             {"feature.text.animator.skew", "text animator skew axis"},
+             {"feature.text.animator.fill", "text animator fill color axis"},
+             {"feature.text.animator.outline", "text animator outline color and width axis"},
+             {"feature.text.animator.tracking", "text animator tracking axis"},
+             {"feature.text.reveal", "text reveal and cursor axis"},
+             {"feature.text.selectors", "text stacked selectors and animators axis"},
+             {"feature.text.fixed-digits", "text fixed-width digits axis"},
+             {"feature.text.animator.neutral", "text animator at its neutral values axis"},
+         }})
+        out.push_back(GpuFeatureCoverageEntry{std::string(id), std::string(description),
+                                              GpuCoverageDisposition::Required,
+                                              "src/runtime Text Animator CPU and native parity tests"});
     out.push_back(GpuFeatureCoverageEntry{
         "feature.geometry.vector_coverage", "native GPU vector coverage rasterization",
         GpuCoverageDisposition::Required, "src/runtime GpuSceneExecutor native coverage tests"});
@@ -757,6 +777,8 @@ gpuLoweringIsPixelOperation(const document::NodeLoweringKind lowering) noexcept 
     case NodeLoweringKind::FourColorGradient:
     // #752: a Subtitles node's picture.
     case NodeLoweringKind::Subtitles:
+    // #758: a Text Animator draws its chain's Text Source.
+    case NodeLoweringKind::TextAnimator:
         return true;
     // #490: an inspection sink lowers to no operation; its preview is its upstream operations
     // through the Viewer's GPU preview route.
@@ -814,6 +836,8 @@ gpuLoweringOperationId(const document::NodeLoweringKind lowering) noexcept {
     case NodeLoweringKind::Shape:
         return "operation.CompiledShape";
     case NodeLoweringKind::Text:
+    // #758: a Text Animator lowers to the text its chain reads, with the animators in its style.
+    case NodeLoweringKind::TextAnimator:
         return "operation.CompiledText";
     case NodeLoweringKind::ImageSource:
         return "operation.CompiledImageSource";

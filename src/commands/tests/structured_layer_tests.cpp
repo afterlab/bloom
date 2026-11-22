@@ -356,7 +356,7 @@ void testAddTextLayerBuildsOneCanonicalTopology(TestContext& test) {
                 document::textStylingParameterSpecForRole(binding.role) != nullptr)
                 expectedTextNode.parameters.push_back(binding);
         }
-    test.expect(expectedTextNode.parameters.size() == 24,
+    test.expect(expectedTextNode.parameters.size() == 25,
                 "text declares typography and styling parameters");
     test.expect(textNode != nullptr && *textNode == expectedTextNode,
                 "text source should bind content, size, and color in the registered order");

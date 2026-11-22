@@ -56,6 +56,8 @@ std::string_view compileDiagnosticCodeId(const CompileDiagnosticCode code) noexc
         return "bloom.runtime.compile.adjustment-target-ambiguous";
     case CompileDiagnosticCode::UnshapedScript:
         return "bloom.runtime.compile.unshaped-script";
+    case CompileDiagnosticCode::TextAnimatorNoText:
+        return "bloom.runtime.compile.text-animator-no-text";
     case CompileDiagnosticCode::TextMarkupIgnored:
         return "bloom.runtime.compile.text-markup";
     }

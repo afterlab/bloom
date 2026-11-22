@@ -68,12 +68,13 @@ prepareSubtitlesLeaf(const CompiledSubtitles& subtitles, const CompiledCompositi
 // the same call the CPU reference makes), its bounds and ink window published, no command.
 [[nodiscard]] inline std::optional<GpuSceneLeafFailure>
 prepareStyledTextLeaf(const CompiledText& text, const CompiledCompositionPlan& plan,
-                      const ResolvedEvaluation& resolved, const std::size_t index,
+                      const ResolvedEvaluation& resolved, const core::RationalTime time,
+                      const std::size_t index,
                       const CancellationToken& cancellation,
                       std::vector<std::optional<render::ImageWindow>>& outputWindowOf,
                       std::vector<EvaluatedOperationBounds>& bounds,
                       std::vector<std::shared_ptr<const SubtitlesFrame>>& frames) {
-    auto prepared = prepareStyledTextFrame(text, plan, resolved, cancellation);
+    auto prepared = prepareStyledTextFrame(text, plan, resolved, time, cancellation);
     if (const auto* failure = std::get_if<SubtitlesFailure>(&prepared)) {
         return fail(failure->kind == SubtitlesFailureKind::Cancelled
                         ? PreparedGpuSceneDiagnosticCode::Cancelled

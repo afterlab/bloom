@@ -26,6 +26,7 @@ target_sources(
         test_card_nodes.cpp
         four_color_gradient_nodes.cpp
         subtitles_nodes.cpp
+        text_animator_nodes.cpp
         cue_list.cpp
         cue_markup.cpp
         light_rays_nodes.cpp

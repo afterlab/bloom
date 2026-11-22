@@ -188,9 +188,9 @@ void styledRoundTrip() {
     const auto* composition = reopened.project().findComposition(authored->compositionId);
     const auto* node =
         composition == nullptr ? nullptr : composition->graph().findNode(authored->node);
-    expect(node != nullptr && node->parameters.size() == 24 &&
+    expect(node != nullptr && node->parameters.size() == 25 &&
                node->schemaVersion == document::kTextSourceNodeSchemaVersion,
-           "the node reopens at version 2 with its twenty-four bindings");
+           "the node reopens at version 2 with its twenty-five bindings");
     if (composition != nullptr)
         for (const auto& [role, value] : styledValues()) {
             const auto* reread = constantIn(*composition, authored->parameters.at(role));

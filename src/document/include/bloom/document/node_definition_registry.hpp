@@ -464,6 +464,9 @@ enum class NodeLoweringKind {
     // #752: a Subtitles node (subtitles_nodes.hpp): the active cues drawn over the composition
     // frame, and the cue list, text, index and progress as values.
     Subtitles,
+    // #758: a Text Animator (text_animator_nodes.hpp): the Text Source its chain reads, drawn with
+    // per-cluster selectors, properties and a reveal.
+    TextAnimator,
 };
 
 // Whether this lowering belongs to the value graph rather than the image chain. The compiler reads
@@ -523,6 +526,7 @@ enum class NodeLoweringKind {
     case NodeLoweringKind::TestCard:
     case NodeLoweringKind::FourColorGradient:
     case NodeLoweringKind::Subtitles:
+    case NodeLoweringKind::TextAnimator:
         return false;
     }
     return false;

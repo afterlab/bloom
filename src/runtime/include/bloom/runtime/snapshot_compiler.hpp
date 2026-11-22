@@ -64,6 +64,8 @@ enum class CompileDiagnosticCode {
     // #757: a Text Source with Markup on holds a tag it draws as written (an unknown tag, an end
     // tag that closes nothing) or a color class that names no color.
     TextMarkupIgnored,
+    // #758: a Text Animator whose chain reads no (unmuted) Text Source passes its image through.
+    TextAnimatorNoText,
 };
 
 [[nodiscard]] std::string_view compileDiagnosticCodeId(CompileDiagnosticCode code) noexcept;

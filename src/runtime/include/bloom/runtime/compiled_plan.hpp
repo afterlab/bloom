@@ -1666,8 +1666,54 @@ struct CompiledSubtitlesFaces final {
     friend bool operator==(const CompiledSubtitlesFaces&, const CompiledSubtitlesFaces&) = default;
 };
 
+// #758: a choice or a switch of a Text Animator: its constant, or the Integer or Boolean output
+// that drives it this frame. Resolve with detail::resolveParameter(id, value, driven, resolved).
+struct CompiledTextChoice final {
+    document::ParameterId id;
+    std::int64_t value = 0;
+    std::optional<ValueOutputIndex> driven{};
+    friend bool operator==(const CompiledTextChoice&, const CompiledTextChoice&) = default;
+};
+struct CompiledTextSwitch final {
+    document::ParameterId id;
+    bool value = false;
+    std::optional<ValueOutputIndex> driven{};
+    friend bool operator==(const CompiledTextSwitch&, const CompiledTextSwitch&) = default;
+};
+
+// #758: one range selector of a Text Animator (document/text_animator_nodes.hpp).
+struct CompiledTextSelector final {
+    CompiledTextChoice mode, units, rangeBy, shape;
+    CompiledTextSwitch randomize;
+    CompiledScalarParameter start, end, offset, amount, easeHigh, easeLow, seed;
+    friend bool operator==(const CompiledTextSelector&, const CompiledTextSelector&) = default;
+};
+
+// #758: one Text Animator of a text's animator chain, in chain order (the node nearest the Text
+// Source first). Only its selectors that are on are lowered; a node with none selects every
+// cluster fully, so its properties apply to the whole text.
+struct CompiledTextAnimator final {
+    document::NodeId sourceNodeId;
+    std::vector<CompiledTextSelector> selectors;
+    CompiledScalarParameter opacity;
+    CompiledVec2Parameter position, scale;
+    CompiledScalarParameter rotation, skew;
+    bool fill = false;
+    CompiledColorParameter fillColor;
+    bool outline = false;
+    CompiledColorParameter outlineColor;
+    CompiledScalarParameter outlineWidth, tracking;
+    CompiledTextChoice revealBy, revealUnits;
+    CompiledScalarParameter reveal;
+    bool cursor = false;
+    std::string cursorCharacter;
+    CompiledScalarParameter cursorBlink;
+    friend bool operator==(const CompiledTextAnimator&, const CompiledTextAnimator&) = default;
+};
+
 // #757: a Text Source's styling (document/text_styling.hpp), present only when the node draws
-// styled: Markup on, a Background other than Off, or an Outline width that is not the constant 0.
+// styled: Markup on, a Background other than Off, or an Outline width that is not the constant 0;
+// #758: or Fixed-width digits on, or a Text Animator chain drawing it.
 // Without it the text draws exactly as it always has (docs/architecture/evaluation-primitives.md,
 // "Styled Text Source"). Unbound roles hold their defaults with an invalid parameter id.
 struct CompiledTextStyle final {
@@ -1682,6 +1728,10 @@ struct CompiledTextStyle final {
     CompiledScalarParameter backgroundRadius;
     // Regular, bold, italic and bold italic, resolved from the node's font as Subtitles does.
     CompiledSubtitlesFaces faces;
+    // #758: every digit at the widest digit advance of its face.
+    bool fixedDigits = false;
+    // #758: the Text Animator chain that draws this text, in order; empty for a Text Source.
+    std::vector<CompiledTextAnimator> animators{};
     friend bool operator==(const CompiledTextStyle&, const CompiledTextStyle&) = default;
 };
 

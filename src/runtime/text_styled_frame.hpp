@@ -30,6 +30,9 @@ namespace bloom::runtime::detail {
 
 // The most glyphs one styled text draws.
 inline constexpr std::size_t kStyledTextGlyphLimit = 8192;
+// #758: the most layers (distinct fill colors, outlines, the box and cursors) an animated text
+// draws in one frame.
+inline constexpr std::size_t kStyledTextLayerLimit = 256;
 
 // What the layout reads, resolved at the frame.
 struct StyledTextSourceInput final {
@@ -45,6 +48,9 @@ struct StyledTextSourceInput final {
     std::int64_t verticalAlignment = 0;
     std::int64_t anchorMode = 0;
     std::int64_t overflow = 0;
+    // #758: fixed-width digits, and whether to keep the per-cluster record (a Text Animator).
+    bool fixedDigits = false;
+    bool clusters = false;
 };
 
 // One laid-out line: its advance box (author pixels, the text origin at (0, 0)).
@@ -63,6 +69,16 @@ struct StyledTextGeometry final {
     // The paints the runs use (kTextFillPaint, the accents, the literals), sorted.
     std::vector<std::uint32_t> paints;
     std::vector<core::Color4d> literals;
+    // #758 (with StyledTextSourceInput::clusters): one record per drawn glyph, placed as `fills`
+    // is; the text's clusters, each cluster's line, and the line count; the first run's face,
+    // size options and the text's top, for the cursor.
+    std::vector<render::StyledClusterOutline> clusters;
+    std::u32string text;
+    std::vector<std::size_t> lineOf;
+    std::size_t lineCount = 0;
+    double ascent = 0.0;
+    double top = 0.0;
+    render::StyledTextOptions options;
 };
 
 // Lays the text out. Fails with a message (empty when cancelled).
@@ -72,9 +88,11 @@ layoutStyledTextSource(const StyledTextSourceInput& input, const render::PathCan
 // The node's frame at the evaluation's proxy scales. The frame's bounds are the leaf's content
 // bounds (its window over the scales, pivot as the Text Source's); `contentKey` holds everything
 // the layers are made from and only the colors of the paints the runs use.
+// #758: `time` is the operation's clock time; only a blinking cursor reads it.
 [[nodiscard]] std::variant<SubtitlesFrame, SubtitlesFailure>
 prepareStyledTextFrame(const CompiledText& text, const CompiledCompositionPlan& plan,
-                       const ResolvedEvaluation& resolved, const CancellationToken& cancellation);
+                       const ResolvedEvaluation& resolved, core::RationalTime time,
+                       const CancellationToken& cancellation);
 
 } // namespace bloom::runtime::detail
 

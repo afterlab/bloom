@@ -186,6 +186,78 @@ withSource(const CompiledOperation& source, const std::uint64_t idBase,
     return value;
 }
 
+// #758: a styled text drawn by a Text Animator chain on the 16 x 12 base frame. `axis` names the
+// property the fixture animates: "opacity", "position", "scale", "rotation", "skew", "fill",
+// "outline", "tracking", "reveal" (half the characters, with the cursor), "stacked" (two selectors
+// combined by Subtract on one animator, and a second animator after it), or "digits" (Fixed-width
+// digits on a counter, no animator).
+[[nodiscard]] inline CompiledText animatedText(const std::uint64_t idBase, const std::string_view axis) {
+    auto value = styledText(idBase, false, 0.0, 0);
+    value.content = axis == "digits" ? "1.8" : "gpu";
+    std::uint64_t next = idBase + 30;
+    const auto id = [&next] { return ParameterId::fromRaw(next++); };
+    const auto scalar = [&](const double held) {
+        return bloom::runtime::CompiledScalarParameter{id(), held};
+    };
+    const auto vector = [&](const double x, const double y) {
+        return bloom::runtime::CompiledVec2Parameter{id(), Vec2d{x, y}};
+    };
+    const auto choice = [&](const std::int64_t held) {
+        return bloom::runtime::CompiledTextChoice{id(), held, std::nullopt};
+    };
+    const auto selector = [&](const std::int64_t mode, const double start, const double end) {
+        bloom::runtime::CompiledTextSelector made;
+        made.mode = choice(mode);
+        made.units = choice(0);
+        made.rangeBy = choice(0);
+        made.shape = choice(axis == "stacked" ? 1 : 0);
+        made.randomize = {id(), false, std::nullopt};
+        made.start = scalar(start);
+        made.end = scalar(end);
+        made.offset = scalar(0.0);
+        made.amount = scalar(100.0);
+        made.easeHigh = scalar(0.0);
+        made.easeLow = scalar(0.0);
+        made.seed = scalar(0.0);
+        return made;
+    };
+    const auto animator = [&](const double start) {
+        bloom::runtime::CompiledTextAnimator made;
+        made.sourceNodeId = NodeId::fromRaw(idBase + 1);
+        made.selectors.push_back(selector(0, start, 100.0));
+        made.opacity = scalar(axis == "opacity" ? 0.4 : 1.0);
+        made.position = vector(axis == "position" ? 0.5 : 0.0, axis == "position" ? -1.25 : 0.0);
+        made.scale = vector(axis == "scale" ? 1.5 : 1.0, axis == "scale" ? 0.75 : 1.0);
+        made.rotation = scalar(axis == "rotation" ? 25.0 : 0.0);
+        made.skew = scalar(axis == "skew" ? 15.0 : 0.0);
+        made.fill = axis == "fill" || axis == "stacked";
+        made.fillColor = {id(), start > 0.0 ? Color4d{0.1, 0.3, 0.9, 1.0} : Color4d{0.9, 0.2, 0.1, 1.0}};
+        made.outline = axis == "outline";
+        made.outlineColor = {id(), Color4d{0.1, 0.8, 0.2, 1.0}};
+        made.outlineWidth = scalar(axis == "outline" ? 0.6 : 0.0);
+        made.tracking = scalar(axis == "tracking" ? 0.8 : 0.0);
+        made.revealBy = choice(0);
+        made.revealUnits = choice(0);
+        made.reveal = scalar(axis == "reveal" ? 50.0 : 100.0);
+        made.cursor = axis == "reveal";
+        made.cursorCharacter = "|";
+        made.cursorBlink = scalar(0.0);
+        return made;
+    };
+    if (axis == "digits") {
+        value.style->fixedDigits = true;
+        return value;
+    }
+    // The first selector over the last two thirds, so part of the text is unselected.
+    value.style->animators.push_back(animator(30.0));
+    if (axis == "stacked") {
+        value.style->animators.front().selectors.push_back(selector(1, 60.0, 100.0));
+        value.style->animators.push_back(animator(0.0));
+        value.style->animators.back().selectors.front().end = scalar(40.0);
+    }
+    return value;
+}
+
 // #752: a Subtitles source on the 16 x 12 base frame: one cue with italic and colored runs, shown
 // from 0 s to 20 s, with the box, outline width and fade-out the fixture asks for (a fade-out
 // longer than the cue keeps the fade running at the fixture's time).

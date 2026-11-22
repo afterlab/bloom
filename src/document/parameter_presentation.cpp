@@ -20,6 +20,7 @@
 #include <bloom/document/warp_nodes.hpp>
 #include <bloom/document/subtitles_nodes.hpp>
 #include <bloom/document/test_card_nodes.hpp>
+#include <bloom/document/text_animator_nodes.hpp>
 #include <bloom/document/text_styling.hpp>
 #include <bloom/document/motion_blur_parameters.hpp>
 #include <bloom/document/denoise_nodes.hpp>
@@ -778,6 +779,27 @@ std::optional<ParameterPresentation> textStylingPresentation(const std::string_v
     return std::nullopt;
 }
 
+// #758 Text Animator: one presentation per parameter, from its table.
+std::optional<ParameterPresentation> textAnimatorPresentation(const std::string_view schemaKey) {
+    const auto* spec = textAnimatorParameterSpec(schemaKey);
+    if (spec == nullptr)
+        return std::nullopt;
+    switch (spec->kind) {
+    case TextAnimatorParameterKind::Choice:
+        return choice();
+    case TextAnimatorParameterKind::Scalar:
+    case TextAnimatorParameterKind::Vec2:
+        return number(spec->minimum, spec->maximum, spec->softMinimum, spec->softMaximum,
+                      spec->step, spec->decimals, spec->unit, spec->displayScale);
+    case TextAnimatorParameterKind::Color:
+        return channel();
+    case TextAnimatorParameterKind::Boolean:
+    case TextAnimatorParameterKind::Text:
+        return std::nullopt;
+    }
+    return std::nullopt;
+}
+
 // Four-Color Gradient: the points are pixel offsets, the blend a power.
 std::optional<ParameterPresentation> fourColorGradientPresentation(const std::string_view schemaKey) {
     if (isFourColorGradientPointSchemaKey(schemaKey))
@@ -876,6 +898,8 @@ ParameterPresentation parameterPresentation(const std::string_view schemaKey,
         return *subtitles;
     if (auto styling = textStylingPresentation(schemaKey))
         return *styling;
+    if (auto animator = textAnimatorPresentation(schemaKey))
+        return *animator;
     if (auto card = testCardPresentation(schemaKey))
         return *card;
     if (auto rays = lightRaysPresentation(schemaKey))

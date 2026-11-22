@@ -62,6 +62,10 @@ void everyGroupIsNamed() {
     for (const auto typeId : {"bloom.coordinate-space", "bloom.space-readout", "bloom.to-space",
                               "bloom.from-space", "bloom.place-in-space"})
         expect(nodeGroupOf(typeId) == NodeGroup::Vector, std::string(typeId) + " is in Vector");
+    // #758: the Text Animator sits beside the Text Source it animates.
+    expect(nodeGroupOf("bloom.text-animator") == NodeGroup::TextPaths &&
+               nodeGroupMembers(NodeGroup::TextPaths)[1] == "bloom.text-animator",
+           "bloom.text-animator is in Text & Paths, after the Text Source");
 }
 
 // The group is presentation. Grouping must not reach the effect mask, which is part of the node's

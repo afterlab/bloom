@@ -798,7 +798,8 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
         if (const auto* text = std::get_if<CompiledText>(&operation);
             text != nullptr && text->style) {
             if (const auto error =
-                    detail::prepareStyledTextLeaf(*text, *plan, resolved, index, cancellation,
+                    detail::prepareStyledTextLeaf(*text, *plan, resolved, *operandTime, index,
+                                                  cancellation,
                                                   outputWindowOf, bounds, subtitlesFrames)) {
                 return fail(error->code, error->message);
             }
