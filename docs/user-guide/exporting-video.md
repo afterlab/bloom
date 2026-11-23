@@ -262,6 +262,12 @@ decode. A sound file that ends before the length its own header declares (a down
 say) fails the export with a message that names the audio asset, instead of publishing the missing
 part as silence.
 
+A movie whose sound starts after its picture, as some cameras and screen recorders write it, plays
+that sound at its time in preview and in the export: silence until the sound starts, then all of
+it, to its last sample. The clip's sound lasts until the sound ends, counted from the movie's first
+frame. A movie whose sound stops and starts again partway through still fails the export rather
+than playing the hole as silence.
+
 **Many movie layers.** An export reads every movie its frames show, however many play at once; each
 movie's source copy is kept while its layer is in the range and given back as soon as the layer
 ends. If a movie has to wait for another's copy to close, the export waits (you can stop it) and the

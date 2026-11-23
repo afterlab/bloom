@@ -2531,7 +2531,15 @@ keeps a separate audio reader and its decode position: a block that starts where
 block ended continues the same pass, including samples already decoded past that end, so N
 sequential blocks decode the stream once. Any other start reopens the reader and decodes from the
 beginning again. A retained worker is relaunched after five minutes or 65,536 calls. Audio sample zero
-uses the first video presentation timestamp, including for containers with a nonzero origin.
+uses the first video presentation timestamp, including for containers with a nonzero origin; an
+attached picture (cover art) is not that video, and a file without video counts from its audio's
+own first presentation (#770). Audio that starts after its video (an empty edit or a later first
+timestamp, #789) is silence from sample zero until the stream's first sample; only that leading
+interval is filled, and a gap anywhere later is still refused. Its probed duration is where the
+stream ends measured from the same origin, so the clip keeps its whole tail. The VideoToolbox
+reader does the same from the track's time range. `bloom.media.late-audio` generates such a
+movie and checks the preview window, the whole clip and an export sample for sample, and that a
+Matroska stream with a hole in the middle is refused.
 
 All four read roles run behind the existing process supervisor, cancellation, bounded queue and
 watchdog. Limits include 1 TiB source files (4 TiB per export), 256 streams, 16,777,216 index
