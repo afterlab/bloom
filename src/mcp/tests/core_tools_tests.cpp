@@ -860,8 +860,8 @@ void retiredTransientJobs() {
     const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
     expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
 
-    // Ids round-trip exactly through JSON (#584): transient ids sit above 2^53, so they are reported
-    // as strings, and a double-based client still tells two jobs apart and targets each one.
+    // Ids round-trip exactly through JSON (#584, #767): transient ids stay at most 2^53 - 1 and are
+    // reported as strings, so a double-based client tells two jobs apart and targets each one.
     fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
     const auto secondFailed = server.call("render", R"({"composition":1,"frame":0,)"
                                                     R"("preset":"PngRgba8SrgbV1","destination":")" +
@@ -874,9 +874,19 @@ void retiredTransientJobs() {
         std::snprintf(buffer, sizeof buffer, "%.0f", std::stod(text));
         return std::string(buffer);
     };
-    expect(asDouble(id) == asDouble(secondId),
-           "the fixture ids really collide when parsed as doubles");
-    expect(std::stoull(id) > (1ULL << 53U), "transient ids exceed 2^53");
+    expect(asDouble(id) != asDouble(secondId),
+           "two transient ids stay distinct when parsed as doubles");
+    expect(std::stoull(id) <= (1ULL << 53U) - 1 && std::stoull(secondId) <= (1ULL << 53U) - 1,
+           "transient ids are at most 2^53 - 1: " + id + " " + secondId);
+    // #767: a double-parsed id still reaches status, wait and stop (the three tools that
+    // reported UnknownJob when the id was rounded).
+    const auto rounded = std::to_string(static_cast<std::uint64_t>(std::stod(id)));
+    expect(rounded == id, "an id survives a trip through a double unchanged");
+    const auto roundTripWait =
+        server.call("export.wait", R"({"job":)" + rounded + R"(,"timeoutMs":1000})");
+    expect(contains(roundTripWait, R"("finished":true)") &&
+               !contains(roundTripWait, "UnknownJob"),
+           "export.wait takes the id as returned: " + roundTripWait);
     expect(contains(status, R"("id":")" + id + '"') &&
                contains(server.call("export.status", "{}"), R"("id":")" + secondId + '"'),
            "export.status reports both ids as exact strings");
@@ -892,6 +902,37 @@ void retiredTransientJobs() {
     const auto malformed = server.call("export.log", R"({"job":"abc"})");
     expect(!contains(stopped, "Expected an id") && contains(malformed, "Expected an id"),
            "export.stop accepts a string id; a malformed id is refused: " + stopped + malformed);
+
+    // #767: an active job's id, as export.status returns it, reaches wait and stop unchanged.
+    fake->setDestinationCheckDelay(std::chrono::minutes(10));
+    auto held = std::async(std::launch::async, [&] {
+        return server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                     R"("destination":")" +
+                                         (captures / "held.png").generic_string() + R"("})");
+    });
+    std::string activeId;
+    for (int turn = 0; turn < 3000 && activeId.empty(); ++turn) {
+        std::smatch found;
+        const auto running = server.call("export.status", "{}");
+        if (std::regex_search(running, found, std::regex(R"re("activeJob":"([0-9]+)")re")))
+            activeId = found[1].str();
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    expect(!activeId.empty() && std::stoull(activeId) <= (1ULL << 53U) - 1,
+           "export.status reports the active job's id as a string below 2^53: " + activeId);
+    if (!activeId.empty()) {
+        const auto waiting = server.call("export.wait", R"({"job":")" + activeId + R"(","timeoutMs":50})");
+        expect(!contains(waiting, "UnknownJob"), "export.wait takes the reported id: " + waiting);
+        const auto stoppedActive = server.call("export.stop", R"({"job":")" + activeId + R"("})");
+        expect(contains(stoppedActive, R"("accepted":true)") && !contains(stoppedActive, "UnknownJob"),
+               "export.stop takes the reported id: " + stoppedActive);
+    }
+    fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+    expect(held.wait_for(std::chrono::seconds(60)) == std::future_status::ready,
+           "the stopped render ends");
+    if (held.valid() && held.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        static_cast<void>(held.get());
 
     fake->push({.writeDestinations = true});
     const auto capture = server.call("capture", R"({"composition":1,"frame":0})");

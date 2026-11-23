@@ -1230,7 +1230,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
          false},
         {"export.status",
          "The export queue snapshot: jobs, outputs, states, progress, failures and "
-         "verification.",
+         "verification. Job and output ids (and activeJob) are decimal strings below 2^53, "
+         "never numbers a JSON client could round: pass an id back exactly as returned.",
          true},
         {"export.events", "Terminal export events (done, failed, stopped) after a sequence.", true},
         {"export.log", "An export job's run log after a sequence.", true},
@@ -1299,7 +1300,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                   .type = "integer",
                                   .required = true,
                                   .summary = "The job.",
-                                  .unit = "export job id (export.status)",
+                                  .unit = "export job id (export.status): the decimal string exactly as "
+                                          "returned, or the integer",
                                   .range = ">= 1"}});
         if (name == "export.confirm-replace")
             addArguments(value,
@@ -1326,7 +1328,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
             addArguments(value, {{.name = "job",
                                   .type = "integer",
                                   .summary = "The job to wait for.",
-                                  .unit = "export job id",
+                                  .unit = "export job id: the decimal string exactly as export.status "
+                                          "returned it, or the integer",
                                   .range = ">= 1",
                                   .defaultValue = "every active job"},
                                  {.name = "timeoutMs",

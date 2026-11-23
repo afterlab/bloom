@@ -1087,7 +1087,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                     out.set(result, "runner",
                             out.text(runners.at(static_cast<std::size_t>(snapshot->runner))));
                     out.set(result, "activeJob",
-                            snapshot->activeJob ? out.number(snapshot->activeJob->value())
+                            snapshot->activeJob ? out.text(std::to_string(snapshot->activeJob->value()))
                                                 : out.null());
                     auto* jobs = out.array();
                     for (const auto& job : snapshot->jobs)
