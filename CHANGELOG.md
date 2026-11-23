@@ -13,33 +13,38 @@ AAC and Opus files, makes MCP exports work from a project file, and improves the
 
 ### Added
 
-- Export frame reuse. **Use cached frames** on an export output now reads frames that are already
-  rendered instead of rendering them again. A render request from a script or an agent still
-  evaluates fresh frames.
+- Export frame reuse. With **Use cached frames** on, an export output reuses frames an earlier
+  export in the same session already rendered with the same settings (another output of the job,
+  or the same export run again), and the file is identical to a fresh render. Viewer and RAM
+  Preview frames are not used. A render request from a script or an agent always renders fresh.
 - A render or export from Python, `bloom-cli` and MCP covers the composition's whole range when
   you give no first and last frame.
 - For agents over MCP: a project-file session can export a movie, with progress, wait and stop on
   that file's own export queue. When the file is the project open in Bloom, the call attaches to the
   open project and says whether it differs from the file, so you can reload it.
-- When many movie layers wait for decoder capacity during an export, the log says what each is
-  waiting for.
+- When a movie layer has to wait for a free source copy during an export, the export log says which
+  layer waited and for how long.
 
 ### Changed
 
 - Every release is now published as the newest release on the releases page.
 - The true-peak limit now holds in the delivered file. Bloom measures the AAC or Opus file it
-  wrote, lowers the limiter when the encoder pushes a peak over the limit, and refuses to publish a
-  file that is still over. The export log reports the true peak measured on the delivered file.
+  wrote, lowers the limiter when the encoder pushes a peak over the limit, and renders the file again
+  with more headroom rather than publish one that is still over, on every export route. The export
+  log reports the true peak measured on the delivered file.
 - `bloom.export.add-job` takes outputs as objects. `bloom-cli` prints a failed export's class the
   way `bloom-cli render` does.
 - A ranged image-sequence import is named after the sequence's base name and reports its frames.
 - When a source file changes or disappears while an export runs, the export stops and says so,
   instead of saying it hit a bug in Bloom.
 - An export that is refused for lack of memory names the asset, the bytes it needed and the limit.
-- The Windows update window shows the release notes readably, in light or dark colors, and shows the
-  full version name of the release it installs. A progress window stays on screen from the moment
-  Bloom closes until the new version opens, Bloom reopens by itself, and the previous version is
-  kept beside the new one. If you start Bloom by hand during an update, it brings the update window to the front and ends at once instead of running the version being replaced. When an update cannot install, the version you had starts again with a notice that says why.
+- The Windows update window shows the release notes as dark text on a light page in a clear font,
+  and names your installed version in full (for example 0.1.0-alpha.3). A progress window stays on
+  screen from the moment Bloom closes until the new version opens, Bloom reopens by itself, and the
+  previous version is kept beside the new one. If you start Bloom by hand during an update, it
+  brings the update window to the front and ends at once instead of running the version being
+  replaced. When an update cannot install, the version you had starts again with a notice that
+  says why.
 
 ### Fixed
 
@@ -52,7 +57,6 @@ AAC and Opus files, makes MCP exports work from a project file, and improves the
   export instead of failing with "its audio stream stopped decoding". A truncated sound file is
   refused by name instead of playing silence for its missing part.
 - A movie whose audio starts after its video exports its audio.
-- The stdio MCP server exports a movie again when its true peak is over the limit.
 - Export job ids stay exact in JSON, so stopping or waiting for an export no longer reports an
   unknown job.
 - An MCP export without first and last frames no longer fails with "Expected a nonnegative
