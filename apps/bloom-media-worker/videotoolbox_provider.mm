@@ -38,6 +38,7 @@
 // AVFoundation and libavutil both declare a type named AVMediaType (a string and an enumeration).
 // The FFmpeg one is renamed for this file; it names no symbol, so nothing else changes.
 #define AVMediaType BloomFfmpegMediaType
+#include "ffmpeg_audio_loudness.hpp"
 #include "ffmpeg_reopen_compare.hpp"
 #include "ffmpeg_stream_color_tags.hpp"
 #include "ffmpeg_subtitle_tracks.hpp"
@@ -1134,6 +1135,15 @@ provider::EncodeQcV1 Encoder::State::finish() {
             qc.audioSamples = sampleCount;
             qc.audio = audioHasher.finalize();
         }
+        // #771: the delivered sound's loudness and true peak, decoded back by FFmpeg as on every
+        // other platform and measured with the same reference library.
+        const auto delivered = ffmpeg::measureWrittenAudio(
+            path, settings.channels, settings.sampleRate, settings.audioSamples);
+        require(delivered.failure.empty(), delivered.failure);
+        qc.audioMeasured = true;
+        qc.audioLoudnessMeasured = delivered.loudnessMeasured;
+        qc.audioLufs = delivered.integratedLufs;
+        qc.audioTruePeakDbtp = delivered.truePeakDbtp;
     }
     // #761: the written streams, read back by FFmpeg's demuxer as on every other platform.
     qc.streams = ffmpeg::readWrittenStreams(

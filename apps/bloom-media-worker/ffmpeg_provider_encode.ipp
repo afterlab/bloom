@@ -1208,6 +1208,8 @@ struct Encoder::State {
                     "AAC reference reopen failed");
         // Tolerance profile bloom.aac-f32.v2 (lossy_audio_compare.hpp).
         LossyAudioCompare compare(settings.channels, settings.sampleRate);
+        // #771: the delivered sound's loudness and true peak, from the samples decoded here.
+        WrittenAudioMeter meter(settings.channels, settings.sampleRate);
         std::vector<float> referenceBlock, decodedBlock;
         while (next(input, index, eof)) {
             const auto& f = *input.frame;
@@ -1233,6 +1235,7 @@ struct Encoder::State {
                                               settings.audioSamples -
                                                   std::min(qc.audioSamples, settings.audioSamples))
                     : static_cast<unsigned>(f.nb_samples);
+            require(meter.push(f, count), "Reopened audio could not be measured");
             if (lossyAudio(settings.audioCodec)) {
                 require(f.format == AV_SAMPLE_FMT_FLTP, "Lossy audio reopen sample format differs");
                 // The decoder has already discarded the priming the container declares, so frame
@@ -1263,6 +1266,13 @@ struct Encoder::State {
             av_frame_unref(input.frame);
         }
         require(qc.audioSamples == settings.audioSamples, "Reopened audio sample count differs");
+        const auto delivered = meter.finish();
+        require(delivered.failure.empty() && delivered.frames == settings.audioSamples,
+                "Reopened audio could not be measured");
+        qc.audioMeasured = true;
+        qc.audioLoudnessMeasured = delivered.loudnessMeasured;
+        qc.audioLufs = delivered.integratedLufs;
+        qc.audioTruePeakDbtp = delivered.truePeakDbtp;
         if (lossyAudio(settings.audioCodec)) {
             // The container must declare exactly the priming the encoder added; otherwise a
             // reader that honors the declaration starts early or late by the difference.

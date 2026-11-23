@@ -1,6 +1,8 @@
 #pragma once
 #include <bloom/media/provider/contract.hpp>
 
+#include <limits>
+
 namespace bloom::media::provider {
 // #752: one cue track an export embeds: 3GPP Timed Text (FFmpeg's mov_text) in MOV and MP4,
 // WebVTT in WebM. Cues are in output frames: a cue shows frames [first, end). `text` is the
@@ -130,6 +132,16 @@ struct EncodeQcV1 {
     // #761: the picture and sound streams the reopened artifact holds, in stream order (the video
     // first), as the verifying reopen read them from the file. Empty for a still image.
     std::vector<EncodedStreamV1> streams;
+    // #771: the sound as the verifying reopen decoded it from the written file, measured with the
+    // reference library (libebur128, ITU-R BS.1770 / EBU R128): integrated loudness in LUFS and the
+    // highest true peak of any channel in dBTP. `audioMeasured` is false when nothing was measured
+    // (no audio stream). `audioLoudnessMeasured` is false for sound with nothing above the
+    // absolute gate (silence), whose loudness is negative infinity; digital silence's true peak is
+    // negative infinity too. Never NaN or positive infinity.
+    bool audioMeasured = false;
+    bool audioLoudnessMeasured = false;
+    double audioLufs = -std::numeric_limits<double>::infinity();
+    double audioTruePeakDbtp = -std::numeric_limits<double>::infinity();
 };
 inline constexpr std::uint32_t kEncodeChunkBytes = 1024U * 1024U;
 // v2 compared against the reference taken through the stream's declared sample format, matrix,

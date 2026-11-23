@@ -67,6 +67,19 @@ if(UNIX AND NOT APPLE)
     target_link_libraries(bloom_media_ebur128 PRIVATE m)
 endif()
 
+# #771: the loudness meter and true-peak limiter on their own, without the playback and decoder
+# libraries, so the media worker can measure the audio it wrote with the same reference library.
+add_library(bloom_media_loudness STATIC loudness.cpp)
+target_compile_features(bloom_media_loudness PUBLIC cxx_std_20)
+target_include_directories(
+    bloom_media_loudness
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/ebur128"
+)
+target_link_libraries(bloom_media_loudness PRIVATE bloom_media_ebur128)
+bloom_enable_warnings(bloom_media_loudness)
+bloom_enable_strict_floating_point(bloom_media_loudness)
+
 add_library(
     bloom_media_audio
     STATIC
@@ -74,7 +87,6 @@ add_library(
     audio.cpp
     channel_layout.cpp
     effects.cpp
-    loudness.cpp
     playback/audio_engine.cpp
     sound_table.cpp
 )
@@ -99,10 +111,9 @@ target_include_directories(
 )
 target_link_libraries(
     bloom_media_audio
-    PUBLIC bloom_core
+    PUBLIC bloom_core bloom_media_loudness
     PRIVATE
         bloom_media_dr_wav
-        bloom_media_ebur128
         bloom_media_minimp3
         bloom_media_miniaudio
         Threads::Threads

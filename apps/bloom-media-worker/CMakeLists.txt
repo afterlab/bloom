@@ -97,13 +97,15 @@ if(bloom_ffmpeg_worker)
     # #752: embedded subtitle tracks (ASS text for FFmpeg's encoders, the reopened tracks, the MOV
     # text track's enabled flag), for the reopen check of both provider builds. #761: the written
     # streams' facts (codec, profile, size, rate, channels, bit rate) for the same reopen.
+    # #771: the loudness and true peak of the written sound, for the same reopen.
     add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp
-                ffmpeg_written_streams.cpp)
+                ffmpeg_written_streams.cpp ffmpeg_audio_loudness.cpp)
     target_include_directories(bloom_media_ffmpeg_subtitle_tracks
                                PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(bloom_media_ffmpeg_subtitle_tracks PUBLIC cxx_std_20)
     target_link_libraries(bloom_media_ffmpeg_subtitle_tracks
-                          PUBLIC bloom_media_provider FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+                          PUBLIC bloom_media_provider FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil
+                          PRIVATE bloom_media_loudness)
     bloom_enable_warnings(bloom_media_ffmpeg_subtitle_tracks)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
