@@ -2,12 +2,12 @@
 
 Status: working
 
-Updated: 2026-11-22
+Updated: 2026-11-24
 
-This roadmap records what has shipped, what is queued and in what order, and what is parked. It
-follows the [Bloom GitHub Project](https://github.com/orgs/afterlab/projects/2), which owns the
-priority order and shows what is being built now; the Project wins when the two differ. The focused architecture and product
-documents own detailed semantics and must not be duplicated here.
+This roadmap records what has shipped and the plan to 1.0.0. It follows the
+[Bloom GitHub Project](https://github.com/orgs/afterlab/projects/2) and its milestones, which own
+the priority order and show what is being built now; they win when the two differ. The focused
+architecture and product documents own detailed semantics and must not be duplicated here.
 
 Bloom is in alpha. Download the latest alpha from the
 [GitHub releases page](https://github.com/afterlab/bloom/releases) and install it as the
@@ -34,6 +34,7 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
+| v0.1.0-alpha.4 (in preparation): exports with many audio and movie layers, MP3 files, the true-peak limit in delivered AAC and Opus, cached-frame reuse, MCP export from a project file, sequence import names and path bounds, clearer export failures, and the Windows update window | #765 #766 #767 #768 #769 #770 #771 #772 #773 #774 #775 #783 #784 #785 #787 #788 #789 #790 |
 | v0.1.0-alpha.3 (2026-11-23): subtitles, styled and animated text, filtered and pixel-art scaling, coordinate spaces, Path Stroke dash patterns, Image Switch, export backgrounds, and presets that state their codecs, with the reliability fixes before them | #752 #757 #758 #742 #743 #591 #759 #531 #760 #761 |
 | v0.1.0-alpha.2 (2026-11-20): large projects that always save, agent work over MCP that stays quiet and responsive at scale, the MCP field-test bugs, and crash reports kept on the user's machine | the rows below, down to the save fix |
 | Crash reports: Crashpad's out-of-process handler in every package, a text report and a minidump kept on the user's machine, a notice on the next start, debug symbols kept as release-workflow artifacts | #736 |
@@ -66,68 +67,43 @@ The earlier performance and reliability sprint (#306) and the production workflo
 are recorded in [`plans/performance-reliability-sprint.md`](plans/performance-reliability-sprint.md)
 and [`plans/production-workflows-release.md`](plans/production-workflows-release.md).
 
-## Queued
+## Plan to 1.0
 
-In the tracker's order. Everything starts when the owner gives the go-ahead.
+Bloom ships a new alpha every week through alpha.10, then a beta stretch of hardening and 1.0.0.
+Features go in early and hardening gets the long stretch, so every alpha starts with the fixes from
+testing the previous release. A group that misses its week ships whole the next week. Feature
+freeze is beta.1: a feature not placed by then is 1.1 or later. The due dates are those of the
+[GitHub milestones](https://github.com/afterlab/bloom/milestones).
 
-### 1. Node groups
-
-Each group is one coherent area with one validation and one landing.
-
-| Group | Issues | What it is |
+| Milestone | Due | Themes |
 | --- | --- | --- |
-| 1. Compositing: keying, time, motion, rig and camera | #485 #515 #520 #346 #531 #522 #513 #591 #606 #605 | Channel Key, Chroma Key, Despill; Matte Refine; Transition / Wipe Matte; Time Offset, Frame Hold, Time Remap; Image Switch; Flow Retime; the planar tracker and tracks applied to Corner Pin (the point tracker and Stabilize have shipped); named coordinate spaces; 2D rig and puppet deformation; 3D camera and 3D layer space |
-| 2. Procedural and vector: lists, instancing, particles, simulation, text | #628 #629 #526 #521 #594 #345 #592 #529 #593 #607 #601 #596 | Per-item list math; List to Path, Image and Points; Instancer and Clone To Points; Particle System; seekable Simulation; shaped text layout, animator and text on path; text as paths; Text To Shape / Mask; LaTeX math as paths; vector sharpness through nesting; measured bounds; axes with tick labels |
-| 3. Platform and agents: MCP, proxies, color picker, title bar | #491 #573 #574 #578 #580 #640 #649 #372 #551 #552 | Blind MCP field test; id maps; names and roles; error messages; frame statistics; audit gaps; capture display and view; proxy generation and proxy-aware playback; color picker system and unified Gradient node; Windows one-row title bar |
+| v0.1.0-alpha.4 | 2026-11-24 | Fixes from production testing: export with many audio and movie layers (#765 #772), MP3 files (#770), the true-peak limit in delivered AAC and Opus (#771), export job ids (#767), cached-frame reuse (#785); MCP export from a project file and range defaults (#766 #768 #769 #775 #783 #784); sequence import names and path bounds (#773 #774); every release published as the newest release |
+| v0.1.0-alpha.5 | 2026-11-30 | The fixes from testing alpha.4 first. Word-timed subtitles (#776), anchor tracks and a null layer (#777), diagram graphics (#778), audio ducking, fades and audio-only export (#780), export scale, a parallel export queue and relinking (#781), OCIO names in help and queries (#782), node card native windows (#786), non-ASCII and UNC paths on Windows falsely reported as saved (#612), a movie-export test killed by SIGKILL (#762), the LaTeX Math Source (#593) |
+| v0.1.0-alpha.6 | 2026-12-07 | Color and looks: Vibrance, Clarity, Texture, Dehaze, Selective Color, Color Balance by tonal range, Photo Filter, Black & White per hue, Hue/Saturation by range; the full set of Photoshop-style blend modes on layers and Merge; a perceptual-space option; the system color picker, eyedropper and gradient editor with a unified Gradient node (#551). Procedural and vector work: keyed term groups (#592), axes with tick labels (#596), measured bounds (#601) |
+| v0.1.0-alpha.7 | 2026-12-14 | EXR and color per show: multipart and multilayer EXR, reading only the channels in use, data and display windows, missing and partial frames, EXR write options; a locked OCIO or ACES configuration per show and input transforms by rule (#725); MCP capture display and view (#649); proxies and proxy-aware playback (#372); a 3D camera and 3D layer space, including camera import from 3D software (#605). Text On Path (#345), Text To Shape and Mask (#529), vector sharpness through nesting (#607) |
+| v0.1.0-alpha.8 | 2026-12-21 | LUTs, animation-composition nodes and time: LUT Extract, Look Match, Bake LUT and .cube export; beauty rebuild and light groups, normal relight, position mask, holdout and depth composite; Time Offset, Frame Hold and Time Remap (#346). Per-item list math (#628), list conversions (#629), Instancer (#526), transitions (#520) |
+| v0.1.0-alpha.9 | 2026-12-28 | Reuse at scale: treatments (linked, versioned templates with exposed parameters and per-shot overrides), graph organization (backdrops, search, auto-layout), composition templates (#779); MCP addressing by name and role (#574), duplicate-composition id maps (#573), MCP surface gaps (#640), MCP frame statistics (#580) |
+| v0.1.0-alpha.10 | 2027-01-04 | One model, export at volume: nodes, Properties and the timeline as views of one model with overrides shown everywhere; a resumable export queue that skips valid frames and checksums each frame; hardware video encoders (#476); multi-monitor and tear-off panels (#536) |
+| v1.0.0-beta.1 | 2027-01-11 | Feature freeze. The project format is frozen with migrations, and the MCP, Python and command-line interfaces are versioned. MCP error messages (#578) and a repeat of the blind MCP field test (#491) |
+| v1.0.0-beta (hardening) | 2027-03-22 | Weekly betas of hardening, with rough edges from testing first. GPU scheduling: cold shader compiles stalling GPU work (#753), pipelined uploads (#405), GPU sample conversion (#422), the export CPU fallback (#648). Playback and I/O: sequence read-ahead (#535), motion-blur and Z Defocus audits (#555 #556), Profiler fields (#427). Platforms: Windows GPU preview (#614), the macOS CPU fallback (#755), Viewer memory across monitors (#463), a Viewer stuck on Rendering (#754), HEVC 10-bit export on the bench host (#475). Validation: sustained GPU tests, LeakSanitizer and native macOS and Windows GPU runs (#304), a golden render set for pixel-identical patches, performance targets on 4K multi-pass EXR shots, and documentation |
+| v1.0.0 | 2027-04-12 | Release candidates, then 1.0.0 |
 
 The planned nodes and their delivery levels are in the [node catalogue](product/node-catalogue.md);
 [`plans/node-delivery-plan.md`](plans/node-delivery-plan.md) holds the delivery rules. Instancing is
 designed in [`architecture/instancing.md`](architecture/instancing.md) under
 [ADR 0023](decisions/0023-instances-and-per-element-data.md).
 
-### 2. Tests
+## After 1.0
 
-| Issue | What it is |
-| --- | --- |
-| #726 | Eight compositor-session GPU UI tests fail when they actually run |
-| #727 | macOS: every test pays about 2-3 s at launch in validation runs |
-| #731 | Windows: the gpu-shader-compiler hung-child cancellation case fails under parallel load |
-| #729 | GPU admission policy overwrites the Viewer's recorded device need with another class's grant |
-| #304 | GPU validation: hosted CI, sustained memory tests, LeakSanitizer and native macOS and Windows runs |
+VFX features follow 1.0.0 (milestone post-1.0): keying (#485 Channel Key, Chroma Key and Despill;
+#515 Matte Refine), tracking (#513 the planar tracker and tracks applied to Corner Pin) and camera
+solve (#764), Flow Retime (#522), and keying research.
 
-### 3. Performance
+## Not scheduled
 
-Waits for benchmarking.
-
-| Issue | What it is |
-| --- | --- |
-| #405 | Overlap GPU uploads with rendering in the scene executor |
-| #422 | Convert decoded video and image samples on the GPU |
-| #535 | Sequence read-ahead cost on local storage |
-| #476 | Export with hardware video encoders |
-| #463 | Viewer memory grows when the window moves between monitors |
-| #427 | Profiler: GPU utilization, pressure causes and platform reads |
-| #555 | Audit motion blur performance (report only) |
-
-### Owner checks
-
-Not in a group: #612 file dialogs and drag and drop with non-ASCII names on Windows; #614 Viewer
-resize, display scaling and monitor moves on Windows; #670 needs the final macOS icon artwork.
-
-## Parked
-
-Not being worked. The last column says what would unpark each item.
-
-| Issue | What it is | What unparks it |
-| --- | --- | --- |
-| #648 | Export frames fall back to the CPU on a descriptor mismatch | Doesn't reproduce; open until it does |
-| #475 | HEVC 10-bit export and three tests fail on the bench host | Needs the bench host |
-| #553 | 2160p Cryptomatte budget and consecutive-runs items only | Needs benchmarking |
-| #536 | Multi-monitor: new windows, tear-off panels, per-window fullscreen and display transform | Needs a Mac with a second display |
-| #556 | Audit Z Defocus performance (report only) | Stopped by the owner; restarts when the owner says |
-| #548 | Assistant panel: chat with a local agent harness connected to Bloom's MCP | Parked by the owner |
-| #725 | Expand OCIO config support: more official versioned configs and custom `.ocio` and `.ocioz` loading | Parked by the owner |
-| #331 | Umbrella: deliver planned nodes in bounded batches | Umbrella only; tracks the node groups above |
+Particle System (#521), seekable Simulation (#594), 2D rig and puppet deformation (#606), the
+Windows one-row title bar (#552) and the Assistant panel (#548) have no milestone yet. Nothing here
+is promised for 1.0.0.
 
 ## Not on the roadmap
 
