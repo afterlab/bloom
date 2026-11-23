@@ -10,6 +10,7 @@
 // Issue #785: an output that uses cached frames reuses frames an earlier export evaluated, with the
 // same delivered file as a fresh render.
 #include "fixed_memory_budget.hpp"
+#include "movie_difference.hpp"
 #include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
 #include <bloom/commands/asset_operations.hpp>
@@ -21,9 +22,9 @@
 #include <bloom/document/audio_effect_nodes.hpp>
 #include <bloom/document/color_settings.hpp>
 #include <bloom/document/new_project.hpp>
+#include <bloom/host/export_frame_cache.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
-#include <bloom/host/export_frame_cache.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -1833,9 +1834,14 @@ void testCachedFramesAreReused() {
     expect(reused(two, 1) == total,
            "two outputs: the second output reuses every frame (" + std::to_string(reused(two, 1)) +
                " of " + std::to_string(total) + ")");
-    expect(fileBytes(f.folder / "Exports/first.mov") == reference &&
-               fileBytes(f.folder / "Exports/second.mov") == reference,
-           "two outputs: both movies are byte-identical to the reuse-off export");
+    expect(
+        fileBytes(f.folder / "Exports/first.mov") == reference &&
+            fileBytes(f.folder / "Exports/second.mov") == reference,
+        "two outputs: both movies are byte-identical to the reuse-off export (first: " +
+            test_support::movieDifference(fileBytes(f.folder / "Exports/first.mov"), reference) +
+            "; second: " +
+            test_support::movieDifference(fileBytes(f.folder / "Exports/second.mov"), reference) +
+            ")");
 
     // The same export again: every frame is reused, the file is the same.
     const auto [againJob, again] = runJob({{settingsOf(true), "Exports/again.mov"}}, "repeated");
@@ -1850,7 +1856,9 @@ void testCachedFramesAreReused() {
                    ")");
     }
     expect(fileBytes(f.folder / "Exports/again.mov") == reference,
-           "repeated: the movie is byte-identical to the reuse-off export");
+           "repeated: the movie is byte-identical to the reuse-off export (" +
+               test_support::movieDifference(fileBytes(f.folder / "Exports/again.mov"), reference) +
+               ")");
 
     // A setting that changes the frame reuses nothing: the #760 export background.
     {
@@ -1865,7 +1873,10 @@ void testCachedFramesAreReused() {
         const auto [bgOffJob, bgOff] = runJob({{opaqueOff, "Exports/opaque-off.mov"}}, "background off");
         const auto opaqueBytes = fileBytes(f.folder / "Exports/opaque.mov");
         expect(published(bgOff) && opaqueBytes == fileBytes(f.folder / "Exports/opaque-off.mov"),
-               "background: the movie is byte-identical to the same export with reuse off");
+               "background: the movie is byte-identical to the same export with reuse off (" +
+                   test_support::movieDifference(opaqueBytes,
+                                                 fileBytes(f.folder / "Exports/opaque-off.mov")) +
+                   ")");
         expect(opaqueBytes != reference,
                "background: the movie is its own render over the background, not the cached "
                "frames without it");

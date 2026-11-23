@@ -1,5 +1,6 @@
 #include "fixed_memory_budget.hpp"
 #include "gpu_route_proof_export_support.hpp"
+#include "movie_difference.hpp"
 #include "process_probe.hpp"
 #include "unique_temp_dir.hpp"
 
@@ -1426,7 +1427,12 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
         };
         check(bytes(directory / "gpu-reuse-first.mov") == bytes(path) &&
                   bytes(directory / "gpu-reuse-second.mov") == bytes(path),
-              "GPU reuse: both movies are byte-identical to the export without reuse");
+              "GPU reuse: both movies are byte-identical to the export without reuse (first: " +
+                  test_support::movieDifference(bytes(directory / "gpu-reuse-first.mov"), bytes(path)) +
+                  "; second: " +
+                  test_support::movieDifference(bytes(directory / "gpu-reuse-second.mov"),
+                                                bytes(path)) +
+                  ")");
         if (const auto cache = provider->exportFrameCache())
             cache->clear();
     }

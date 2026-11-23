@@ -20,6 +20,7 @@ import json
 import os
 import pathlib
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -39,6 +40,44 @@ OPAQUE = 'background=composition (opaque over composition background)'
 
 def digest(path):
     return hashlib.sha256(pathlib.Path(path).read_bytes()).hexdigest()
+
+
+CONTAINERS = {b'moov', b'trak', b'mdia', b'minf', b'stbl', b'edts', b'dinf', b'udta', b'tref',
+              b'mvex', b'moof', b'traf', b'gmhd', b'tapt'}
+
+
+def box_path(data, begin, end, offset):
+    """The QuickTime / ISO BMFF box path holding byte `offset` among the boxes in [begin, end)."""
+    while begin + 8 <= end:
+        size, kind = struct.unpack('>I4s', data[begin:begin + 8])
+        header = 8
+        if size == 1 and begin + 16 <= end:
+            size, header = struct.unpack('>Q', data[begin + 8:begin + 16])[0], 16
+        elif size == 0:
+            size = end - begin
+        if size < header or size > end - begin:
+            return f'(unparsed at {begin})'
+        if offset < begin + size:
+            name = kind.decode('latin-1')
+            if kind in CONTAINERS and offset >= begin + header:
+                return name + '/' + box_path(data, begin + header, begin + size, offset)
+            return f'{name} +{offset - begin}'
+        begin += size
+    return '(after the last box)'
+
+
+def movie_difference(first, second):
+    """Where two movie files differ, for a failure message; empty when they are the same bytes."""
+    a, b = pathlib.Path(first).read_bytes(), pathlib.Path(second).read_bytes()
+    if a == b:
+        return ''
+    common = min(len(a), len(b))
+    differing = [i for i in range(common) if a[i] != b[i]]
+    at = differing[0] if differing else common
+    where = f' in {box_path(a, 0, len(a), at)}' if at < common else ''
+    count = len(differing) + max(len(a), len(b)) - common
+    return (f'{pathlib.Path(first).name} and {pathlib.Path(second).name}: sizes {len(a)} and '
+            f'{len(b)}; first difference at byte {at}{where}; {count} bytes differ')
 
 
 class Server:
@@ -135,7 +174,8 @@ class FileSessions(unittest.TestCase):
         for movie in movies:
             self.assertTrue(movie.is_file(), movie)
         # The same file from each route, byte for byte.
-        self.assertEqual({digest(movie) for movie in movies}, {digest(movies[0])})
+        self.assertEqual({digest(movie) for movie in movies}, {digest(movies[0])},
+                         '; '.join(movie_difference(movies[0], movie) for movie in movies[1:]))
         for key in ('publishedFrames', 'streams', 'preservationReport'):
             self.assertEqual(filed[key], live[key], key)
         self.assertEqual(filed['publishedFrames'], FRAMES)
@@ -166,11 +206,13 @@ class FileSessions(unittest.TestCase):
         published = self.root / 'saved' / 'shot.mov'
         self.assertTrue(published.is_file())
         through_mcp = digest(published)
+        kept = self.root / 'through-mcp.mov'
+        shutil.copy(published, kept)
         # bloom-cli runs the same saved job of an identical file to the same place.
         cli = subprocess.run([CLI, 'export', '--project', str(self.root / 'cli.bloom'), '--all',
                               '--replace'], capture_output=True, text=True, timeout=300)
         self.assertEqual(cli.returncode, 0, cli.stdout + cli.stderr)
-        self.assertEqual(digest(published), through_mcp)
+        self.assertEqual(digest(published), through_mcp, movie_difference(kept, published))
 
     def test_the_queue_route_reports_what_the_scripted_route_reports(self):
         (self.root / 'scripted').mkdir()
