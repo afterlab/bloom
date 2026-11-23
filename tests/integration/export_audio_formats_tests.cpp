@@ -1606,6 +1606,34 @@ std::string fileBytes(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+// The plain stop a changed, moved or deleted source file gets (#790): the export failed, classified
+// as an unavailable media source, with a sentence that names the file and says to restore or relink
+// it, the same classification in the log, and nothing published.
+void expectSourceStop(Fixture& f, const std::optional<host::ExportJobView>& finished,
+                      const document::ExportJobId job, const std::string& name,
+                      const std::string& file) {
+    expect(finished && finished->state == ExportJobState::Failed && finished->failure,
+           name + ": the export fails");
+    if (!finished || !finished->failure)
+        return;
+    const auto& failure = *finished->failure;
+    expect(failure.diagnosticCode == "export.media.unavailable" &&
+               failure.code == host::ExportFailureCode::EvaluationFailed,
+           name + ": classified as an unavailable media source (" + failure.diagnosticCode + ")");
+    expect(failure.reason.find("\"plate\"") != std::string::npos &&
+               failure.reason.find("relink") != std::string::npos &&
+               failure.reason.find("Restore") != std::string::npos &&
+               failure.reason.find("bug in Bloom") == std::string::npos,
+           name + ": the sentence names the file and says to restore or relink it (" +
+               failure.reason + ")");
+    bool logged = false;
+    for (const auto& entry : f.service->log(job, 0).entries)
+        logged = logged || (entry.code == "export.media.unavailable" &&
+                            entry.message.find("bug in Bloom") == std::string::npos);
+    expect(logged, name + ": the export log carries the same classification");
+    expect(!std::filesystem::exists(f.folder / file), name + ": nothing published");
+}
+
 // #790: a source file that changes or disappears is named, and the export is not called a bug.
 void testChangedSourceIsNamed() {
     for (const bool remove : {false, true}) {
@@ -1635,26 +1663,83 @@ void testChangedSourceIsNamed() {
         else
             writePng(plate, 32, 16, 200);
         const auto finished = f.run(job, name);
-        expect(finished && finished->state == ExportJobState::Failed && finished->failure,
-               name + ": the export fails");
-        if (!finished || !finished->failure)
+        expectSourceStop(f, finished, job, name, "Exports/changed.mov");
+    }
+}
+
+// #790: a source file that changes or disappears while the export runs stops it the same way. The
+// job is paused at a frame boundary (the queue's own Pause), so the file changes after some frames
+// were delivered and before any later frame is read, with no timing involved; then it resumes.
+void testSourceChangedDuringExport() {
+    for (const bool remove : {false, true}) {
+        const std::string name = remove ? "source removed mid-export" : "source changed mid-export";
+        Fixture f(remove ? "source-removed-mid" : "source-changed-mid", WavEncoding::Pcm16);
+        {
+            // Long enough that the job is still running when the pause lands.
+            commands::CompositionSettingsChange change;
+            change.duration = core::RationalTime::fromInteger(20);
+            commands::Transaction transaction("Duration");
+            transaction.emplace<commands::UpdateCompositionSettings>(f.composition(), change);
+            expect(f.session.execute(std::move(transaction)).changed(), name + ": the duration is set");
+        }
+        const auto plate = f.folder / "plate.png";
+        writePng(plate, 32, 16, 40);
+        {
+            commands::Transaction import("Import");
+            import.emplace<commands::ImportAssets>(std::vector<std::filesystem::path>{plate}, f.folder);
+            expect(f.session.execute(std::move(import)).changed(), name + ": the picture imports");
+            const auto picture = currentSnapshot(f.session).project().assets().back().id;
+            commands::Transaction layer("Add picture layer");
+            layer.emplace<commands::AddDroppedLayers>(f.composition(),
+                                                      std::vector<commands::LayerDropItem>{picture},
+                                                      commands::LayerDropPlacement{});
+            expect(f.session.execute(std::move(layer)).changed(), name + ": the layer is added");
+        }
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::ProResMov;
+        settings.codecProfile = "hq";
+        settings.includeAudio = false;
+        const auto job = f.addJob(settings, "Exports/changed-mid.mov");
+        expect(f.pumpUntil([&] { return f.service->canStart(job).available; }, 20),
+               name + ": the job becomes startable");
+        const document::ExportJobId ids[] = {job};
+        expect(f.service->start(ids).accepted, name + ": start");
+        // Frames are delivered; pause at the next frame boundary.
+        expect(f.pumpUntil(
+                   [&] {
+                       const auto now = f.view(job);
+                       return !now || host::isTerminal(now->state) ||
+                              now->progress.framesCompleted >= 2;
+                   },
+                   60),
+               name + ": frames are delivered");
+        expect(f.service->pause(job).accepted, name + ": pause is accepted");
+        expect(f.pumpUntil(
+                   [&] {
+                       const auto now = f.view(job);
+                       return !now || now->state == ExportJobState::Paused ||
+                              host::isTerminal(now->state);
+                   },
+                   60),
+               name + ": the job pauses");
+        const auto paused = f.view(job);
+        expect(paused && paused->state == ExportJobState::Paused &&
+                   paused->progress.framesCompleted >= 2 &&
+                   paused->progress.framesCompleted < paused->progress.framesTotal,
+               name + ": the export is paused part way through");
+        if (!paused || paused->state != ExportJobState::Paused) {
             continue;
-        const auto& failure = *finished->failure;
-        expect(failure.diagnosticCode == "export.media.unavailable" &&
-                   failure.code == host::ExportFailureCode::EvaluationFailed,
-               name + ": classified as an unavailable media source (" + failure.diagnosticCode + ")");
-        expect(failure.reason.find("\"plate\"") != std::string::npos &&
-                   failure.reason.find("relink") != std::string::npos &&
-                   failure.reason.find("Restore") != std::string::npos &&
-                   failure.reason.find("bug in Bloom") == std::string::npos,
-               name + ": the sentence names the file and says to restore or relink it (" +
-                   failure.reason + ")");
-        bool logged = false;
-        for (const auto& entry : f.service->log(job, 0).entries)
-            logged = logged || (entry.code == "export.media.unavailable" &&
-                                entry.message.find("bug in Bloom") == std::string::npos);
-        expect(logged, name + ": the export log carries the same classification");
-        expect(!std::filesystem::exists(f.folder / "Exports/changed.mov"), name + ": nothing published");
+        }
+        // Nothing is in flight now: the file changes between two frames.
+        if (remove)
+            std::filesystem::remove(plate);
+        else
+            writePng(plate, 32, 16, 200);
+        expect(f.service->resume(job).accepted, name + ": resume is accepted");
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(job)->state); }, 120),
+               name + ": the job finishes");
+        const auto finished = f.view(job);
+        expectSourceStop(f, finished, job, name, "Exports/changed-mid.mov");
     }
 }
 
@@ -1923,6 +2008,7 @@ int main(const int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--changed-source") {
         try {
             testChangedSourceIsNamed();
+            testSourceChangedDuringExport();
         } catch (const std::exception& error) {
             std::cerr << "FAIL: " << error.what() << '\n';
             return 1;

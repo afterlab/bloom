@@ -475,7 +475,8 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_audio_formats_test --frame-reuse
                        LABELS unit host media output TIMEOUT 600)
 
-        # #790: an export stopped by a changed or removed source names the file.
+        # #790: an export stopped by a changed or removed source (before it starts, or paused part
+        # way through) names the file.
         bloom_add_test(NAME bloom.host.export-changed-source
                        COMMAND bloom_host_export_audio_formats_test --changed-source
                        LABELS unit host media output TIMEOUT 300)
