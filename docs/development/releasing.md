@@ -4,7 +4,7 @@ Status: working
 
 A release is made by creating a version tag. The release workflow
 (`.github/workflows/release.yml`) builds every release file from the tagged commit on hosted
-runners, checks them, and publishes the GitHub pre-release once the maintainer approves it. This
+runners, checks them, and publishes the GitHub release, marked as the newest release, once the maintainer approves it. This
 page is the maintainer's order of work. The design of the update feed and of the updaters is in
 [ADR 0041](../decisions/0041-self-update.md); what the installers do is in the
 [platform contract](../architecture/platform-support.md).
@@ -202,7 +202,8 @@ the approval it:
   feed with the public key;
 - installs from the signed files with the published `install.sh`, which checks the real
   signature and checksum, and uninstalls again;
-- creates the GitHub pre-release for the tag with the release notes and the files, and
+- creates the GitHub release for the tag, marked as the newest release (alphas included), with the
+  release notes and the files, and
   refreshes the files of `alpha-channel`.
 
 A release that exists is never replaced: the job stops when the tag already has one.

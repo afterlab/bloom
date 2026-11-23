@@ -1,7 +1,7 @@
 name: Release
 
 # Builds every release file of a version tag on hosted runners and publishes the GitHub
-# pre-release once the maintainer approves it (docs/development/releasing.md).
+# release, as the newest release, once the maintainer approves it (docs/development/releasing.md).
 #
 # It starts when a tag is created and when a maintainer starts it by hand, never for a branch or
 # a pull request. A tag's creation is used and not its push: every commit message of this
@@ -879,7 +879,7 @@ jobs:
           path: ${{ runner.temp }}/candidate
 
   # Waits for the maintainer's approval of the `release` environment. Then the candidate is
-  # signed, the feed and the appcasts are written, and the pre-release and the channel's files
+  # signed, the feed and the appcasts are written, and the release and the channel's files
   # are published. A rehearsal skips the whole job, so it asks for no approval; the first step
   # refuses one all the same.
   publish:
@@ -947,16 +947,16 @@ jobs:
           HOME="$RUNNER_TEMP/install-home" sh "$RUNNER_TEMP/published/release/install.sh" \
             --uninstall --prefix "$RUNNER_TEMP/install-check"
 
-      - name: Publish the pre-release
+      - name: Publish the release
         run: |
           release="$RUNNER_TEMP/published/release"
           if gh release view "$BLOOM_RELEASE_TAG" > /dev/null 2>&1; then
             echo "::error::A release for $BLOOM_RELEASE_TAG exists already; a published release is not replaced"
             exit 1
           fi
-          kind=--prerelease
-          case "$BLOOM_PACKAGE_VERSION" in *-*) ;; *) kind=--latest ;; esac
-          gh release create "$BLOOM_RELEASE_TAG" --verify-tag "$kind" \
+          # Every version is published as the newest release (an alpha too); only the fixed
+          # alpha-channel release below stays a pre-release.
+          gh release create "$BLOOM_RELEASE_TAG" --verify-tag --latest \
             --title "Bloom $BLOOM_PACKAGE_VERSION" --notes-file "$release/release-notes.md" \
             "$release"/Bloom-"$BLOOM_PACKAGE_VERSION"-* "$release/install.sh" \
             "$release/PKGBUILD" "$release/SHA256SUMS" "$release/SHA256SUMS.sig" \
