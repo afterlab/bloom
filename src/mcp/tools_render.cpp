@@ -210,11 +210,8 @@ void reportJobRoute(Json& out, yyjson_mut_val* value, const TransientResult& job
 // The destination with `{name}`, `{job}`, `{format}` and `{date}` expanded. A frame number pattern
 // stays for renderDestination; a token that is not one of these is refused rather than written.
 std::string expandedDestination(const std::string& text, const document::Composition& composition,
-                                const std::string_view builtInPreset,
+                                const document::ExportFormat format,
                                 const std::string_view jobName) {
-    const auto preset = host::builtInExportPreset(builtInPreset);
-    if (!preset)
-        throw std::runtime_error("The export preset is not available");
     host::ExportDestinationContext context;
     context.compositionName = composition.name();
     const auto now = std::time(nullptr);
@@ -227,7 +224,7 @@ std::string expandedDestination(const std::string& text, const document::Composi
     context.year = static_cast<std::uint16_t>(local.tm_year + 1900);
     context.month = static_cast<std::uint8_t>(local.tm_mon + 1);
     context.day = static_cast<std::uint8_t>(local.tm_mday);
-    auto expanded = host::expandDestinationTokens(text, context, jobName, preset->settings.format);
+    auto expanded = host::expandDestinationTokens(text, context, jobName, format);
     if (!expanded)
         throw InvalidInput("the destination uses an unknown token or a value with a path "
                            "separator; use {name}, {job}, {format}, {date} or a frame number "
@@ -236,6 +233,15 @@ std::string expandedDestination(const std::string& text, const document::Composi
         at != std::string::npos && expanded->compare(at, 7, "{frame}") != 0)
         throw InvalidInput("the destination uses an unknown token");
     return *expanded;
+}
+
+std::string expandedDestination(const std::string& text, const document::Composition& composition,
+                                const std::string_view builtInPreset,
+                                const std::string_view jobName) {
+    const auto preset = host::builtInExportPreset(builtInPreset);
+    if (!preset)
+        throw std::runtime_error("The export preset is not available");
+    return expandedDestination(text, composition, preset->settings.format, jobName);
 }
 
 std::string unknownPresetMessage(const std::string_view preset) {
@@ -280,7 +286,7 @@ ResolvedPreset resolvePreset(McpServerCore::State& core, McpCall& call,
             if (listed != catalogue->presets.end())
                 preset = *listed;
         };
-        if (!core.dependencies.exports.run(read, call.control.stop))
+        if (!queueRoute(core, call).access.run(read, call.control.stop))
             throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
     }
     if (!preset)
@@ -683,8 +689,12 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         request.settings.audioSampleRate = static_cast<std::uint32_t>(value);
     }
+    // {name}, {job}, {format} and {date} expand here, as on the headless route, so a file is never
+    // written with a token in its name.
+    const auto expanded = expandedDestination(requested, *liveComposition, preset->settings.format,
+                                              compositionExport ? "MCP export" : "MCP render");
     const auto destination =
-        renderDestination(requested, presetName, found.extension, range, first, found.still, true);
+        renderDestination(expanded, presetName, found.extension, range, first, found.still, true);
     if (destination.pattern)
         request.settings.naming.pattern = *destination.pattern;
     request.destination =
@@ -780,8 +790,11 @@ void pruneScopePictures(const std::filesystem::path& folder) { pruneCaptures(fol
 
 yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, const bool compositionExport) {
-    return call.live != nullptr ? renderLive(core, out, call, arguments, compositionExport)
-                                : renderHeadless(core, out, call, arguments, compositionExport);
+    // #783: a projectFile session renders and exports through its own export queue, exactly as
+    // the open project does through the application's.
+    return call.live != nullptr || call.fileExports != nullptr
+               ? renderLive(core, out, call, arguments, compositionExport)
+               : renderHeadless(core, out, call, arguments, compositionExport);
 }
 
 namespace {

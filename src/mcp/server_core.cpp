@@ -765,12 +765,13 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
             bool failed = false;
             std::vector<yyjson_mut_val*> content;
             std::function<yyjson_mut_val*(Json&)> compact;
+            std::optional<McpOpenProjectAttachment> attached;
             try {
                 // `projectFile` points a tool at another project file, in a headless session of
                 // its own; the tool itself never sees the member.
                 FrozenJson withoutFile(nullptr, yyjson_doc_free);
                 yyjson_val* toolArguments = member(params, "arguments");
-                const auto projectFile = projectFileArgument(toolArguments);
+                auto projectFile = projectFileArgument(toolArguments);
                 if (projectFile) {
                     switch (*tool) {
                     case McpTool::Query:
@@ -783,12 +784,19 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     case McpTool::ProjectClose:
                         break;
                     default:
+                        // #783: the export.* tools of that file's own export queue.
+                        if (isExportQueueTool(*tool))
+                            break;
                         throw InvalidInput("projectFile applies to query, transact, history, "
-                                           "render, export, capture, project.save and "
-                                           "project.close");
+                                           "render, export, capture, project.save, "
+                                           "project.close and the export.* queue tools");
                     }
                     withoutFile = withoutProjectFile(toolArguments);
                     toolArguments = yyjson_doc_get_root(withoutFile.get());
+                    // #775: the file Bloom has open is that open project, not a second copy.
+                    attached = attachToOpenProject(state, *tool, *projectFile, control);
+                    if (attached)
+                        projectFile.reset();
                 }
                 if (*tool == McpTool::JobsWait) {
                     // #747: a job outlives the request that submitted it; no lease is held.
@@ -805,13 +813,16 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     value = profilerSnapshotTool(state, out, control);
                 } else if (projectFile &&
                            (*tool == McpTool::ProjectSave || *tool == McpTool::ProjectClose)) {
-                    value = fileProjectTool(state, out, *tool, *projectFile, toolArguments, control);
+                    value =
+                        fileProjectTool(state, out, *tool, *projectFile, toolArguments, control);
+                } else if (attached && *tool == McpTool::ProjectClose) {
+                    value = attachedCloseAnswer(out, *attached);
                 } else if (toolUsesLiveUi(*tool)) {
                     // Window and project-lifecycle tools hold no lease: project.open must work
                     // while the old project is being replaced.
                     std::string summary;
-                    value = sessionTool(state, out, *tool, member(params, "arguments"), control,
-                                        summary, protocol.id());
+                    value = sessionTool(state, out, *tool, toolArguments, control, summary,
+                                        protocol.id());
                     if (!summary.empty() && summary != handled.summary)
                         handled.summary += " " + summary;
                 } else {
@@ -821,9 +832,25 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     scripting::OperationContext context;
                     std::uint64_t generation = 0;
                     std::unique_lock<std::timed_mutex> fileLock;
-                    if (projectFile) {
+                    // #783: the file's export queue, and its lock: everything that touches the
+                    // file's session or queue holds it (a waiting job lets go while it sleeps).
+                    std::shared_ptr<McpFileExports> fileExports;
+                    std::unique_lock<McpFileExports> fileOwner;
+                    if (projectFile && isExportQueueTool(*tool)) {
+                        // The export.* tools reach the file's queue without waiting for a
+                        // long call on another file, so export.stop answers during an export.
+                        fileExports = fileExportsFor(state, *projectFile, control);
+                        target = &fileExports->session();
+                        const std::lock_guard<McpFileExports> owner(*fileExports);
+                        context = target->operationContext();
+                    } else if (projectFile) {
                         fileLock = std::unique_lock(state.fileMutex);
                         target = &fileSessionFor(state, *projectFile, control);
+                        fileExports = *tool == McpTool::Render || *tool == McpTool::Export
+                                          ? fileExportsLocked(state, *projectFile)
+                                          : existingFileExports(state, *projectFile);
+                        if (fileExports)
+                            fileOwner = std::unique_lock(*fileExports);
                         context = target->operationContext();
                     } else if (auto* live = state.liveHost()) {
                         state.syncEvents();
@@ -866,7 +893,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                                  .compact = {},
                                  .client = protocol.id(),
                                  .envelope = &message,
-                                 .committed = false};
+                                 .committed = false,
+                                 .fileExports = fileExports.get()};
                     auto* arguments = toolArguments;
                     switch (*tool) {
                     case McpTool::Query:
@@ -923,6 +951,8 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                 value = out.object();
                 out.set(value, "diagnostic", out.text(exception.what()));
             }
+            if (attached)
+                addAttachment(out, value, *attached);
             auto* succeeded = yyjson_mut_obj_get(value, "succeeded");
             if (succeeded && yyjson_mut_is_false(succeeded))
                 failed = true;

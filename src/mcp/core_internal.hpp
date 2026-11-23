@@ -61,6 +61,8 @@ struct ToolFailure final : std::runtime_error {
     std::optional<std::uint64_t> retryAfterMs;
 };
 
+class McpFileExports;
+
 // What one tools/call works against.
 struct McpCall final {
     scripting::Session& session;
@@ -97,6 +99,9 @@ struct McpCall final {
     // #747: set by transact once its transaction reached the command stack (applied, refused by
     // the document or stale): only such an answer is remembered for an idempotencyKey.
     bool committed = false;
+    // #783: a projectFile call's own export queue (render, export and the export.* tools of that
+    // file run there, as the open project's run on the application's queue); null otherwise.
+    McpFileExports* fileExports = nullptr;
 };
 
 // A non-command fact the events tool reports beside command events: a project lifecycle step
@@ -260,6 +265,76 @@ struct McpIdempotency final {
     std::uint64_t nextTicket = 1;
 };
 
+// A finished transient render, export or capture job: its final view and whole run log, kept
+// after the call returned and the queue retired the job, so export.status, export.log and
+// export.wait still read it. It belongs to the export queue generation that ran it.
+struct McpRetiredTransient final {
+    std::uint64_t generation = 0;
+    host::ExportJobView view;
+    host::ExportLogBatch log;
+};
+
+// The newest kRetiredTransientJobs retired transient jobs of one export queue, oldest first.
+class McpRetiredTransients final {
+  public:
+    void retire(McpRetiredTransient job);
+    // The retired jobs of `generation` (oldest first); releases those of any other generation.
+    [[nodiscard]] std::vector<McpRetiredTransient> jobs(std::uint64_t generation);
+
+  private:
+    std::mutex mutex_;
+    std::deque<McpRetiredTransient> retired_;
+};
+
+// #783: the export queue of one projectFile session. It is the same host::ExportQueueService the
+// application and bloom-cli export run, over the file's own headless session, so render, export
+// and the export.* tools (progress, wait, stop, the published files) work for that file exactly as
+// they do for the open project. It borrows the core's scheduler and its projectFile GPU provider.
+//
+// One lock serializes everything that touches the file's session or its queue: a projectFile call
+// holds it while it runs, the queue's own pump thread takes it to advance running jobs, and a
+// call waiting on a job (export, export.wait) releases it while it sleeps, so export.status and
+// export.stop on the same file answer meanwhile. Destruction stops every job and waits until the
+// queue is quiescent.
+class McpFileExports final {
+  public:
+    McpFileExports(std::shared_ptr<scripting::Session> session, runtime::TaskScheduler& scheduler,
+                   std::shared_ptr<host::GpuExportProvider> gpu);
+    ~McpFileExports();
+    McpFileExports(const McpFileExports&) = delete;
+    McpFileExports& operator=(const McpFileExports&) = delete;
+
+    // Runs queue work inline on the calling thread under the lock (callerIsOwner).
+    [[nodiscard]] const McpExportAccess& access() const noexcept;
+    [[nodiscard]] McpRetiredTransients& retired() noexcept;
+    [[nodiscard]] scripting::Session& session() const noexcept;
+
+    // BasicLockable, so std::unique_lock<McpFileExports> holds it.
+    void lock();
+    void unlock();
+    // True when the calling thread holds the lock.
+    [[nodiscard]] bool heldHere() const noexcept;
+    // Sleeps for `duration`; a thread that holds the lock releases it meanwhile.
+    void idle(std::chrono::milliseconds duration);
+    // Jobs that are waiting, running or paused. The caller holds the lock.
+    [[nodiscard]] std::size_t activeJobCount() const;
+    // Stops every job with `cause` and pumps until the queue is quiescent. The caller holds the
+    // lock.
+    void shutdown(host::ExportStopCause cause);
+
+  private:
+    struct Impl;
+    std::shared_ptr<Impl> impl_;
+};
+
+// The export queue a call works with: the open project's (McpCoreDependencies::exports) or, for a
+// projectFile call, that file's own (#783).
+struct McpQueueRoute final {
+    const McpExportAccess& access;
+    McpRetiredTransients& retired;
+    McpFileExports* file = nullptr;
+};
+
 struct McpServerCore::State {
     explicit State(McpCoreDependencies value);
     ~State();
@@ -317,26 +392,40 @@ struct McpServerCore::State {
     // headless session kept between calls so edits, undo history and unsaved changes persist
     // until project.save and project.close. One call at a time holds fileMutex.
     struct FileSession final {
-        std::unique_ptr<scripting::Session> session;
+        std::shared_ptr<scripting::Session> session;
         document::Revision savedRevision;
+        // #783: the file's export queue, made by its first render, export or export.* call.
+        std::shared_ptr<McpFileExports> exports;
     };
     std::timed_mutex fileMutex;
     std::map<std::string, FileSession> fileSessions;
-
-    // The newest kRetiredTransientJobs transient render/export/capture jobs, oldest first: each
-    // job's final view and whole run log, kept after the call returned and the queue retired the
-    // job, so export.status, export.log and export.wait still read it. Each belongs to the export
-    // queue generation that ran it; a replaced project (a new generation) releases them.
-    struct RetiredTransient final {
+    // #783: the files fileSessions holds, each with its export queue once it has one. Changed with
+    // fileSessions (both locks held); read under fileIndexMutex alone, so the export.* tools of
+    // one file and the open-project check of #775 never wait for a long call on another file.
+    std::mutex fileIndexMutex;
+    std::map<std::string, std::shared_ptr<McpFileExports>> fileIndex;
+    // #775: the newest comparison of the open project with its file, kept while neither changes.
+    struct OpenProjectComparison final {
+        std::string path;
         std::uint64_t generation = 0;
-        host::ExportJobView view;
-        host::ExportLogBatch log;
+        std::uint64_t revision = 0;
+        std::string openDigest;
+        std::uintmax_t fileSize = 0;
+        std::filesystem::file_time_type fileTime{};
+        std::string fileDigest;
+        std::string fileProblem;
     };
-    std::mutex retiredMutex;
-    std::deque<RetiredTransient> retired;
-    void retire(RetiredTransient job);
-    // The retired jobs of `generation` (oldest first); releases those of any other generation.
-    [[nodiscard]] std::vector<RetiredTransient> retiredJobs(std::uint64_t generation);
+    std::mutex comparisonMutex;
+    std::optional<OpenProjectComparison> comparison;
+
+    // The open project's retired transient render/export/capture jobs (McpRetiredTransients); a
+    // replaced project (a new queue generation) releases them.
+    using RetiredTransient = McpRetiredTransient;
+    McpRetiredTransients retiredTransients;
+    void retire(RetiredTransient job) { retiredTransients.retire(std::move(job)); }
+    [[nodiscard]] std::vector<RetiredTransient> retiredJobs(const std::uint64_t generation) {
+        return retiredTransients.jobs(generation);
+    }
 
     // #747 (D1): asynchronous transact jobs, idempotency keys and the stdio server's own measure
     // of recent commit time (the live host measures its own).
@@ -394,6 +483,47 @@ using FrozenJson = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>;
                                               const std::filesystem::path& path,
                                               yyjson_val* arguments,
                                               const McpRequestControl& control);
+
+// #783: the export.* tools that take projectFile and work on that file's export queue.
+[[nodiscard]] bool isExportQueueTool(McpTool tool) noexcept;
+// The export queue of the projectFile session for `path`, made on first use. The caller holds
+// State::fileMutex and has the session (fileSessionFor).
+[[nodiscard]] std::shared_ptr<McpFileExports> fileExportsLocked(McpServerCore::State& core,
+                                                                const std::filesystem::path& path);
+// For an export.* call: the queue the file's session already has, without waiting for another
+// file's call; otherwise opens the session (fileSessionFor) and makes its queue.
+[[nodiscard]] std::shared_ptr<McpFileExports> fileExportsFor(McpServerCore::State& core,
+                                                             const std::filesystem::path& path,
+                                                             const McpRequestControl& control);
+// The queue the projectFile session for `path` has, or null. The caller holds State::fileMutex.
+[[nodiscard]] std::shared_ptr<McpFileExports>
+existingFileExports(McpServerCore::State& core, const std::filesystem::path& path);
+// The queue a call works with (McpQueueRoute).
+[[nodiscard]] McpQueueRoute queueRoute(McpServerCore::State& core, const McpCall& call);
+
+// #775: a projectFile call for the file the application (or the stdio server) has open attaches
+// to that open project instead of being refused, and says whether the open copy differs from the
+// file on disk.
+struct McpOpenProjectAttachment final {
+    std::filesystem::path path;
+    bool fileDiffers = false;
+    // Why, when it differs: one plain sentence.
+    std::string difference;
+};
+// The attachment when `path` is the open project, else nullopt (the call takes its own
+// projectFile session). A projectFile session that already holds the file and has unsaved
+// changes is refused with what to do; a clean one is closed, and the call attaches. project.save
+// and project.close keep a session that holds the file. Fails closed when the application cannot
+// be asked in time.
+[[nodiscard]] std::optional<McpOpenProjectAttachment>
+attachToOpenProject(McpServerCore::State& core, McpTool tool, const std::filesystem::path& path,
+                    const McpRequestControl& control);
+// Adds projectFile, attachedToOpenProject, fileDiffers and, when it differs, fileDifference and
+// the reload offer to a result object.
+void addAttachment(Json& out, yyjson_mut_val* value, const McpOpenProjectAttachment& attachment);
+// project.close with projectFile for the open project: nothing separate to close.
+[[nodiscard]] yyjson_mut_val* attachedCloseAnswer(Json& out,
+                                                  const McpOpenProjectAttachment& attachment);
 
 // ---- Projections (projections.cpp, tools_document.cpp)
 // `withOutputs` false leaves out the `outputs` list (transact's "summary" response replaces it, so

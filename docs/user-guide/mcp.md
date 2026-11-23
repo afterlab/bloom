@@ -1027,20 +1027,42 @@ transform, and read back; the result names that space in `colorSpace`. `last` ma
 transparent pixel counts as black.
 
 **Other project files.** `query`, `transact`, `history`, `render`, `export`, `capture`,
-`project.save` and `project.close` take `projectFile`, the absolute path of a project file other
-than the open one. The call runs in a headless session of that file, with the same operations;
-the session stays open between calls (edits, undo and unsaved changes persist), `project.save`
-with `projectFile` writes it and `project.close` releases it (`discardChanges:true` to close with
-unsaved edits). Asking for a file that is open in Bloom, or is the server's own project, is
-refused with `bloom.mcp.preflight-blocked`, because two sessions on one file would overwrite each
-other's saves. The question is asked again on every call, `project.save` included, so a file the
-artist opens in Bloom after its session opened is refused from then on. When Bloom is busy and
-cannot say within two seconds whether the file is open there, the call is refused
-(`bloom.mcp.project-unavailable`, "Bloom is busy ...") instead of assuming it is free. While a
-session holds a file, `project.open`, `project.save-as` and `project.save-copy` onto that path are
-refused with `bloom.mcp.busy`; close the session first. At most four files are open this way at
-once. In the desktop application their renders use the application's own final-render provider,
-only for these calls; the open project keeps rendering through the export queue. A render, export
+`project.save`, `project.close` and the `export.*` queue tools take `projectFile`, the absolute
+path of a project file other than the open one. The call runs in a headless session of that file,
+with the same operations; the session stays open between calls (edits, undo and unsaved changes
+persist), `project.save` with `projectFile` writes it and `project.close` releases it
+(`discardChanges:true` to close with unsaved edits; `stopJobs:true` when its export jobs still
+run, which are otherwise not stopped silently).
+
+The file has an export queue of its own, the same queue the Export panel and `bloom-cli export`
+run, so a `render` or `export` of it works exactly as one of the open project: every preset
+`export.presets` lists, progress while it runs, and a result with its `job` id, `log`, `files`,
+`streams` and `preservationReport`. Pass the same `projectFile` to `export.status`,
+`export.wait`, `export.stop`, `export.log` and the other `export.*` tools to reach that queue:
+`export.stop` with the file and the job id stops its export while the `export` call waits, and
+`export.start` runs the file's saved jobs. Job ids belong to their queue, so a call without the
+`projectFile` does not find the file's job. A movie exported this way is the same file, byte for
+byte, as one exported from the open project or by `bloom-cli export --project <file> --job <id>`.
+
+A file that is open in Bloom, or is the server's own project, is that open project: a call with
+its `projectFile` attaches to it (the edit lands in the artist's project and undo history, as
+without `projectFile`) instead of opening a second copy. The result then adds
+`attachedToOpenProject: true` and `fileDiffers`: whether the project open in Bloom differs from
+the file on disk. When it differs (changes in Bloom that are not saved, or a window showing a copy
+that is not the file's), `fileDifference` says so and `reload` offers the call that makes them
+agree, `project.open` with the path and `discardChanges: true`; `project.save` keeps Bloom's
+copy instead. `project.close` with that `projectFile` answers `closed: false`: there is no
+separate session to close. A session that already held the file when the artist opened it in
+Bloom is closed when it has no unsaved changes, so calls attach; with unsaved changes the call is
+refused with `bloom.mcp.preflight-blocked` and what to do (`project.close` it with
+`discardChanges:true`, or have the file closed in Bloom), and its `project.save` is refused
+because it would overwrite Bloom's file. When Bloom is busy and cannot say within two seconds
+whether the file is open there, the call is refused (`bloom.mcp.project-unavailable`, "Bloom is
+busy ...") instead of assuming it is free. While a session holds a file, `project.open`,
+`project.save-as` and `project.save-copy` onto that path are refused with `bloom.mcp.busy`;
+close the session first. At most four files are open this way at once. In the desktop
+application their renders use the application's own final-render provider, only for these calls;
+the open project keeps rendering through the export queue. A render, export
 or capture reports `gpuFrames`, `cpuReferenceFrames` and `provenance` (`gpu` or `cpu-reference`),
 for a project file and for the project a `bloom-mcp` process has open alike; when frames ran on
 the CPU reference path, because no GPU device was available or the scene could not run on it,

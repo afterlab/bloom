@@ -133,6 +133,15 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #783/#784/#775: a projectFile session exports a movie byte for byte like the open project and
+    # bloom-cli export, its saved jobs run through export.start, the queue route reports what the
+    # scripted route reports, and the open project's own file attaches instead of being refused.
+    bloom_add_test(NAME bloom.scripting.file-session-export-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/file_session_export_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 300)
     # #757: a styled Text Source and bloom.layer.stroke-outline through MCP, Python and bloom-cli
     # run: one transact builds an accent-word outlined caption, and every surface strokes the
     # letters into the node menu's graph.

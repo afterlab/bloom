@@ -146,9 +146,9 @@ std::string hex(const core::Sha256Digest& digest) {
 }
 
 // Runs `work` on the queue's owner thread; a refusal to run is a cancellation.
-void onOwner(McpServerCore::State& core, const McpExportAccess::Work& work,
+void onOwner(const McpQueueRoute& route, const McpExportAccess::Work& work,
              const std::stop_token& stop) {
-    const auto& access = core.dependencies.exports;
+    const auto& access = route.access;
     if (!access.run)
         throw ToolFailure(McpToolErrorCode::ExportUnavailable,
                           "Export is not available in this window yet.");
@@ -357,10 +357,16 @@ std::vector<std::filesystem::path> publishedFiles(const host::ExportArtifactSumm
 
 // Waits on the request worker until the queue may have changed: the headless owner pumps the
 // queue itself; the desktop owner pumps it on the UI thread and wakes the subscription.
-void waitForQueue(McpServerCore::State& core, std::optional<host::ExportQueueSubscription>& sub,
+void waitForQueue(const McpQueueRoute& route, std::optional<host::ExportQueueSubscription>& sub,
                   std::uint64_t& observed, const std::stop_token& stop) {
-    if (core.dependencies.exports.callerIsOwner || !sub) {
-        std::this_thread::sleep_for(core.dependencies.exports.callerIsOwner ? 5ms : 20ms);
+    if (route.access.callerIsOwner || !sub) {
+        const auto pause = route.access.callerIsOwner ? 5ms : 20ms;
+        // #783: a projectFile queue's waiting call lets go of the file while it sleeps, so its
+        // queue pumps and export.status and export.stop on that file answer meanwhile.
+        if (route.file != nullptr)
+            route.file->idle(pause);
+        else
+            std::this_thread::sleep_for(pause);
         return;
     }
     if (const auto serial = sub->waitForChange(observed, stop))
@@ -381,8 +387,31 @@ void waitForQueue(McpServerCore::State& core, std::optional<host::ExportQueueSub
 // `limits.destinationCheckWait` or when the request is cancelled; at the limit the command is
 // issued anyway and answers with the typed refusal.
 template <typename Pending, typename Issue>
-yyjson_mut_val* startWhenChecked(McpServerCore::State& core, Json& out, const std::stop_token& stop,
-                                 const Pending& pending, const Issue& issue) {
+yyjson_mut_val* startWhenChecked(McpServerCore::State& core, const McpQueueRoute& route, Json& out,
+                                 const std::stop_token& stop, const Pending& pending,
+                                 const Issue& issue) {
+    // #683, #783: a queue that was just made (a projectFile session's first export.start, or the
+    // application right after launch) may still be probing its encoders, and a movie job would be
+    // refused "Checking encoders…" although the answer is moments away. The request worker waits
+    // for the probe, bounded by limits.encoderProbeWait and cancellable, as a transient job does.
+    std::shared_ptr<host::ExportPresetCatalogue> catalogue;
+    onOwner(
+        route,
+        [&](host::ExportQueueService* queue, std::uint64_t) {
+            if (queue == nullptr)
+                return;
+            catalogue = queue->sharedPresets();
+            const auto snapshot = catalogue ? catalogue->snapshot() : nullptr;
+            if (snapshot && snapshot->encoders.probed)
+                catalogue.reset();
+        },
+        stop);
+    if (catalogue) {
+        static_cast<void>(catalogue->waitForEncoderProbe(
+            stop, std::chrono::steady_clock::now() + core.dependencies.limits.encoderProbeWait));
+        if (stop.stop_requested())
+            throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
+    }
     const auto deadline =
         std::chrono::steady_clock::now() + core.dependencies.limits.destinationCheckWait;
     std::optional<host::ExportQueueSubscription> sub;
@@ -392,16 +421,16 @@ yyjson_mut_val* startWhenChecked(McpServerCore::State& core, Json& out, const st
         bool missing = false;
         const bool last = std::chrono::steady_clock::now() >= deadline;
         onOwner(
-            core,
+            route,
             [&](host::ExportQueueService* queue, std::uint64_t) {
                 if (queue == nullptr) {
                     missing = true;
                     return;
                 }
-                if (core.dependencies.exports.callerIsOwner)
+                if (route.access.callerIsOwner)
                     queue->pump();
                 if (!last && pending(*queue->snapshot())) {
-                    if (!sub && !core.dependencies.exports.callerIsOwner) {
+                    if (!sub && !route.access.callerIsOwner) {
                         auto subscribed = queue->subscribe();
                         if (subscribed.status == host::ExportQueueSubscribeStatus::Accepted) {
                             sub.emplace(std::move(subscribed.subscription));
@@ -430,7 +459,7 @@ yyjson_mut_val* startWhenChecked(McpServerCore::State& core, Json& out, const st
                 wake.request_stop();
             });
         const std::stop_callback forward(stop, [&wake] { wake.request_stop(); });
-        waitForQueue(core, sub, observed, wake.get_token());
+        waitForQueue(route, sub, observed, wake.get_token());
     }
 }
 
@@ -709,28 +738,28 @@ document::ExportDestination transientDestination(const std::string& path, yyjson
     return destination;
 }
 
-void McpServerCore::State::retire(RetiredTransient job) {
-    const std::lock_guard lock(retiredMutex);
-    std::erase_if(retired, [&](const RetiredTransient& entry) {
+void McpRetiredTransients::retire(McpRetiredTransient job) {
+    const std::lock_guard lock(mutex_);
+    std::erase_if(retired_, [&](const McpRetiredTransient& entry) {
         return entry.generation != job.generation || entry.view.id == job.view.id;
     });
-    retired.push_back(std::move(job));
-    while (retired.size() > kRetiredTransientJobs)
-        retired.pop_front();
+    retired_.push_back(std::move(job));
+    while (retired_.size() > kRetiredTransientJobs)
+        retired_.pop_front();
 }
 
-std::vector<McpServerCore::State::RetiredTransient>
-McpServerCore::State::retiredJobs(const std::uint64_t generation) {
-    const std::lock_guard lock(retiredMutex);
-    std::erase_if(retired,
-                  [&](const RetiredTransient& entry) { return entry.generation != generation; });
-    return {retired.begin(), retired.end()};
+std::vector<McpRetiredTransient> McpRetiredTransients::jobs(const std::uint64_t generation) {
+    const std::lock_guard lock(mutex_);
+    std::erase_if(retired_,
+                  [&](const McpRetiredTransient& entry) { return entry.generation != generation; });
+    return {retired_.begin(), retired_.end()};
 }
 
 TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                                 host::ExportTransientJobRequest request,
                                 const WorkerLimitArguments& limits) {
     const auto& stop = call.control.stop;
+    const auto route = queueRoute(core, call);
     const auto routeComposition = request.composition.value();
     // #683: right after launch the encoder probe may still be running, and a movie preset would
     // be refused "Checking encoders…" although the answer is moments away. Like a start that
@@ -740,7 +769,7 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
     std::shared_ptr<host::ExportPresetCatalogue> catalogue;
     bool probing = false;
     onOwner(
-        core,
+        route,
         [&](host::ExportQueueService* queue, std::uint64_t) {
             if (queue == nullptr)
                 return;
@@ -765,7 +794,7 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
     std::uint64_t generation = 0;
     bool missing = false;
     onOwner(
-        core,
+        route,
         [&](host::ExportQueueService* queue, const std::uint64_t queueGeneration) {
             if (queue == nullptr) {
                 missing = true;
@@ -775,7 +804,7 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             if (limits.any())
                 request.workerLimits = applyWorkerLimits(queue->workerLimits(), limits);
             submitted = queue->submitTransient(std::move(request));
-            if (submitted.accepted && !core.dependencies.exports.callerIsOwner) {
+            if (submitted.accepted && !route.access.callerIsOwner) {
                 auto subscribed = queue->subscribe();
                 if (subscribed.status == host::ExportQueueSubscribeStatus::Accepted)
                     sub.emplace(std::move(subscribed.subscription));
@@ -803,10 +832,10 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 replaced = true;
                 return;
             }
-            if (core.dependencies.exports.callerIsOwner)
+            if (route.access.callerIsOwner)
                 queue->pump();
             view = findJob(*queue->snapshot(), job);
-            if (!sub && !core.dependencies.exports.callerIsOwner) {
+            if (!sub && !route.access.callerIsOwner) {
                 auto subscribed = queue->subscribe();
                 if (subscribed.status == host::ExportQueueSubscribeStatus::Accepted) {
                     sub.emplace(std::move(subscribed.subscription));
@@ -814,7 +843,7 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 }
             }
         };
-        if (!core.dependencies.exports.run(read, {}))
+        if (!route.access.run(read, {}))
             throw ToolFailure(McpToolErrorCode::Cancelled, "The server stopped; the job stopped.");
         if (replaced || !view)
             throw ToolFailure(McpToolErrorCode::Cancelled,
@@ -825,13 +854,13 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             // The run's log is read before the result is acknowledged (which retires the job), so
             // the call's result carries the detail the job's log had -- success or failure.
             std::vector<host::ExportLogEntry> log;
-            core.dependencies.exports.run(
+            route.access.run(
                 [&](host::ExportQueueService* queue, const std::uint64_t current) {
                     if (queue == nullptr || current != generation)
                         return;
                     auto batch = queue->log(job, 0);
                     // Read after the call returns (export.status, export.log, export.wait).
-                    core.retire({generation, *view, batch});
+                    route.retired.retire({generation, *view, batch});
                     log = std::move(batch.entries);
                     if (log.size() > kTransientLogEntries)
                         log.erase(log.begin(),
@@ -895,25 +924,25 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             }
             result.frames = std::max<std::uint64_t>(result.frames, view->progress.framesCompleted);
             if (result.routeKnown) {
-                McpServerCore::State::JobRoute route;
-                route.composition = routeComposition;
-                route.job = result.job;
-                route.gpuFrames = result.gpuFrames;
-                route.cpuReferenceFrames = result.cpuReferenceFrames;
+                McpServerCore::State::JobRoute jobRoute;
+                jobRoute.composition = routeComposition;
+                jobRoute.job = result.job;
+                jobRoute.gpuFrames = result.gpuFrames;
+                jobRoute.cpuReferenceFrames = result.cpuReferenceFrames;
                 for (const auto& entry : result.log)
                     if (entry.code.find("cpu-reference") != std::string::npos &&
                         entry.code.find("check") == std::string::npos) {
-                        route.why = entry.message;
+                        jobRoute.why = entry.message;
                         break;
                     }
                 const std::lock_guard lock(core.jobRouteMutex);
-                core.lastJobRoute = std::move(route);
+                core.lastJobRoute = std::move(jobRoute);
             }
             return result;
         }
         if (stop.stop_requested() && !stopping) {
             stopping = true;
-            core.dependencies.exports.run(
+            route.access.run(
                 [&](host::ExportQueueService* queue, const std::uint64_t current) {
                     if (queue != nullptr && current == generation)
                         static_cast<void>(queue->stop(job));
@@ -921,13 +950,14 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
                 {});
             continue;
         }
-        waitForQueue(core, sub, observed, stopping ? std::stop_token{} : stop);
+        waitForQueue(route, sub, observed, stopping ? std::stop_token{} : stop);
     }
 }
 
 yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall& call,
                                   const McpTool tool, yyjson_val* arguments) {
     const auto& stop = call.control.stop;
+    const auto route = queueRoute(core, call);
     const auto jobArgument = [&](const char* name = "job") {
         return host::ExportJobId::fromRaw(identifier(member(arguments, name)));
     };
@@ -935,7 +965,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
     bool missing = false;
     const auto command = [&](auto&& issue) {
         onOwner(
-            core,
+            route,
             [&](host::ExportQueueService* queue, std::uint64_t) {
                 if (queue == nullptr) {
                     missing = true;
@@ -961,7 +991,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
             jobs.push_back(host::ExportJobId::fromRaw(identifier(item)));
         call.summary = std::to_string(jobs.size()) + " job(s)";
         return startWhenChecked(
-            core, out, stop,
+            core, route, out, stop,
             [&](const host::ExportQueueSnapshot& snapshot) {
                 return std::ranges::any_of(snapshot.jobs, [&](const host::ExportJobView& job) {
                     return std::ranges::find(jobs, job.id) != jobs.end() &&
@@ -981,7 +1011,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
             limits = workerLimitArguments(arguments);
         }
         return startWhenChecked(
-            core, out, stop,
+            core, route, out, stop,
             [](const host::ExportQueueSnapshot& snapshot) {
                 return std::ranges::any_of(snapshot.jobs, [](const host::ExportJobView& job) {
                     return job.record.enabled && startAwaitsDestinationCheck(job);
@@ -1066,13 +1096,13 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         if (tool == McpTool::ExportScript && scriptFormat != "cli-json" && scriptFormat != "python")
             throw InvalidInput("format is cli-json or python");
         onOwner(
-            core,
+            route,
             [&](host::ExportQueueService* queue, const std::uint64_t generation) {
                 if (queue == nullptr) {
                     missing = true;
                     return;
                 }
-                if (core.dependencies.exports.callerIsOwner)
+                if (route.access.callerIsOwner)
                     queue->pump();
                 result = out.object();
                 switch (tool) {
@@ -1098,7 +1128,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                         out.append(jobs, jobValue(out, job));
                     out.set(result, "jobs", jobs);
                     auto* retired = out.array();
-                    for (const auto& job : core.retiredJobs(generation))
+                    for (const auto& job : route.retired.jobs(generation))
                         if (!findJob(*snapshot, job.view.id))
                             out.append(retired, jobValue(out, job.view));
                     out.set(result, "recentTransientJobs", retired);
@@ -1152,7 +1182,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                     auto batch = queue->log(job, after);
                     // A finished transient job the queue already retired.
                     if (!findJob(*queue->snapshot(), job))
-                        for (auto& retired : core.retiredJobs(generation))
+                        for (auto& retired : route.retired.jobs(generation))
                             if (retired.view.id == job) {
                                 batch = std::move(retired.log);
                                 batch.gap = batch.gap && !batch.entries.empty() &&
@@ -1268,20 +1298,20 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
         std::optional<host::ExportJobView> view;
         std::uint64_t revision = 0;
         onOwner(
-            core,
+            route,
             [&](host::ExportQueueService* queue, const std::uint64_t generation) {
                 if (queue == nullptr) {
                     missing = true;
                     return;
                 }
-                if (core.dependencies.exports.callerIsOwner)
+                if (route.access.callerIsOwner)
                     queue->pump();
                 const auto snapshot = queue->snapshot();
                 revision = snapshot->revision;
                 if (job) {
                     view = findJob(*snapshot, *job);
                     if (!view)
-                        for (const auto& retired : core.retiredJobs(generation))
+                        for (const auto& retired : route.retired.jobs(generation))
                             if (retired.view.id == *job)
                                 view = retired.view;
                     unknown = !view;
@@ -1289,7 +1319,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                 } else {
                     done = snapshot->runner != host::ExportRunnerState::Running;
                 }
-                if (!sub && !core.dependencies.exports.callerIsOwner) {
+                if (!sub && !route.access.callerIsOwner) {
                     auto subscribed = queue->subscribe();
                     if (subscribed.status == host::ExportQueueSubscribeStatus::Accepted) {
                         sub.emplace(std::move(subscribed.subscription));
@@ -1326,7 +1356,7 @@ yyjson_mut_val* exportSessionTool(McpServerCore::State& core, Json& out, McpCall
                 wake.request_stop();
             });
         const std::stop_callback forward(stop, [&wake] { wake.request_stop(); });
-        waitForQueue(core, sub, observed, wake.get_token());
+        waitForQueue(route, sub, observed, wake.get_token());
     }
 }
 

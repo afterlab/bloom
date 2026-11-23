@@ -3290,10 +3290,14 @@ void secondProjectFile() {
                    "the saved file holds the new layer");
         }
 
-        // The file the server itself has open is refused.
-        const auto ownFile = server.call(
-            "query", R"({"kind":"project","projectFile":")" + own.generic_string() + R"("})");
-        expect(contains(ownFile, "already open"), "a file open as the project is refused: " + ownFile);
+        // #775: the file the server itself has open is that project: the call attaches to it.
+        const auto ownFile = server.call("query", R"({"kind":"project","projectFile":")" +
+                                                      own.generic_string() + R"("})");
+        expect(contains(ownFile, R"("isError":false)") &&
+                   contains(ownFile, R"("attachedToOpenProject":true)") &&
+                   contains(ownFile, R"("fileDiffers":false)") &&
+                   !contains(ownFile, "already open"),
+               "a file open as the project attaches to it: " + ownFile);
         const auto relative = server.call("query", R"({"kind":"project","projectFile":"a.bloom"})");
         expect(contains(relative, "absolute path"), "a relative path is refused: " + relative);
     }
@@ -3302,9 +3306,11 @@ void secondProjectFile() {
 }
 
 // Another project file edited and exported through the desktop host path while the application's
-// own project stays live: the file is refused when Bloom has it open (at first use, after it
-// became live, and when Bloom cannot be asked), project.open and project.save-as refuse a file a
-// session holds, and a render with no GPU device says it ran on the CPU reference path.
+// own project stays live. A file Bloom has open attaches to the live project (#775) and says when
+// the window's copy differs; a session that held the file before Bloom opened it is refused with
+// what to do while it has unsaved changes; nothing is decided when Bloom cannot be asked.
+// project.open and project.save-as refuse a file a session holds, and a render with no GPU device
+// says it ran on the CPU reference path.
 void fileSessionsBesideALiveProject() {
     const auto folder =
         bloom::test_support::processTempDirectory() /
@@ -3364,26 +3370,38 @@ void fileSessionsBesideALiveProject() {
         expect(contains(own, "bloom.mcp.export-unavailable") && !std::filesystem::exists(folder / "own.png"),
                "the live project still renders only through the export queue: " + own);
 
-        // A file Bloom has open is refused at first use.
+        // #775: a file Bloom has open attaches to the live project at first use. The window here
+        // shows a copy that is not the file's (a stale window), so the answer says so and offers
+        // the reload; no second copy of the file is opened.
         server.bindProject(third);
         const auto first = server.call("query", file(third, R"(,"kind":"project")"));
-        expect(contains(first, "already open in Bloom"),
-               "a file open in Bloom is refused at first use: " + first);
+        expect(contains(first, R"("isError":false)") &&
+                   contains(first, R"("attachedToOpenProject":true)") &&
+                   contains(first, R"("fileDiffers":true)") &&
+                   contains(first, R"("reload":{"tool":"project.open")") &&
+                   !contains(first, "already open"),
+               "a file open in Bloom attaches and reports that the window's copy differs: " +
+                   first);
 
-        // A file that becomes live after its session opened is refused from then on.
+        // A file that became live after its session opened, while that session has unsaved
+        // changes: two copies differ, so the call says what to do instead of picking one.
         server.bindProject(second);
         const auto later = server.call("query", file(second, R"(,"kind":"project")"));
-        expect(contains(later, "already open in Bloom"),
-               "a file opened in Bloom after its session opened is refused: " + later);
+        expect(contains(later, "has unsaved changes, so the two copies differ") &&
+                   contains(later, "discardChanges:true"),
+               "a file opened in Bloom after its session opened, with unsaved changes, says what "
+               "to do: " +
+                   later);
         const auto laterSave = server.call("project.save", file(second, ""));
-        expect(contains(laterSave, "already open in Bloom") && !contains(laterSave, R"("saved":true)"),
-               "project.save on it is refused too: " + laterSave);
+        expect(contains(laterSave, "already open in Bloom") &&
+                   !contains(laterSave, R"("saved":true)"),
+               "project.save of that session would overwrite Bloom's file and is refused: " +
+                   laterSave);
         const auto laterEdit = server.call(
             "transact", file(second, R"(,"expectedRevision":0,"operations":[{"op":)"
                                      R"("bloom.layer.add-solid","args":{"composition":1,)"
                                      R"("name":"Again","color":[0,1,0,1]}}])"));
-        expect(contains(laterEdit, "already open in Bloom"),
-               "and so is a later edit: " + laterEdit);
+        expect(contains(laterEdit, "two copies differ"), "and so is a later edit: " + laterEdit);
 
         // Closing the session writes nothing, so it still works.
         server.bindProject(live);

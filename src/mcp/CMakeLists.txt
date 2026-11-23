@@ -101,6 +101,23 @@ if(BUILD_TESTING)
         # #745: one case waits out the 30 s commit deadline.
         TIMEOUT 240
     )
+    # #775/#783/#784: projectFile sessions: their own export queue (progress, export.status,
+    # export.stop, export.wait, cancellation, close with a running job), the queue route's
+    # preservation report against Render::run for a ProRes movie and a PNG sequence, and a call for
+    # the window's own file that attaches to the live project.
+    add_executable(bloom_mcp_file_session_test tests/file_session_tests.cpp)
+    target_include_directories(bloom_mcp_file_session_test PRIVATE "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_mcp_file_session_test PRIVATE bloom_mcp)
+    if(TARGET bloom-media-worker)
+        add_dependencies(bloom_mcp_file_session_test bloom-media-worker)
+    endif()
+    bloom_enable_warnings(bloom_mcp_file_session_test)
+    bloom_add_test(
+        NAME bloom.mcp.file-sessions
+        COMMAND bloom_mcp_file_session_test
+        LABELS unit mcp
+        TIMEOUT 300
+    )
     # #747: asynchronous transact jobs, idempotency keys, retry advice and multi-parameter bulk
     # keys, on a live session whose owner thread the test runs.
     add_executable(bloom_mcp_transact_jobs_test tests/transact_jobs_tests.cpp)
