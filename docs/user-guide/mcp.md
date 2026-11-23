@@ -1133,6 +1133,14 @@ output is opaque; a nested composition never draws its own. The preservation rep
 `background=composition (opaque over composition background)`, and a queued output stores the same
 choice as `"background": "composition"` in its settings.
 
+The `preservationReport` of a `render` or `export` reads the same whichever route ran it, the
+export queue (the desktop application, the queue presets, and every `projectFile` session) or the
+scripted render (`bloom-cli render`, Python's `bloom.render`):
+`preset=<id>; exact-facets=<n>/<m>; approvable=<true|false>`, where `<id>` names the output
+preset (`PngRgba8SrgbV1`, `ProResMovV1`, `H264Mp4V1` ...), `exact-facets` counts the
+preservation facets the published output keeps exactly, and `approvable` says it was published
+without a failure; the background phrase above is appended when it applies.
+
 A movie's or WAV's `export` result, and its output's `verification` in `export.status`, list
 `streams`: `[{kind, codec, profile, width, height, frameRate, channels, sampleRate, bitrate}]` as
 read back from the written file (`frameRate` is `[numerator, denominator]`; `bitrate` is in bits

@@ -946,7 +946,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .choices = {{"transparent", "Keep alpha"},
                       {"composition", "Opaque over the composition's Background Color"}}}});
     render.result =
-        "{publishedFrames, preservationReport, gpuFrames|null, "
+        "{publishedFrames, preservationReport (\"preset=<id>; exact-facets=<n>/<m>; "
+        "approvable=<true|false>\", the same on the export queue and the scripted route), "
+        "gpuFrames|null, "
         "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
         "files:[{path, digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
         "language, title, format:\"srt\"|\"vtt\"|\"ttml\", path, cues, bytes, sha256}] "
@@ -1116,20 +1118,22 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .defaultValue = "transparent",
           .choices = {{"transparent", "Keep alpha"},
                       {"composition", "Opaque over the composition's Background Color"}}}});
-    exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
-                        "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
-                        "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
-                        "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
-                        "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
-                        "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
-                        "null when none was recorded), files:[{path, "
-                        "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
-                        "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
-                        "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
-                        "sidecar), streams?:[{kind:\"video\"|\"audio\", codec, profile, width, "
-                        "height, frameRate:[n, d] (video), channels, sampleRate (audio), "
-                        "bitrate (bits per second)}] (a movie or WAV, read back from the "
-                        "file)}";
+    exportTool.result =
+        "{publishedFrames, preservationReport (\"preset=<id>; exact-facets=<n>/<m>; "
+        "approvable=<true|false>\", the same on every route), workerMemory:{measured, peakBytes, "
+        "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
+        "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
+        "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
+        "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
+        "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
+        "null when none was recorded), files:[{path, "
+        "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
+        "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
+        "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
+        "sidecar), streams?:[{kind:\"video\"|\"audio\", codec, profile, width, "
+        "height, frameRate:[n, d] (video), channels, sampleRate (audio), "
+        "bitrate (bits per second)}] (a movie or WAV, read back from the "
+        "file)}";
     exportTool.errors = renderErrors;
     addExamples(
         exportTool,

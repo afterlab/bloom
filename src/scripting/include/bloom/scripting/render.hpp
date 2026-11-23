@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/document/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
 #include <bloom/host/export_worker_limits.hpp>
 #include <bloom/host/frame_range_runner.hpp>
@@ -142,5 +143,15 @@ class Render final {
         std::filesystem::path scratchDirectory = {},
         std::shared_ptr<host::GpuExportProvider> gpuProvider = {});
 };
+
+// #784: the preservation report of one verified export output, in the words Render::run (and so
+// bloom-cli render and Python's bloom.render) reports it: "preset=<id>; exact-facets=<n>/<m>;
+// approvable=<true|false>", and "; background=composition (opaque over composition background)"
+// when the frames were composited over the composition background. The export queue's transient
+// route (MCP render and export) builds its report with it, so both routes say the same for the
+// same output settings. `approvable` is whether the output was published without a failure.
+[[nodiscard]] std::string
+exportPreservationReport(const document::ExportOutputSettings& settings,
+                         const host::ExportOutputVerification& verification, bool approvable);
 
 } // namespace bloom::scripting

@@ -6,6 +6,7 @@
 #include <bloom/core/file_uri.hpp>
 #include <bloom/core/worker_thread.hpp>
 #include <bloom/host/export_presets.hpp>
+#include <bloom/scripting/render.hpp>
 
 #include <algorithm>
 #include <array>
@@ -867,10 +868,13 @@ TransientResult runTransientJob(McpServerCore::State& core, McpCall& call,
             for (const auto& output : view->outputs) {
                 if (!output.verification)
                     continue;
-                // #760: the preservation report says the output is opaque.
-                if (output.record.settings.background ==
-                    document::ExportBackground::CompositionColor)
-                    result.report = "background=composition (opaque over composition background)";
+                // #784: the same preservation report the scripted route (Render::run) gives for
+                // the same output settings, the #760 background phrase included.
+                const bool published =
+                    output.state == host::ExportOutputState::Published ||
+                    output.state == host::ExportOutputState::PublishedWithWarnings;
+                result.report = scripting::exportPreservationReport(
+                    output.record.settings, *output.verification, published);
                 result.frames += output.verification->artifacts.publishedArtifacts;
                 result.gpuFrames += output.verification->provenance.gpuFrames;
                 result.cpuReferenceFrames += output.verification->provenance.cpuReferenceFrames;
