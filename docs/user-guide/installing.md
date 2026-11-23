@@ -2,7 +2,7 @@
 
 Status: working
 
-Updated: 2026-11-17
+Updated: 2026-11-23
 
 Bloom is in alpha. This page is where you start. It covers getting Bloom, installing it on Linux,
 macOS and Windows, what to expect the first time you run it, how it updates, and how to remove it.
@@ -106,8 +106,15 @@ A silent install starts nothing. A silent uninstall is:
 not know yet. Choose **More info**, then **Run anyway**.
 
 **Updating.** An installed copy updates itself: Bloom checks (see Updates below), the update window
-downloads the next installer and runs it silently, and Bloom starts again. Bloom closes for the
-installer only when nothing is unsaved and nothing is running. A copy from the zip is not
+downloads the next installer and runs it, and Bloom starts again. Bloom closes for the installer
+only when nothing is unsaved and nothing is running. From the moment Bloom closes until the new
+version opens, a small **Updating Bloom** window shows the install's progress; it asks nothing.
+If you open Bloom yourself meanwhile, it brings that window to the front and does not start:
+the installer opens the new version when it is done. The installer always keeps the version it
+replaces beside the new one, for going back. When it cannot (for example because another program
+keeps a file in Bloom's folder open), it installs nothing and starts the version you have again,
+which shows an **Update** notice: "Bloom `<version>` could not be installed. The version you had
+is still installed and works as before." followed by the reason. A copy from the zip is not
 replaced. Bloom tells you where the next version is and changes nothing.
 
 **Uninstalling.** Remove Bloom in **Settings > Apps**, or run the silent uninstall command above.
@@ -210,7 +217,10 @@ it. When the download is done, **Restart and Update** closes Bloom, installs the
 it again. On macOS and Windows installs, the platform's updater shows its own window for the
 update. On macOS its **Install Update** does all of it: when the download is done, Bloom is
 asked to quit, asks you about unsaved work as it always does, and the new version is installed
-and opened.
+and opened. On Windows its **Install update** downloads the installer, closes Bloom, shows the
+**Updating Bloom** window while it installs, and opens the new version. The update window names
+the version you have as Bloom's About window does (for example `0.1.0-alpha.3`), and its release
+notes are dark text on a light background whatever your system's theme.
 
 Bloom verifies every update. It checks the signature on the list of releases, and then the size,
 the checksum and the signature of each file it downloads. If anything does not match, it installs

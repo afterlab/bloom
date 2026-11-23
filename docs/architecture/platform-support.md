@@ -662,22 +662,36 @@ For a deployment, the installer takes Inno Setup's own switches:
     Bloom-<version>-windows-x86_64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
         [/DIR="<folder>"] [/TASKS="addtopath"]
 
-The updater runs the same with `/RELAUNCH=1`, which starts Bloom again when the install is done.
-A silent install without it starts nothing. A silent uninstall is
+Bloom's updater runs it as `/SILENT /SUPPRESSMSGBOXES /NOCANCEL /NORESTART /NOCLOSEAPPLICATIONS
+/RELAUNCH=1` (`tools/release/release.py`, `INSTALLER_ARGUMENTS`): only the progress window,
+titled "Updating Bloom", from the moment Bloom closes until the new version opens; no question
+and no cancel; it never closes a Bloom; and `/RELAUNCH=1` starts Bloom again when the install is
+done (#788). A silent install without it starts nothing. A silent uninstall is
 `<folder>\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART`.
 
 A newer installer finds the installed Bloom by its fixed application id and upgrades it in
 place, in the same folder, with the same options. First it renames the installed folder to
 `<folder>.previous`, so the previous version is kept beside the new one: the update helper
 puts it back when the new version does not start ([ADR 0041](../decisions/0041-self-update.md)).
-When the folder cannot be renamed because a file in it is in use, the installer goes on over the
-existing folder and keeps no previous version. Uninstall removes the installation, the kept
+An update (`/RELAUNCH=1`) tries the rename for up to a minute while Bloom closes, and never goes
+on without it: when the folder stays in use it installs nothing. An update that installs nothing,
+fails or stops puts the installed version back in its place, leaves it the notice
+`update-failed` (the version and the reason) and starts it; that start shows the notice
+(`src/update/installer_activity.hpp`). An install that was not started by the updater goes on
+over a folder in use and keeps no previous version.
+
+While any run of the installer goes on it holds a mutex (`SetupMutex`). A Bloom opened by hand
+meanwhile brings the installer's window to the front and ends before it writes or holds anything,
+so it neither runs the version being replaced nor keeps its folder in use. The installer starts
+Bloom with `--started-by-installer`, the one start that goes on. The installer copies the files
+beside the program first, then `Bloom.exe`, then the folders, so a `Bloom.exe` opened during the
+copy always finds the libraries it starts with. Uninstall removes the installation, the kept
 previous version, the entries, the file type and the `Path` entry.
 
 The `bloom.package.installers` test (Windows only, because the installer is a Windows program)
 makes two installers from the built package under a test identity of its own: another
-application id and name, the file type `.bloomcheck<code>`, and the value
-`BloomPackageCheckPath<code>` in place of `Path`, where `<code>` is made from the test's work
+application id and name, the file type `.bloomcheck<code>`, the value
+`BloomPackageCheckPath<code>` in place of `Path`, and the mutex `BloomPackageCheckSetup<code>`, where `<code>` is made from the test's work
 folder, so the checks of two build trees running at once never find each other's install (#749). It installs the first silently with the PATH option, checks the files, the
 entries and the `.bloomcheck` keys, and renders a frame with `bloom-cli` from the installed
 `cli` folder. It installs the second over it and checks the upgrade, the kept previous version
