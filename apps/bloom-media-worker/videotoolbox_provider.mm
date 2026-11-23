@@ -43,6 +43,7 @@
 #include "ffmpeg_stream_color_tags.hpp"
 #include "ffmpeg_subtitle_tracks.hpp"
 #include "ffmpeg_written_streams.hpp"
+#include "movie_header_times.hpp"
 extern "C" {
 #include <libavutil/frame.h>
 #include <libavutil/pixfmt.h>
@@ -1040,6 +1041,19 @@ provider::EncodeQcV1 Encoder::State::finish() {
         if (file == nullptr || sized ||
             !ffmpeg::nameSubtitleTracks(file.get(), static_cast<std::uint64_t>(size), titles))
             throw Unavailable{Error::Io, "The subtitle track titles could not be written"};
+    }
+
+    // #785: AVAssetWriter stamps the movie, track and media headers with the time it finished;
+    // FFmpeg writes zero. Zero here too, so the same export is the same file on every platform
+    // and at every time (an export that reuses cached frames is identical to a fresh one).
+    {
+        std::unique_ptr<std::FILE, int (*)(std::FILE*)> file(std::fopen(path.c_str(), "r+b"),
+                                                             &std::fclose);
+        std::error_code sized;
+        const auto size = std::filesystem::file_size(path, sized);
+        if (file == nullptr || sized ||
+            !container::clearMovieHeaderTimes(file.get(), static_cast<std::uint64_t>(size)))
+            throw Unavailable{Error::Io, "The movie header times could not be written"};
     }
 
     // Reopen the artifact with the macOS reader and check what it actually holds. Tolerance

@@ -98,8 +98,9 @@ if(bloom_ffmpeg_worker)
     # text track's enabled flag), for the reopen check of both provider builds. #761: the written
     # streams' facts (codec, profile, size, rate, channels, bit rate) for the same reopen.
     # #771: the loudness and true peak of the written sound, for the same reopen.
+    # #785: the movie header times a finished movie carries, written as zero on every platform.
     add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp
-                ffmpeg_written_streams.cpp ffmpeg_audio_loudness.cpp)
+                ffmpeg_written_streams.cpp ffmpeg_audio_loudness.cpp movie_header_times.cpp)
     target_include_directories(bloom_media_ffmpeg_subtitle_tracks
                                PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(bloom_media_ffmpeg_subtitle_tracks PUBLIC cxx_std_20)
@@ -388,6 +389,13 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_dependencies(bloom_media_subtitle_encode_test bloom-media-worker)
     bloom_add_test(NAME bloom.media.subtitle-encode COMMAND bloom_media_subtitle_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/subtitle-encode" LABELS unit media TIMEOUT 120)
+    # #785: a finished movie's header times are zero on every platform (the macOS system writer
+    # stamps the time it finished; FFmpeg writes zero).
+    add_executable(bloom_media_movie_header_times_test tests/movie_header_times_tests.cpp)
+    target_link_libraries(bloom_media_movie_header_times_test PRIVATE bloom_media_ffmpeg_subtitle_tracks)
+    bloom_enable_warnings(bloom_media_movie_header_times_test)
+    bloom_add_test(NAME bloom.media.movie-header-times COMMAND bloom_media_movie_header_times_test
+                   "${CMAKE_CURRENT_BINARY_DIR}/movie-header-times" LABELS unit media TIMEOUT 60)
     set_tests_properties(bloom.media.subtitle-encode PROPERTIES SKIP_RETURN_CODE 77)
     # #752: subtitle sidecars and embedded tracks end to end through the export queue, each
     # reopened (sidecars parsed back, embedded tracks read by FFmpeg) and compared frame by frame.

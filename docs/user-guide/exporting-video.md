@@ -165,7 +165,9 @@ setting off to render every frame again.
 - **ProRes** is written by the system's encoder on macOS. If the system refuses an export, Bloom
   asks whether to write it with its own FFmpeg encoder instead, and does not switch without
   asking. On Linux and Windows, and on macOS with the encoder set to **Software**, ProRes is
-  written by FFmpeg; that is not an Apple-authorized ProRes implementation.
+  written by FFmpeg; that is not an Apple-authorized ProRes implementation. Whoever writes it, a
+  movie's header records no creation or modification time (both are zero), so exporting the same
+  frames and sound again, or on another day, gives the same file.
 - The **VFX handoff** and **Review H.264** deliverables need the built-in ACES CG configuration
   with a pinned revision.
 - **DPX** sequences are 10-bit or 16-bit RGB files, one per frame, with no alpha (the color is what

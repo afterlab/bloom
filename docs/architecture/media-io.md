@@ -324,6 +324,11 @@ is not declared by this provider and goes to FFmpeg.
   (`reopenedPcm`); one wrong sample or one sample frame too few or too many fails the export
   with `Reopened PCM samples differ` or `Reopened audio sample count differs`. AAC written by
   the system encoder is checked for its layout only; what it decodes to is not compared.
+  AVAssetWriter stamps the movie, track and media headers (`mvhd`, `tkhd`, `mdhd`) with the
+  time it finished; before the reopen the worker writes those creation and modification times as
+  zero (`container::clearMovieHeaderTimes`, `movie_header_times.cpp`), as FFmpeg writes them, so
+  the same export is the same file on every platform and at every time (#785: an export that
+  reuses cached frames is byte-identical to a fresh one).
 
 - **Who encodes.** The export's encoder setting decides
   (`host::exportHardwareRoute`, `EncodeSessionOptionsV1::platformEncoder`). Automatic: ProRes is
