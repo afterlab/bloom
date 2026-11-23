@@ -2,7 +2,8 @@
 export with the same sentence and the same classification.
 
 Python render: `diagnostic_code` is "media-source-unavailable". bloom-cli render: the error line is
-`error[bloom-cli.render.media-source-unavailable]`. The stdio MCP export: `ExportFailed` with the
+`error[bloom-cli.render.media-source-unavailable]`; bloom-cli export: the error line is
+`error[bloom-cli.export.media-source-unavailable]`. The stdio MCP export: `ExportFailed` with the
 detail `export.media.unavailable`. Each sentence names the file, says to restore or relink it, and
 never calls the stop a bug in Bloom. Nothing is published.
 
@@ -238,6 +239,12 @@ class Cli(unittest.TestCase):
                           if event.get('type') == 'failed']
                 self.assertEqual(len(failed), 1, export.stdout)
                 assert_plain_sentence(self, failed[0]['reason'], 'bloom-cli export')
+                # The same class as the render line and MCP's export.media.unavailable, with the
+                # failed event's sentence.
+                lines = [line for line in export.stderr.splitlines() if line.startswith('error[')]
+                self.assertEqual(
+                    lines, ['error[bloom-cli.export.media-source-unavailable]: ' +
+                            failed[0]['reason']], export.stderr)
                 self.assertNotIn('bug in Bloom', export.stdout + export.stderr)
                 self.assertFalse((root / 'saved' / 'shot.mov').exists(), 'nothing is published')
 

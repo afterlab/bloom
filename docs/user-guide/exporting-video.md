@@ -366,7 +366,10 @@ verification and import results as JSON; `--job <id>` selects jobs, `--replace` 
 destinations, and `--save` writes asset imports back to the project; each movie's and WAV's
 written streams are part of the JSON. `bloom-cli render` and `export` take
 `--subtitles srt,vtt,ttml`, `--embed-subtitles` and `--subtitle-nodes` for the subtitle tracks,
-and `bloom-cli render --background composition` renders over the composition's Background Color. See
+and `bloom-cli render --background composition` renders over the composition's Background Color. A
+job that fails prints its message as `error[bloom-cli.export.failed]`, or as
+`error[bloom-cli.export.media-source-unavailable]` when a source file changed, moved or was deleted,
+as `bloom-cli render` prints it, and exits with status 6. See
 [headless scripting](scripting.md) and [MCP](mcp.md). **Copy as bloom-cli Command** and **Copy as Python** on a job's context
 menu produce a script that recreates the job and starts it.
 

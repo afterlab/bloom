@@ -511,8 +511,17 @@ struct OpenFrameRange final {
         for (const auto& view : snapshot->jobs)
             if (std::ranges::find(jobs, view.id) != jobs.end() &&
                 view.state != bloom::host::ExportJobState::Done &&
-                view.state != bloom::host::ExportJobState::DoneWithWarnings)
+                view.state != bloom::host::ExportJobState::DoneWithWarnings) {
                 status = 6;
+                // A failed job's sentence with its class, in the form bloom-cli render uses: a
+                // changed, moved or deleted source file is classed as MCP and Python class it
+                // (#790). The job's failed event in the JSON carries the same sentence.
+                if (view.failure)
+                    std::cerr << (view.failure->diagnosticCode == "export.media.unavailable"
+                                      ? "error[bloom-cli.export.media-source-unavailable]: "
+                                      : "error[bloom-cli.export.failed]: ")
+                              << view.failure->reason << '\n';
+            }
         std::cout << scripting::exportEventsJson(service.events(0)) << '\n';
     }
     if (!original.empty()) {
