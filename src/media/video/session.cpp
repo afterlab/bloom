@@ -588,7 +588,97 @@ bool releaseRetainedForCapture() {
 Unavailable sourceChanged() {
     return Unavailable{Error::SourceChanged, "Video changed; relink the asset in Assets"};
 }
+// #772: one capture of a source at a time. Parallel sessions of one source (an intra-only movie
+// decoded for several frames at once) share one snapshot, and a caller sizes its file quota by
+// sources on that contract (VideoSourceContext); two first captures racing would hold two files of
+// one source. A capture of a path while another capture of the same path in the same composition
+// root runs waits for it, cancellably, and then takes the snapshot it produced.
+struct CaptureFlight final {
+    std::filesystem::path path;
+    const void* domain = nullptr;
+    bool done = false;
+    std::weak_ptr<const platform::ReadOnlyFileSnapshot> result;
+};
+struct CaptureFlights final {
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::vector<std::shared_ptr<CaptureFlight>> active;
+    std::size_t waiting = 0;
+};
+CaptureFlights& captureFlights() {
+    static CaptureFlights value;
+    return value;
+}
+// A caller's turn to capture a path: it leads the capture, or another caller's capture of the
+// same source ended and produced the snapshot to share, or the wait was cancelled.
+class CaptureTurn final {
+  public:
+    CaptureTurn(const std::filesystem::path& path, const void* domain, const Cancel& cancel) {
+        auto& flights = captureFlights();
+        std::unique_lock lock(flights.mutex);
+        for (;;) {
+            const auto found = std::ranges::find_if(flights.active, [&](const auto& flight) {
+                return !flight->done && flight->domain == domain && flight->path == path;
+            });
+            if (found == flights.active.end()) {
+                led_ = std::make_shared<CaptureFlight>();
+                led_->path = path;
+                led_->domain = domain;
+                flights.active.push_back(led_);
+                return;
+            }
+            const auto flight = *found;
+            ++flights.waiting;
+            while (!flight->done && !(cancel && cancel()))
+                flights.changed.wait_for(lock, std::chrono::milliseconds(20));
+            --flights.waiting;
+            if (!flight->done) {
+                cancelled_ = true;
+                return;
+            }
+            if (auto result = flight->result.lock()) {
+                shared_ = std::move(result);
+                return;
+            }
+            // That capture failed: this caller captures (or joins one that started meanwhile).
+        }
+    }
+    CaptureTurn(const CaptureTurn&) = delete;
+    CaptureTurn& operator=(const CaptureTurn&) = delete;
+    ~CaptureTurn() {
+        if (!led_)
+            return;
+        auto& flights = captureFlights();
+        {
+            const std::lock_guard lock(flights.mutex);
+            led_->done = true;
+            std::erase(flights.active, led_);
+        }
+        flights.changed.notify_all();
+    }
+    [[nodiscard]] bool cancelled() const noexcept { return cancelled_; }
+    [[nodiscard]] const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& shared() const {
+        return shared_;
+    }
+    // The led capture's snapshot, for the callers waiting on it.
+    void produced(const std::shared_ptr<const platform::ReadOnlyFileSnapshot>& snapshot) {
+        if (led_) {
+            const std::lock_guard lock(captureFlights().mutex);
+            led_->result = snapshot;
+        }
+    }
+
+  private:
+    std::shared_ptr<CaptureFlight> led_;
+    std::shared_ptr<const platform::ReadOnlyFileSnapshot> shared_;
+    bool cancelled_ = false;
+};
 } // namespace
+std::size_t sourceCapturesWaiting() {
+    auto& flights = captureFlights();
+    const std::lock_guard lock(flights.mutex);
+    return flights.waiting;
+}
 std::size_t retainedSourceSnapshotCount() {
     auto& registry = sharedSnapshots();
     const std::lock_guard lock(registry.mutex);
@@ -728,6 +818,22 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
                 *access.retained = true;
             return shared;
         }
+    // #772: one capture of a source at a time; a capture of the same source that ran meanwhile is
+    // shared, as its sessions share one snapshot.
+    CaptureTurn turn(state_->path, state_->retirement.get(), cancel);
+    if (turn.cancelled())
+        return Unavailable{Error::Cancelled, "Video source capture cancelled while another capture "
+                                             "of the same source was running"};
+    if (const auto& shared = turn.shared(); shared && (!claimed || shared->digest() == *claimed)) {
+        if (access.policy == SourceRevisionPolicy::Revalidate)
+            if (const auto refused = proved(*shared))
+                return *refused;
+        if (access.allowRetention)
+            state_->revision = shared;
+        if (access.retained)
+            *access.retained = true;
+        return shared;
+    }
     auto captured = capture();
     const auto quotaFull = [&captured] {
         const auto* refused = std::get_if<platform::ProcessFailure>(&captured);
@@ -830,6 +936,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     if (access.allowRetention) {
         state_->revision = result;
         publishShared(result, state_->retirement, state_->privateQuota);
+        turn.produced(result);
     }
     return result;
 }

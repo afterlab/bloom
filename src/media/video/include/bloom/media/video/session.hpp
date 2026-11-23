@@ -35,6 +35,9 @@ inline constexpr std::chrono::seconds kRetainedSourceSnapshotIdle{120};
 [[nodiscard]] std::size_t retainedSourceSnapshotCount();
 // Drops every retained snapshot (cache purge, tests). Live sessions keep their own.
 void releaseRetainedSourceSnapshots();
+// #772: the captures waiting now for another capture of the same source (same path, same
+// composition root) to end so they can share its snapshot. Tests hold that capture until one waits.
+[[nodiscard]] std::size_t sourceCapturesWaiting();
 struct SourceRevisionAccess final {
     SourceRevisionPolicy policy = SourceRevisionPolicy::Revalidate;
     bool allowRetention = true;

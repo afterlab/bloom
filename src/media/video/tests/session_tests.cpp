@@ -1074,10 +1074,79 @@ void snapshotQuotaWait(const std::filesystem::path& directory) {
     check(quota->residentFiles() == 1 && quota->releasesPending() == 0,
           "quota wait: one file is held and nothing is pending");
 }
+// #772: two sessions of one source that capture at once share one snapshot: the second waits,
+// cancellably, for the first capture to end and takes its snapshot, so a quota sized by sources
+// (one file per source) holds. The first capture is held on a full quota until the second is
+// waiting for it; nothing here depends on timing.
+void sharedSourceCapture(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    const auto quota = std::make_shared<bloom::platform::FileSnapshotQuota>(1ULL << 36U, 1);
+    auto holder = std::make_unique<video::VideoDecodeSession>(
+        directory / "numbered-h264.mp4", video::VideoDecodeSession::defaultWorker(), quota);
+    check(std::holds_alternative<provider::ProbeResult>(holder->probe()),
+          "shared capture: the holding source probes");
+    std::optional<provider::ProbeResult> probe;
+    {
+        video::VideoDecodeSession reader(directory / "numbered-prores.mov");
+        const auto probed = reader.probe();
+        check(std::holds_alternative<provider::ProbeResult>(probed),
+              "shared capture: the source probes on its own");
+        probe = std::get<provider::ProbeResult>(probed);
+    }
+    video::releaseRetainedSourceSnapshots();
+    const auto stream = std::ranges::find(probe->streams, provider::MediaKind::Video,
+                                          &provider::StreamDescriptor::kind);
+    check(stream != probe->streams.end(), "shared capture: the source has a video stream");
+    const auto source = directory / "numbered-prores.mov";
+    video::VideoDecodeSession first(source, video::VideoDecodeSession::defaultWorker(), quota);
+    video::VideoDecodeSession second(source, video::VideoDecodeSession::defaultWorker(), quota);
+    video::VideoDecodeSession third(source, video::VideoDecodeSession::defaultWorker(), quota);
+    const auto decode = [&](video::VideoDecodeSession& session, const std::uint64_t frame,
+                            const video::Cancel& cancel) {
+        return session.frame(*probe, stream->id, frame, 0, nullptr, {}, {}, provider::Digest{},
+                             cancel, {});
+    };
+    const auto until = [](const auto& ready) {
+        while (!ready())
+            std::this_thread::yield();
+    };
+    using Outcome = decltype(decode(first, 0, {}));
+    std::optional<Outcome> leading, cancelled, following;
+    // The first capture waits on the full quota for the holder's announced release.
+    quota->expectRelease();
+    std::thread leader([&] { leading = decode(first, 0, {}); });
+    until([&] { return quota->waitingForRelease() > 0; });
+    // A second capture of the same source waits for the first; cancelling it ends its wait.
+    std::atomic_bool cancel{false};
+    std::thread dropped([&] { cancelled = decode(second, 1, [&] { return cancel.load(); }); });
+    until([] { return video::sourceCapturesWaiting() > 0; });
+    cancel = true;
+    dropped.join();
+    const auto* refused = cancelled ? std::get_if<provider::Unavailable>(&*cancelled) : nullptr;
+    check(refused != nullptr && refused->reason == provider::Error::Cancelled &&
+              refused->detail.find("another capture of the same source") != std::string::npos,
+          "shared capture: a capture waiting for another is cancellable and says why");
+    // A third waits for the first, which then gets its file; both decode from the one snapshot.
+    std::thread follower([&] { following = decode(third, 1, {}); });
+    until([] { return video::sourceCapturesWaiting() > 0; });
+    check(quota->residentFiles() == 1, "shared capture: the holder still has the one file");
+    holder.reset();
+    quota->releaseExpected();
+    leader.join();
+    follower.join();
+    using Decoded = std::shared_ptr<const provider::FrameProduct>;
+    check(leading && std::holds_alternative<Decoded>(*leading),
+          "shared capture: the first capture decodes once the quota has room");
+    check(following && std::holds_alternative<Decoded>(*following),
+          "shared capture: the waiting capture decodes from the first one's snapshot");
+    check(quota->residentFiles() == 1 && video::sourceCapturesWaiting() == 0,
+          "shared capture: one source holds one file under a one-file quota");
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
         waiterAdmission();
+        sharedSourceCapture(argv[1]);
         run(argv[1]);
         retainedRouting(argv[1]);
         decodeAhead(argv[1]);
