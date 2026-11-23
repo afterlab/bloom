@@ -205,14 +205,16 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- v0.1.0-alpha.3 was released on 2026-11-23: subtitles, styled and animated text, filtered scaling, Image
-  Switch and exports that state their codecs. v0.1.0-alpha.2 was released on 2026-11-20: large
+- v0.1.0-alpha.4 is in preparation: exports with many audio and movie layers, the true-peak limit
+  in delivered AAC and Opus files, MCP export from a project file, and a clearer Windows update.
+  v0.1.0-alpha.3 was released on 2026-11-23: subtitles, styled and animated text, filtered scaling,
+  Image Switch and exports that state their codecs. v0.1.0-alpha.2 was released on 2026-11-20: large
   projects that always save, agent work over MCP that stays quiet and keeps the window responsive
   at scale, and crash reports kept on the user's machine
   ([crash reports](user-guide/crash-reports.md)). v0.1.0-alpha.1, the first alpha, was
   released on 2026-11-17 with installers for every platform and updates inside Bloom
-  ([installing](user-guide/installing.md)). The three node groups come next, then tests and
-  performance. The [roadmap](roadmap.md) holds the order.
+  ([installing](user-guide/installing.md)). Weekly alphas follow to 1.0.0. The
+  [roadmap](roadmap.md) holds the plan.
 - Projects save, open and round-trip through the deterministic `.bloom` container, with one
   current document schema, preserved unknown data and the File menu driving it
   ([project format](architecture/project-format.md),
