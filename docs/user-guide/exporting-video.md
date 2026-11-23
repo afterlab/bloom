@@ -231,6 +231,12 @@ memory other active work holds (after Bloom's caches gave back theirs), the job 
 memory** with the amount needed. Waiting and paused time do not count toward the export's time
 limits. Neither is a fault.
 
+A composition can have any number of audio layers. An export decodes a sound only while the
+exported range plays it: a layer that is silent over the range is never read, and a sound that has
+stopped playing gives its memory back a second later. If the memory for a sound is still refused,
+the job fails with a message that names the audio asset, the bytes it needed and the limit that
+refused them, for example "the processing memory has 1048576 of 134217728 bytes free".
+
 **Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
 the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).
 With a cap set, a job that reaches it waits for the worker instead of using more memory, and fails
