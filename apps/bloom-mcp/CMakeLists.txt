@@ -125,6 +125,14 @@ if(BUILD_TESTING AND Python3_Interpreter_FOUND)
             $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
         LABELS scripting mcp python integration
         TIMEOUT 180)
+    # #766/#769: a render or export without first/last covers the composition's range, and
+    # bloom.export.add-job takes its outputs as objects, through MCP, Python and bloom-cli.
+    bloom_add_test(NAME bloom.scripting.export-arguments-parity
+        COMMAND "${Python3_EXECUTABLE}" -I
+            "${PROJECT_SOURCE_DIR}/tests/fixtures/scripting/export_arguments_parity.py"
+            $<TARGET_FILE:bloom-mcp> $<TARGET_FILE:bloom-cli> "${bloom_reference_python}"
+        LABELS scripting mcp python integration
+        TIMEOUT 180)
     # #757: a styled Text Source and bloom.layer.stroke-outline through MCP, Python and bloom-cli
     # run: one transact builds an accent-word outlined caption, and every surface strokes the
     # letters into the node menu's graph.
