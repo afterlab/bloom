@@ -55,12 +55,38 @@ bool representableImageExtent(const std::uint32_t width, const std::uint32_t hei
     const auto pixels = static_cast<std::uint64_t>(width) * height;
     return pixels <= std::numeric_limits<std::size_t>::max() / (4U * sizeof(float));
 }
+// The pattern with its number run and extension removed, and the separator that joined them to
+// the number dropped: "plate.####.exr" is "plate"; "left####_eye.png" is "left_eye".
+std::string sequenceBaseName(const std::string& pattern) {
+    const auto run = pattern.find('#');
+    if (run == std::string::npos)
+        return {};
+    auto end = run;
+    while (end < pattern.size() && pattern[end] == '#')
+        ++end;
+    auto prefix = pattern.substr(0, run);
+    auto suffix = pattern.substr(end);
+    if (const auto dot = suffix.find_last_of('.'); dot != std::string::npos)
+        suffix.resize(dot);
+    constexpr std::string_view separators = "._- ";
+    if (suffix.empty()) {
+        while (!prefix.empty() && separators.find(prefix.back()) != std::string_view::npos)
+            prefix.pop_back();
+    }
+    return prefix + suffix;
+}
 } // namespace
 std::string defaultAssetName(const AssetRecord& asset) {
     // Builtin font locators name a captured face, not a file (for example embedded/0).
     if (asset.kind == AssetKind::Font && asset.locator.portability == "builtin" &&
         !asset.fontFamily.empty())
         return asset.fontFamily + (asset.fontStyle.empty() ? "" : " " + asset.fontStyle);
+    // #773: a sequence is named after its pattern ("plate.####.exr" is "plate"), not after the
+    // first numbered file it happens to start with.
+    if (asset.kind == AssetKind::Sequence) {
+        if (auto base = sequenceBaseName(asset.manifest.pattern); !base.empty())
+            return base;
+    }
     auto name = asset.locator.path.substr(asset.locator.path.find_last_of("/\\") + 1);
     if (asset.locator.kind == "file" && asset.locator.portability == "external") {
         if (const auto resolved = core::absolutePathFromFileUri(asset.locator.path)) {

@@ -19,6 +19,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -1617,6 +1618,64 @@ double roleNumber(yyjson_val* entry, const char* group, const char* role) {
 std::string text(yyjson_val* value, const char* key) {
     const auto* found = yyjson_get_str(yyjson_obj_get(value, key));
     return found ? std::string(found) : std::string{};
+}
+
+// #773: a ranged image-sequence import is named after the sequence and reports the frames the range
+// kept, with its numbered span; a layer made from it is as long as those frames.
+void rangedSequenceImportQuery() {
+    Headless server;
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom-mcp-ranged-sequence";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    // A 1x1 RGBA PNG; every frame has these bytes.
+    constexpr std::array<unsigned char, 70> pixel{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f, 0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47,
+        0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    for (int frame = 1; frame <= 6; ++frame) {
+        std::ofstream out(directory / ("plate." + std::to_string(1000 + frame).substr(1) + ".png"),
+                          std::ios::binary);
+        out.write(reinterpret_cast<const char*>(pixel.data()), pixel.size());
+    }
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.asset.import","args":{"paths":[")" +
+                           (directory / "plate.001.png").generic_string() +
+                           R"("],"firstFrame":2,"lastFrame":5}})");
+    const auto asset = outputId(result, "asset");
+    expect(asset != 0, "the ranged sequence imports: " + result);
+    const JsonResponse read(server.call("query", R"({"kind":"assets"})"));
+    yyjson_val* record = nullptr;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(read.content(), "records"));
+    while (auto* candidate = yyjson_arr_iter_next(&iter))
+        if (yyjson_get_uint(yyjson_obj_get(candidate, "id")) == asset)
+            record = candidate;
+    expect(record != nullptr, "the imported asset is listed");
+    if (record == nullptr)
+        return;
+    expect(text(record, "name") == "plate", "a ranged sequence is named after its base name: " +
+                                                text(record, "name"));
+    expect(text(record, "kind") == "sequence", "the asset is a sequence");
+    expect(yyjson_get_uint(yyjson_obj_get(record, "frames")) == 4,
+           "the asset reports the 4 frames its range kept");
+    expect(yyjson_get_sint(yyjson_obj_get(record, "firstFrame")) == 2 &&
+               yyjson_get_sint(yyjson_obj_get(record, "lastFrame")) == 5,
+           "the asset reports its first and last numbered frame");
+    // A layer made from it is as long as the frames the range kept (4), not the composition.
+    result = transact(R"({"op":"bloom.layer.add-from-assets","args":{"assets":[)" +
+                      std::to_string(asset) + R"(],"composition":1,"time":0}})");
+    const auto layer = outputId(result, "layer");
+    expect(layer != 0, "a layer is made from the ranged sequence: " + result);
+    const JsonResponse layers(server.call("query", R"({"kind":"layers","composition":1})"));
+    auto* row = layerRecord(layers.content(), layer);
+    auto* end = row == nullptr ? nullptr : yyjson_obj_get(row, "end");
+    expect(end != nullptr && yyjson_get_sint(yyjson_obj_get(end, "frames")) == 4,
+           "the layer is 4 frames long: " + (end ? std::string(yyjson_val_write(end, 0, nullptr)) : "none"));
+    std::filesystem::remove_all(directory);
 }
 
 // #646: a project that already holds an image layer made from an SVG asset (before an SVG asset could
@@ -3535,6 +3594,7 @@ int main() {
         fileSessionsBesideALiveProject();
         mergeEntryReadBack();
         svgFootageWarningQuery();
+        rangedSequenceImportQuery();
         nodeOutputsQuery();
         fieldTestArguments();
         gradientReadBack();

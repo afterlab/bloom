@@ -668,7 +668,16 @@ yyjson_mut_val* assetRecord(Json& out, const document::AssetRecord& asset) {
     out.set(record, "path", out.text(asset.locator.path));
     out.set(record, "width", out.number(asset.width));
     out.set(record, "height", out.number(asset.height));
-    out.set(record, "frames", out.number(asset.frames));
+    // #773: a sequence's length is its member count under its Interpret Footage rules, and its
+    // numbered span is reported beside it. Other kinds keep the probed frame count.
+    const bool sequence = asset.kind == document::AssetKind::Sequence;
+    out.set(record, "frames",
+            out.number(sequence ? document::footageFrameCount(asset) : asset.frames));
+    if (sequence) {
+        out.set(record, "firstFrame", out.signedNumber(asset.manifest.first));
+        out.set(record, "lastFrame", out.signedNumber(asset.manifest.last));
+        out.set(record, "pattern", out.text(asset.manifest.pattern));
+    }
     const auto digest = asset.contentDigest.toLowercaseHex();
     out.set(record, "digest", out.text("sha256:" + std::string(digest.data(), digest.size())));
     out.set(record, "folder", asset.folder ? out.number(asset.folder->value()) : out.null());
