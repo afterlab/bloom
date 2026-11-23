@@ -934,6 +934,36 @@ void retiredTransientJobs() {
     if (held.valid() && held.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
         static_cast<void>(held.get());
 
+    // #766: the live route renders the composition's whole range when first and last are left
+    // out, and one given end takes the composition's own for the other.
+    {
+        const auto compositions = server.call("query", R"({"kind":"compositions"})");
+        std::smatch frames;
+        const bool known = std::regex_search(
+            compositions, frames, std::regex(R"re("duration":\{"frames":([0-9]+))re"));
+        const auto count = known ? std::stoull(frames[1].str()) : 0ULL;
+        expect(count > 3, "the fixture composition has more than three frames: " + compositions);
+        const auto rangeOf = [&](const std::string& extra) {
+            const auto answer =
+                server.call("render", R"({"composition":1,"preset":"PngRgba8SrgbV1","destination":")" +
+                                          (captures / "span.png").generic_string() + '"' + extra +
+                                          "}");
+            const auto spanJob = std::to_string(jobOf(answer));
+            return std::pair{contains(answer, R"("isError":false)") && spanJob != "0",
+                             server.call("export.status", "{}")};
+        };
+        const auto last = std::to_string(count - 1);
+        const auto whole = rangeOf("");
+        expect(whole.first && contains(whole.second, R"("range":{"first":0,"last":)" + last + "}"),
+               "render without first and last covers the whole composition: " + whole.second);
+        const auto tail = rangeOf(R"(,"first":2)");
+        expect(tail.first && contains(tail.second, R"("range":{"first":2,"last":)" + last + "}"),
+               "render with only first runs to the composition's last frame: " + tail.second);
+        const auto head = rangeOf(R"(,"last":1)");
+        expect(head.first && contains(head.second, R"("range":{"first":0,"last":1})"),
+               "render with only last starts at the composition's first frame: " + head.second);
+    }
+
     fake->push({.writeDestinations = true});
     const auto capture = server.call("capture", R"({"composition":1,"frame":0})");
     const auto captureJob = jobOf(capture);
