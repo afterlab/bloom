@@ -1122,7 +1122,10 @@ too; a capture on `bloom-mcp` renders without a queue job and has neither. While
 `export.status` lists it in `jobs` with `transient: true`.
 
 A failed `render`, `export` or `capture` answers `bloom.mcp.export-failed` with the export's own
-failure code as `diagnostic.detail` and a message that names the frame and why. A frame that takes
+failure code as `diagnostic.detail` and a message that names the frame and why: for example
+`export.media.unavailable` for a source file that changed, moved or was deleted, and
+`export.media.resource-limit` for a source a resource limit refused (the quota of movie source
+copies was full; the message names the copies, bytes and limit). A frame that takes
 long to render is never failed for being slow: the frame publishes once it is ready, and only the
 export's own limits stop it (120 seconds without progress in a writer, 24 hours for one export),
 with `export.publication.timeout` and the limit in the message. `export.publication.memory` means

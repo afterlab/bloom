@@ -270,9 +270,11 @@ than playing the hole as silence.
 
 **Many movie layers.** An export reads every movie its frames show, however many play at once; each
 movie's source copy is kept while its layer is in the range and given back as soon as the layer
-ends. If a movie has to wait for another's copy to close, the export waits (you can stop it) and the
-log says which movie waited and for how long. If the disk has no room for the copies, the export
-stops and names the files and space it needed.
+ends. Frames rendered side by side share one copy of each movie. If a movie has to wait for another's
+copy to close, the export waits (you can stop it) and the log says which movie waited and for how
+long. If the disk has no room for the copies, the export stops with a sentence that names the movie,
+the copies and space held, the limit and what the movie needed, and says it is a resource limit, not
+a changed or missing file (diagnostic code `export.media.resource-limit`).
 
 **Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
 the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).
@@ -369,7 +371,8 @@ written streams are part of the JSON. `bloom-cli render` and `export` take
 and `bloom-cli render --background composition` renders over the composition's Background Color. A
 job that fails prints its message as `error[bloom-cli.export.failed]`, or as
 `error[bloom-cli.export.media-source-unavailable]` when a source file changed, moved or was deleted,
-as `bloom-cli render` prints it, and exits with status 6. See
+or as `error[bloom-cli.export.media-resource-limit]` when a resource limit refused a source (the
+movie copies' quota was full), as `bloom-cli render` prints them, and exits with status 6. See
 [headless scripting](scripting.md) and [MCP](mcp.md). **Copy as bloom-cli Command** and **Copy as Python** on a job's context
 menu produce a script that recreates the job and starts it.
 

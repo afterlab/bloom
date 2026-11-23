@@ -2685,7 +2685,12 @@ context keeps its idle eight. A released snapshot closes on its retirement lane 
 capture its quota refuses meanwhile waits for that close (`FileSnapshotQuota::expectRelease`,
 cancellable), counts the wait in its source work, and the pass notes it for the export log
 (`LinearPassRetention::takeVideoSnapshotWaits`). With nothing closing, a full quota fails at once and
-names its files and bytes. `DecodedVideoCache` has a
+names its files and bytes; that refusal (`media::provider::Error::Oversized`) reaches a final render
+as `EvaluationDiagnosticCode::MediaResourceLimit` and an export as `export.media.resource-limit`,
+never as a changed source. The file quota counts sources because one source's sessions share one
+snapshot: a capture of a path while another capture of the same path in the same composition root
+runs waits for it (cancellably; `sourceCapturesWaiting`) and takes its snapshot, so parallel frames
+reading one intra-only movie never hold two copies of it. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,
 interpretation, color identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
 setting, or automatically usable memory, the ceiling every automatic reusable pool has (ADR 0037:

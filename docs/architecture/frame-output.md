@@ -377,7 +377,10 @@ approve anything, its dependent worker stages perform, in order:
    `export.media.unavailable`; "This is a bug in Bloom" is kept for internal faults only; a source that
    changes while the export runs stops it at the first frame that reads it, with the same sentence and
    code, and nothing is published; bloom.scripting.media-source-unavailable-parity and
-   bloom.host.export-changed-source hold this); Shuffle and
+   bloom.host.export-changed-source hold this). A source a resource limit refused (the video source
+   snapshot quota is full) fails with `MediaResourceLimit` instead: the sentence names the asset,
+   the files, bytes and limit and says it is not a changed file, with `export.media.resource-limit`
+   (#772; bloom.host.export-movie-layers holds this); Shuffle and
    Cryptomatte, which read several sources through channel expressions, name the first source that
    failed. A preview `Retained` request never carries source availability authority into final
    output. Any future exact `ProcessFrame` reuse must first revalidate every media dependency from

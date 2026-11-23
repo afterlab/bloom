@@ -105,8 +105,12 @@ refused before it is written. `--require-device` covers the PNG and OpenEXR pres
 
 A render stopped because a source file changed, moved or was deleted names the file and says to
 restore it or relink it in Assets; the command prints it as
-`error[bloom-cli.render.media-source-unavailable]`, and Python's `bloom.render` result carries
-`diagnostic_code` `"media-source-unavailable"`.
+`error[bloom-cli.render.media-source-unavailable]`, `bloom-cli export` prints a failed job's
+sentence as `error[bloom-cli.export.media-source-unavailable]`, and Python's `bloom.render` result
+carries `diagnostic_code` `"media-source-unavailable"`. A render stopped because a resource limit
+refused a source (the quota of movie source copies was full) names the file, the copies and bytes
+held and the limit, and says it is not a changed file: `error[bloom-cli.render.media-resource-limit]`,
+`error[bloom-cli.export.media-resource-limit]` and `diagnostic_code` `"media-resource-limit"`.
 
 Example scripts live in [`examples/scripting`](../../examples/scripting/).
 
