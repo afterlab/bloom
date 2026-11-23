@@ -3,6 +3,7 @@
 #include <bloom/output/output_export_resource_ledger.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
 #include <bloom/runtime/task_scheduler.hpp>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -11,8 +12,16 @@ namespace bloom::output {
 struct AudioLoudnessTargetV1 final {
     // Integrated loudness in LUFS (EBU R128 / ITU-R BS.1770).
     double targetLufs = -16.0;
-    // The true-peak ceiling in dBTP.
+    // The true-peak ceiling in dBTP. It holds in the delivered file (#771), not only in what the
+    // encoder is given.
     double truePeakDbtp = -1.0;
+    // #771: extra room under `truePeakDbtp`, in dB, for the limiter of a lossy codec, on top of
+    // what the trial encodes find. Zero for a first attempt; an export queue that renders an output
+    // again because its delivered file still went over adds the overshoot here.
+    double encoderHeadroomDb = 0.0;
+    // Test seam (#771): false skips the trial encodes, so the limiter holds the limit less
+    // `encoderHeadroomDb` whatever the codec, as an encoder the trials do not model would leave it.
+    bool trialEncodes = true;
 };
 // #570: what a loudness export measured and delivered. Loudness values are negative infinity for
 // audio with nothing above the BS.1770 absolute gate (silence), and `measured` / `finalMeasured`
@@ -26,12 +35,28 @@ struct AudioLoudnessReportV1 final {
     double measuredTruePeakDbtp = 0.0;
     // The gain applied to reach the target, in dB (zero when nothing was measurable).
     double gainDb = 0.0;
-    // The audio as delivered to the encoder.
+    // The audio as delivered: by the output stream, what the encoder was given; once the export
+    // has reopened its file (#771), the sound decoded back from the delivered file
+    // (`finalFromDeliveredFile`), measured with the same reference library.
     bool finalMeasured = false;
     double finalLufs = 0.0;
     double finalTruePeakDbtp = 0.0;
     // The largest gain reduction the true-peak limiter applied, in dB (zero when it never acted).
     double limiterReductionDb = 0.0;
+    // #771: the true-peak ceiling the limiter held before the encoder, in dBTP: the limit itself,
+    // or lower for a lossy codec by the headroom its encoder needed.
+    double limiterCeilingDbtp = -1.0;
+    // #771: the audio-only trial encodes run to find that headroom (lossy codecs), and the true
+    // peak the first (the limiter at the limit, less any requested headroom) and the last measured
+    // in their decoded files.
+    std::uint32_t trialEncodes = 0;
+    double firstTrialTruePeakDbtp = 0.0;
+    double trialTruePeakDbtp = 0.0;
+    // #771: what the encoder was given, kept when final* become the delivered file's measurement.
+    bool encoderInputMeasured = false;
+    double encoderInputLufs = 0.0;
+    double encoderInputTruePeakDbtp = 0.0;
+    bool finalFromDeliveredFile = false;
 };
 struct CompositionOutputSourceV1 {
     document::Snapshot snapshot;

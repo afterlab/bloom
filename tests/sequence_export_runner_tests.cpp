@@ -22,6 +22,7 @@
 #include <bloom/host/gpu_export_tool_package.hpp>
 #include <bloom/host/output_analysis_attempt_runner.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/audio/loudness.hpp>
 #include <bloom/media/provider/contract.hpp>
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
@@ -36,10 +37,12 @@
 #include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
 #include <csignal>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <functional>
@@ -932,6 +935,160 @@ media::provider::Bytes floatWave(const std::vector<float>& samples) {
 // sample, the export of the same composition whose layer plays the MP3's decoded samples from a
 // float WAV (the same mixer and resampler, both published as 24-bit PCM), so the MP3 reached the
 // mix whole; it is audible while it plays and silent after it ends.
+// #771: the export reopens its file, measures the sound decoded from it with the reference library
+// and refuses to publish a file whose true peak is over the limit. With the trial encodes off (as
+// an encoder they do not model would leave it), an Opus export of loud noise bursts limited at
+// -1 dBTP (the mix brought to -8 LUFS, so the limiter works hard) is decoded above -1 dBTP: nothing
+// is published and the result carries the delivered reading. Rendering again with the limiter lower
+// by the overshoot, as the export queue does, keeps the limit; the report's final reading is the
+// delivered file's, at or below -1 dBTP.
+void testDeliveredTruePeakIsChecked(const std::filesystem::path& parent) {
+    const auto directory = parent / "delivered-true-peak";
+    std::filesystem::create_directories(directory);
+    Fixture f(directory);
+    // A layer over the fixture's ramp: two seconds of a bed of tone and noise with a loud noise
+    // burst every 125 ms (dense peaks the limiter holds down hard), as a float WAV.
+    {
+        constexpr double pi = 3.141592653589793;
+        const auto noise = [](const std::uint32_t at, const std::uint32_t lane) {
+            std::uint32_t state = at * 2654435761U + (lane + 1U) * 40503U;
+            state ^= state >> 15U;
+            state *= 2246822519U;
+            state ^= state >> 13U;
+            return static_cast<double>(state % 20001U) / 10000.0 - 1.0;
+        };
+        media::provider::Bytes wav;
+        const auto text = [&](std::string_view value) {
+            for (char c : value)
+                wav.push_back(static_cast<std::byte>(c));
+        };
+        const auto number = [&](std::uint64_t value, unsigned width) {
+            for (unsigned i = 0; i < width; ++i)
+                wav.push_back(static_cast<std::byte>((value >> (8U * i)) & 255U));
+        };
+        constexpr std::uint32_t frames = 96000;
+        text("RIFF");
+        number(36 + frames * 8U, 4);
+        text("WAVEfmt ");
+        number(16, 4);
+        number(3, 2);
+        number(2, 2);
+        number(48000, 4);
+        number(48000 * 8, 4);
+        number(8, 2);
+        number(32, 2);
+        text("data");
+        number(frames * 8U, 4);
+        for (std::uint32_t frame = 0; frame < frames; ++frame)
+            for (std::uint32_t channel = 0; channel < 2; ++channel) {
+                double smoothed = 0.0;
+                for (std::uint32_t tap = 0; tap < 3U; ++tap)
+                    smoothed += noise(frame + tap, channel) / 3.0;
+                const double t = static_cast<double>(frame) / 48000.0;
+                const auto value = static_cast<float>(
+                    0.06 * std::sin(2.0 * pi * (220.0 + 110.0 * channel) * t) + 0.05 * smoothed +
+                    0.9 * std::exp(-static_cast<double>(frame % 6000U) / 384.0) *
+                        noise(frame, channel + 2U));
+                std::uint32_t raw = 0;
+                std::memcpy(&raw, &value, sizeof raw);
+                number(raw, 4);
+            }
+        const auto source = std::filesystem::absolute(directory / "bursts.wav");
+        {
+            std::ofstream out(source, std::ios::binary);
+            out.write(reinterpret_cast<const char*>(wav.data()),
+                      static_cast<std::streamsize>(wav.size()));
+        }
+        auto snapshot = f.doc.snapshot();
+        auto draft = f.doc.draft(snapshot);
+        const auto asset = need(draft.ids().allocateAsset());
+        document::AssetRecord record;
+        record.id = asset;
+        record.kind = document::AssetKind::Audio;
+        record.name = "bursts.wav";
+        record.locator.path = "bursts.wav";
+        record.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(source).value();
+        record.contentDigest = media::provider::digestBytes(wav);
+        record.rate = 48000;
+        record.channels = 2;
+        record.frames = frames;
+        record.duration = need(core::RationalTime::create(frames, 48000));
+        check(draft.project().addAsset(record), "true peak: audio asset");
+        check(f.doc.commit(snapshot.revision(), std::move(draft)).committed(),
+              "true peak: audio asset commit");
+        commands::CommandStack stack(f.doc);
+        commands::Transaction transaction("Bursts layer", f.doc.snapshot().revision());
+        transaction.emplace<commands::AddAudioLayer>(f.initial.initialCompositionId, asset);
+        check(stack.execute(std::move(transaction)).changed(), "true peak: audio layer");
+    }
+    double headroom = 0.0;
+    std::uint32_t renders = 0;
+    host::SequenceExportResultV1 result;
+    for (; renders < 4; ++renders) {
+        const auto path = directory / ("limited-" + std::to_string(renders) + ".webm");
+        auto request = f.request(path, output::OutputPresetV1::Vp9WebmV1);
+        request.profile = "8bit";
+        request.pcmCodec = "opus";
+        request.loudness = output::AudioLoudnessTargetV1{.targetLufs = -8.0,
+                                                         .truePeakDbtp = -1.0,
+                                                         .encoderHeadroomDb = headroom,
+                                                         .trialEncodes = false};
+        result = f.run(std::move(request));
+        check(result.loudness.has_value() && result.loudness->finalFromDeliveredFile,
+              "true peak: render " + std::to_string(renders) +
+                  " reports the delivered file's loudness: " +
+                  (result.failure ? result.failure->detail : std::string()));
+        if (result.published()) {
+            check(std::filesystem::exists(path), "true peak: the corrected file is published");
+            std::cout << "  true peak: published at " << result.loudness->finalTruePeakDbtp
+                      << " dBTP after " << renders + 1 << " renders, the limiter at "
+                      << result.loudness->limiterCeilingDbtp << " dBTP\n";
+            break;
+        }
+        std::cout << "  true peak: render " << renders + 1 << " refused, delivered "
+                  << result.loudness->finalTruePeakDbtp << " dBTP\n";
+        check(result.failureStage == host::SequenceExportFailureStageV1::TruePeakExceeded &&
+                  result.failure &&
+                  result.failure->detail.find("above the -1.00 dBTP limit") != std::string::npos &&
+                  result.loudness->finalTruePeakDbtp > -1.0 && !std::filesystem::exists(path),
+              "true peak: an over-limit file is refused and not published (" +
+                  (result.failure ? result.failure->detail : std::string("no failure")) + ")");
+        headroom += result.loudness->finalTruePeakDbtp - -1.0 + 0.1;
+    }
+    check(renders >= 1,
+          "true peak: the first render, the limiter at the limit, went over it (" +
+              (result.loudness
+                   ? std::to_string(result.loudness->finalTruePeakDbtp) + " dBTP delivered, " +
+                         std::to_string(result.loudness->gainDb) + " dB gain"
+                   : std::string("no report")) +
+              ")");
+    check(result.published() && result.loudness && result.loudness->finalTruePeakDbtp <= -1.0 &&
+              std::abs(result.loudness->limiterCeilingDbtp - (-1.0 - headroom)) < 1e-9 &&
+              result.loudness->trialEncodes == 0,
+          "true peak: rendered again with the limiter lower by the overshoot, the delivered file "
+          "keeps the limit (" +
+              (result.loudness ? std::to_string(result.loudness->finalTruePeakDbtp) : "-") +
+              " dBTP after " + std::to_string(renders + 1) + " renders)");
+    // The delivered reading is the file's: decoded independently and measured with the library.
+    const auto path = directory / ("limited-" + std::to_string(renders) + ".webm");
+    media::video::VideoDecodeSession decoder(path);
+    const auto probe = need(decoder.probe());
+    auto decoded = need(media::video::decodeAudioClip(decoder, probe, 96000U * 4U));
+    check(decoded.channels == 2 && decoded.planes.size() == 2 && decoded.planes[0].size() >= 96000,
+          "true peak: the published sound decodes");
+    std::vector<float> interleaved(2U * 96000U);
+    for (std::size_t i = 0; i < 96000; ++i)
+        for (std::size_t c = 0; c < 2; ++c)
+            interleaved[i * 2 + c] = decoded.planes[c][i];
+    media::audio::loudness::Meter meter(48000, 2);
+    check(meter.add(interleaved), "true peak: the reference meter takes the sound");
+    const auto measured = meter.measurement();
+    check(measured.truePeakDbtp <= -1.0 &&
+              std::abs(measured.truePeakDbtp - result.loudness->finalTruePeakDbtp) < 0.05,
+          "true peak: the published file measures what the report says (" +
+              std::to_string(measured.truePeakDbtp) + " dBTP)");
+}
+
 void testMp3AudioLayer(const std::filesystem::path& parent) {
     const auto directory = parent / "mp3-audio-layer";
     std::filesystem::create_directories(directory);
@@ -1763,6 +1920,7 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     testRefusedAudioBackingIsNotDiskFull(directory);
     testManyAudioLayers(directory);
     testMp3AudioLayer(directory);
+    testDeliveredTruePeakIsChecked(directory);
     if (const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER"); loader && *loader)
         testCapacityWait(f, directory, loader);
     {

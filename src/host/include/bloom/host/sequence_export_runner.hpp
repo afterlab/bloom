@@ -174,6 +174,11 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     // PlatformEncoderV1::Skipped renders on the bundled FFmpeg encoder (the export queue does
     // that once, by itself).
     PlatformEncoderFailed,
+    // #771: the delivered file's sound, decoded back by the encoder's verifying reopen, has a true
+    // peak above the loudness target's limit. Nothing was published. The result's `loudness`
+    // holds the measurement; the same export with AudioLoudnessTargetV1::encoderHeadroomDb raised
+    // by the overshoot keeps the limit (the export queue does that by itself).
+    TruePeakExceeded,
 };
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
@@ -222,7 +227,8 @@ struct SequenceExportResultV1 {
     // Frames taken from the composite cache instead of being evaluated (useCachedFrames).
     std::uint64_t framesReused = 0;
     // #570: measured and delivered loudness of a normalizing export; absent when the audio was not
-    // normalized.
+    // normalized. #771: final* are the delivered file's own measurement once its reopen measured it
+    // (finalFromDeliveredFile); a TruePeakExceeded failure carries it too.
     std::optional<output::AudioLoudnessReportV1> loudness;
     // Issue #369: what the output colour intent and preset asked the container to carry, for the
     // ColourTags and Container checks against the reopened artifact (evidence).

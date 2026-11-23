@@ -87,12 +87,37 @@ struct AdmittedAudioBuffer final {
     std::shared_ptr<ExportResourceReservationV1> claim;
     std::shared_ptr<const media::audio::AudioBuffer> buffer;
 };
+
+// #771: a codec that does not return the samples it was given, so its decoded sound can peak above
+// what the limiter held.
+[[nodiscard]] bool lossyAudioCodec(const std::string& codec) noexcept {
+    return codec == "aac" || codec == "opus";
+}
+// The most trial encodes one export runs, and the margin each correction adds under the overshoot
+// it measured, in dB.
+constexpr std::uint32_t kTrialEncodes = 6;
+constexpr double kTrialMarginDb = 0.05;
+// A trial encode is the export's own audio settings without the picture: the bundled FFmpeg
+// encoder, writing to memory, never to the export's staged file, and not reported as the export's
+// worker.
+[[nodiscard]] EncodeSessionOptionsV1 trialOptions(const EncodeSessionOptionsV1& worker) {
+    auto trial = worker;
+    trial.platformEncoder = PlatformEncoderV1::Skipped;
+    trial.stagedOutput.reset();
+    trial.launched = {};
+    trial.sending = {};
+    trial.memorySampler = {};
+    return trial;
+}
 } // namespace
 struct CompositionOutputStreamV1::State {
     CompositionOutputSourceV1 source;
     EncodeSettingsV1 encoding;
     std::shared_ptr<ExportResourceReservationV1> queueReservation;
     platform::ProcessCancellation cancellation;
+    // #771: the worker options of the audio-only trial encodes (declared before `encoder`, which
+    // takes the originals).
+    EncodeSessionOptionsV1 trialWorker;
     std::unique_ptr<EncodeSessionV1> encoder;
     // #765: the audio sources the mix holds decoded now. Only a source a block plays is opened, and
     // one no block has played for a second of programme retires (releaseIdleAudio), so what the
@@ -121,6 +146,7 @@ struct CompositionOutputStreamV1::State {
           platform::ProcessCancellation cancel)
         : source(std::move(input)), encoding(std::move(settings)),
           queueReservation(std::move(reservation)), cancellation(std::move(cancel)),
+          trialWorker(trialOptions(worker)),
           encoder(std::make_unique<EncodeSessionV1>(std::move(worker), cancellation)) {}
     const EncodeSettingsV1& settings() const { return encoding; }
     void checkpoint() const {
@@ -367,20 +393,95 @@ struct CompositionOutputStreamV1::State {
         run.blockEndMix = std::move(endMix);
         return {captured.begin(), captured.end()};
     }
-    void deliver(const std::vector<float>& interleaved) {
+    // Sends interleaved stereo to `session` as the block that starts at programme frame `at`;
+    // returns the frames sent.
+    std::uint64_t send(EncodeSessionV1& session, const std::vector<float>& interleaved,
+                       const std::uint64_t at) const {
         const auto count = interleaved.size() / 2;
         if (count == 0)
-            return;
+            return 0;
         AudioBlock block;
         block.sampleRate = settings().sampleRate;
         block.channelLayout = {"FL", "FR"};
-        block.pts = fraction(emitted, settings().sampleRate);
+        block.pts = fraction(at, settings().sampleRate);
         block.channels.resize(2, std::vector<float>(count));
         for (std::size_t i = 0; i < count; ++i)
             for (std::size_t c = 0; c < 2; ++c)
                 block.channels[c][i] = interleaved[i * 2 + c];
-        checked(encoder->audio(std::move(block)));
-        emitted += count;
+        checked(session.audio(std::move(block)));
+        return count;
+    }
+    void deliver(const std::vector<float>& interleaved) {
+        emitted += send(*encoder, interleaved, emitted);
+    }
+    // #771 trial encode: the whole programme through the gain and a limiter at `ceilingDbtp`,
+    // encoded alone with the export's codec and settings, decoded back by the worker's verifying
+    // reopen and measured there with the reference library. Returns the decoded true peak.
+    double trialEncode(runtime::TaskContext& context, const double gainDb, const double ceilingDbtp,
+                       const std::uint32_t trial) {
+        const auto total = settings().audioSamples;
+        auto trialSettings = settings();
+        trialSettings.videoCodec.clear();
+        trialSettings.profile.clear();
+        trialSettings.frames = 0;
+        trialSettings.subtitles.clear();
+        EncodeSessionV1 session(trialWorker, cancellation);
+        checked(session.begin(trialSettings));
+        media::audio::loudness::Limiter trialLimiter(settings().sampleRate, 2, gainDb, ceilingDbtp);
+        MixPass run;
+        startPass(run);
+        std::uint64_t sent = 0;
+        std::uint64_t blocks = 0;
+        std::vector<float> limited;
+        const std::string step =
+            "Checking the true peak after encoding (trial " + std::to_string(trial + 1) + ")";
+        while (run.position < total) {
+            checkpoint();
+            const auto count =
+                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, total - run.position));
+            const auto block = renderBlock(run, context, count);
+            limited.clear();
+            trialLimiter.process(block, limited);
+            sent += send(session, limited, sent);
+            if (++blocks % 256 == 0)
+                context.reportProgress({step, "", run.position, total});
+        }
+        run.mixer.reset();
+        limited.clear();
+        trialLimiter.flush(limited);
+        sent += send(session, limited, sent);
+        require(sent == total, "Trial encode sample count differs");
+        const auto qc = checked(session.finish());
+        checked(session.close());
+        require(qc.audioMeasured && qc.audioSamples == total,
+                "The trial encode's sound was not measured", Error::Unavailable);
+        return qc.audioTruePeakDbtp;
+    }
+    // #771: a lossy codec's decoded sound peaks between and above the samples it was given, so the
+    // limiter's ceiling for it is found by encoding: while a trial's decoded true peak is over the
+    // limit, the ceiling comes down by the overshoot (and a small margin) and the trial runs again.
+    // The bundled encoders are deterministic, so the export's own audio stream, given the same
+    // samples, decodes to the last trial's sound. A platform encoder may differ; the export checks
+    // its delivered file as well.
+    double encoderCeiling(runtime::TaskContext& context, const double gainDb, const double limit,
+                          double ceiling, AudioLoudnessReportV1& report) {
+        for (std::uint32_t trial = 0; trial < kTrialEncodes; ++trial) {
+            checkpoint();
+            const auto peak = trialEncode(context, gainDb, ceiling, trial);
+            report.trialEncodes = trial + 1;
+            if (trial == 0)
+                report.firstTrialTruePeakDbtp = peak;
+            report.trialTruePeakDbtp = peak;
+            if (!(peak > limit))
+                return ceiling;
+            ceiling -= peak - limit + kTrialMarginDb;
+        }
+        throw Unavailable{
+            Error::Unavailable,
+            "The " + settings().audioCodec + " encoder kept the sound's true peak at " +
+                std::to_string(report.trialTruePeakDbtp) + " dBTP, above the " +
+                std::to_string(limit) + " dBTP limit, after " + std::to_string(kTrialEncodes) +
+                " trial encodes with the limiter lowered each time."};
     }
     // #570 pass one: the whole programme through the same mixer, into the meter alone. The mix is
     // deterministic, so pass two hears exactly what was measured.
@@ -412,11 +513,19 @@ struct CompositionOutputStreamV1::State {
         report.measuredLufs = before.integratedLufs;
         report.measuredTruePeakDbtp = before.truePeakDbtp;
         report.gainDb = media::audio::loudness::gainToTarget(before, target);
+        auto ceiling = wanted.truePeakDbtp - std::max(0.0, wanted.encoderHeadroomDb);
+        if (lossyAudioCodec(settings().audioCodec) && wanted.trialEncodes)
+            ceiling = encoderCeiling(context, report.gainDb, wanted.truePeakDbtp, ceiling, report);
+        report.limiterCeilingDbtp = ceiling;
         loudnessResult = report;
-        limiter = std::make_unique<media::audio::loudness::Limiter>(
-            settings().sampleRate, 2, report.gainDb, wanted.truePeakDbtp);
+        limiter = std::make_unique<media::audio::loudness::Limiter>(settings().sampleRate, 2,
+                                                                    report.gainDb, ceiling);
         measuredAfter.emplace(settings().sampleRate, 2);
         loudnessMeasured = true;
+    }
+    void prepareLoudness(runtime::TaskContext& context) {
+        if (!settings().audioCodec.empty() && source.loudness && !loudnessMeasured)
+            measureProgramme(context);
     }
     void audio(runtime::TaskContext& context, std::uint64_t through) {
         if (settings().audioCodec.empty())
@@ -473,6 +582,9 @@ std::optional<Unavailable> CompositionOutputStreamV1::writeFrame(const render::R
         auto& s = *state_;
         s.checkpoint();
         if (!s.started) {
+            // #570/#771: the programme is measured (and a lossy codec's trial encodes run) before
+            // the export's encoder starts, so its worker never waits on them.
+            s.prepareLoudness(context);
             checked(s.encoder->begin(s.encoding));
             s.started = true;
         }
@@ -498,6 +610,9 @@ std::optional<Unavailable> CompositionOutputStreamV1::writePreparedFrame(
         auto& s = *state_;
         s.checkpoint();
         if (!s.started) {
+            // #570/#771: the programme is measured (and a lossy codec's trial encodes run) before
+            // the export's encoder starts, so its worker never waits on them.
+            s.prepareLoudness(context);
             checked(s.encoder->begin(s.encoding));
             s.started = true;
         }

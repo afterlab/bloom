@@ -9,6 +9,7 @@
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <exception>
 #include <iostream>
@@ -107,6 +108,8 @@ struct detail::SequenceExportWorkV1 {
     runtime::CancellationToken taskCancellation;
     std::optional<Unavailable> error;
     SequenceExportFailureStageV1 failureStage = SequenceExportFailureStageV1::Unclassified;
+    // #771: the loudness report once the delivered file was measured, for a failed result too.
+    std::optional<output::AudioLoudnessReportV1> deliveredLoudness;
     std::uint64_t encoded = 0;
     core::Sha256Hasher approvals;
     std::string cpuReferenceReason;
@@ -490,6 +493,41 @@ struct detail::SequenceExportWorkV1 {
         ++encoded;
         context.reportProgress({"Encoding composition", "", encoded, total()});
     }
+    // #771: the loudness report speaks of the delivered file: the sound the encoder's verifying
+    // reopen decoded back from it, measured there with the reference library. A lossy codec's
+    // sound has to be measured, and a file whose true peak is over the limit is not published.
+    void measureDelivered(output::AudioLoudnessReportV1& report,
+                          const media::provider::EncodeQcV1& qc) {
+        if (!qc.audioMeasured) {
+            if (settings().audioCodec == "aac" || settings().audioCodec == "opus") {
+                failureStage = SequenceExportFailureStageV1::Verification;
+                require(false,
+                        "The delivered file's sound was not measured, so its true peak is unknown",
+                        Error::IdentityMismatch);
+            }
+            return;
+        }
+        report.encoderInputMeasured = report.finalMeasured;
+        report.encoderInputLufs = report.finalLufs;
+        report.encoderInputTruePeakDbtp = report.finalTruePeakDbtp;
+        report.finalMeasured = qc.audioLoudnessMeasured;
+        report.finalLufs = qc.audioLufs;
+        report.finalTruePeakDbtp = qc.audioTruePeakDbtp;
+        report.finalFromDeliveredFile = true;
+        deliveredLoudness = report;
+        if (qc.audioTruePeakDbtp > report.truePeakLimitDbtp) {
+            failureStage = SequenceExportFailureStageV1::TruePeakExceeded;
+            const auto level = [](const double value) {
+                char text[32];
+                std::snprintf(text, sizeof text, "%.2f", value);
+                return std::string(text);
+            };
+            throw Unavailable{Error::IdentityMismatch,
+                              "The delivered file's true peak is " + level(qc.audioTruePeakDbtp) +
+                                  " dBTP, above the " + level(report.truePeakLimitDbtp) +
+                                  " dBTP limit"};
+        }
+    }
     void publish(FrameExportRequestV1& approved, platform::StagedArtifactCoordinator& artifacts,
                  runtime::TaskContext& context) {
         checkpoint();
@@ -511,7 +549,7 @@ struct detail::SequenceExportWorkV1 {
         // providers ahead of it in the platform chain did not serve (ADR 0035).
         const auto served = encoder->handshake();
         auto provenance = encoder->provenance();
-        const auto loudnessReport = encoder->loudnessReport();
+        auto loudnessReport = encoder->loudnessReport();
         auto sourceRouting = encoder->sourceRoutingNotes();
         if (provenance.fellBack())
             std::cerr << "Bloom export: media provider " << provenance.diagnostic() << '\n';
@@ -519,6 +557,8 @@ struct detail::SequenceExportWorkV1 {
                     qc.bytes <= settings().byteLimit,
                 "Worker verification does not match approved stream layout",
                 Error::IdentityMismatch);
+        if (loudnessReport)
+            measureDelivered(*loudnessReport, qc);
         // #752: the embedded tracks, as reopened, against what was sent (the worker compared them
         // too; a provider that leaves a track out is refused here as well).
         if (const auto difference =
@@ -1367,6 +1407,7 @@ void SequenceExportRunnerV1::poll() {
                 SequenceExportResultV1 failed;
                 s.work->provenanceInto(failed);
                 failed.failureStage = s.work->failureStage;
+                failed.loudness = s.work->deliveredLoudness;
                 s.fail(*s.work->error, std::move(failed));
                 return;
             }
