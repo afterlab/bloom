@@ -275,7 +275,7 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                                      reachable);
     // #531: an Image Switch's unchosen inputs are not prepared: nothing of them is decoded,
     // uploaded, emitted or dispatched, exactly as the CPU reference evaluates only the chosen one.
-    if (detail::planHasImageSwitch(*plan)) {
+    if (detail::planNeedsLiveness(*plan)) {
         const auto live =
             detail::liveOperations(*plan, frameResolved, request.time, request.output.value());
         for (std::size_t index = 0; index < reachable.size(); ++index)

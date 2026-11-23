@@ -67,33 +67,69 @@ selectedSwitchInput(const CompiledImageSwitch& switcher, const CompiledCompositi
     return false;
 }
 
+// Whether a frame's reads depend on more than the plan: an Image Switch narrows them to its chosen
+// input, and a video source's layer outside its range at the frame's time reads no movie (#772).
+[[nodiscard]] inline bool planNeedsLiveness(const CompiledCompositionPlan& plan) noexcept {
+    for (const auto& operation : plan.operations())
+        if (std::holds_alternative<CompiledImageSwitch>(operation) ||
+            std::holds_alternative<CompiledVideoSource>(operation))
+            return true;
+    return false;
+}
+
 // The operations this frame reads, walked from the output (and from every bounds readout's image,
 // which the value graph reads) through every input, but through only the chosen input of each
-// Image Switch. Everything else is reachable in the plan and unread this frame.
+// Image Switch. #772: a Layer Output outside [inPoint, outPoint) at its placement time shows
+// nothing, so its content is not read (no movie is opened for it) unless it is the transform
+// parent of a layer that is read, whose transform may depend on its content. Everything else is
+// reachable in the plan and unread this frame.
 [[nodiscard]] inline std::vector<bool> liveOperations(const CompiledCompositionPlan& plan,
                                                       const ResolvedEvaluation& frameResolved,
                                                       const core::RationalTime requestTime,
                                                       const std::size_t outputIndex) {
     const auto& operations = plan.operations();
-    std::vector<bool> live(operations.size(), false);
-    std::vector<std::size_t> pending{outputIndex};
+    std::vector<bool> live(operations.size(), false), expanded(operations.size(), false);
+    struct Visit final {
+        std::size_t index;
+        bool parentOfLiveLayer;
+    };
+    std::vector<Visit> pending{{outputIndex, false}};
     for (const auto& value : plan.valueOperations())
         if (const auto* bounds = std::get_if<CompiledBoundsReadout>(&value.kernel))
-            pending.push_back(bounds->operationIndex.value());
+            pending.push_back({bounds->operationIndex.value(), false});
     while (!pending.empty()) {
-        const auto index = pending.back();
+        const auto [index, parentOfLiveLayer] = pending.back();
         pending.pop_back();
-        if (index >= operations.size() || live[index])
+        if (index >= operations.size() || expanded[index])
             continue;
+        const bool seen = live[index];
         live[index] = true;
         if (const auto* switcher = std::get_if<CompiledImageSwitch>(&operations[index])) {
+            expanded[index] = true;
             if (const auto chosen = selectedSwitchInput(*switcher, plan, frameResolved, requestTime,
                                                         OperationIndex::fromRaw(index)))
-                pending.push_back(chosen->value());
+                pending.push_back({chosen->value(), false});
             continue;
         }
-        forEachInput(operations[index],
-                     [&pending](const OperationIndex input) { pending.push_back(input.value()); });
+        if (const auto* layer = std::get_if<CompiledLayerOutput>(&operations[index])) {
+            if (seen && !parentOfLiveLayer)
+                continue;
+            const auto placement = timeForClock(frameResolved, requestTime,
+                                                plan.placementClock(OperationIndex::fromRaw(index)));
+            const bool shown = placement && !(*placement < layer->inPoint) &&
+                               !(layer->outPoint && !(*placement < *layer->outPoint));
+            if (shown || parentOfLiveLayer) {
+                expanded[index] = true;
+                pending.push_back({layer->input.value(), false});
+            }
+            if (layer->parent)
+                pending.push_back({layer->parent->value(), true});
+            continue;
+        }
+        expanded[index] = true;
+        forEachInput(operations[index], [&pending](const OperationIndex input) {
+            pending.push_back({input.value(), false});
+        });
     }
     return live;
 }

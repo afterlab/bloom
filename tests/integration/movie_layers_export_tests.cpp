@@ -261,7 +261,7 @@ void writeNumberedCopy(const std::filesystem::path& source, const std::filesyste
 
 // The same export through the sequence runner, whose movie source copies this test can see: the
 // copies' file limit rises with the sources the frames read and falls while the export runs as the
-// trimmed layers leave the range; and nine small files held beside the export fill its quota for the
+// trimmed layers leave the range; and twelve small files held beside the export fill its quota for the
 // first captures, so they wait for a release the test announces, and the result says so (#772).
 void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
                                 const std::int64_t last) {
@@ -293,14 +293,14 @@ void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
     }
     std::filesystem::create_directories(folder / "held-spool");
     std::vector<std::unique_ptr<platform::ReadOnlyFileSnapshot>> held;
-    quota->setFileLimit(9);
-    for (int count = 0; count < 9; ++count) {
+    quota->setFileLimit(12);
+    for (int count = 0; count < 12; ++count) {
         auto made = platform::ReadOnlyFileSnapshot::capture(heldFile, folder / "held-spool", quota,
                                                             std::uint64_t{1} << 20U);
         if (auto* kept = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&made))
             held.push_back(std::move(*kept));
     }
-    expect(held.size() == 9, "nine snapshots hold the quota (" + std::to_string(held.size()) + ")");
+    expect(held.size() == 12, "twelve snapshots hold the quota (" + std::to_string(held.size()) + ")");
     quota->expectRelease();
     const auto started = std::chrono::steady_clock::now();
     const auto deadline = started + std::chrono::seconds(240);

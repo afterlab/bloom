@@ -3298,7 +3298,7 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
         };
         // #531: what this frame reads -- through only the chosen input of each Image Switch. An
         // unread operation is neither evaluated nor looked up, and publishes nothing.
-        const auto live = detail::planHasImageSwitch(*plan)
+        const auto live = detail::planNeedsLiveness(*plan)
                               ? detail::liveOperations(*plan, frameResolved, request.time,
                                                        request.output.value())
                               : std::vector<bool>(plan->operations().size(), true);
