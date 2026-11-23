@@ -380,6 +380,9 @@ struct AudioTrack final {
     AVAssetTrack* track = nil;
     std::uint32_t sampleRate = 0;
     std::uint32_t channels = 0;
+    // Sample frame at which the track's first audio presents on the movie's timeline. Audio that
+    // starts after its video (#789) is silent until then; a gap anywhere later is refused.
+    std::uint64_t start = 0;
 };
 
 struct Described final {
@@ -729,9 +732,22 @@ void describeAudio(AVAssetTrack* track, provider::StreamDescriptor& stream, Audi
     const auto timescale = track.naturalTimeScale;
     stream.timebase = {1, timescale > 0 ? timescale : static_cast<std::int32_t>(audio.sampleRate)};
     stream.rate = {static_cast<std::int64_t>(audio.sampleRate), 1};
-    const auto duration = track.timeRange.duration;
+    const auto range = track.timeRange;
+    const auto duration = range.duration;
     if (CMTIME_IS_NUMERIC(duration) && duration.timescale > 0) {
         stream.duration = reduced(duration.value, duration.timescale);
+        // A track that starts after the video presents an empty interval first: its length is
+        // where it ends on the movie's timeline, which starts at the video (#789), as the FFmpeg
+        // worker reports it.
+        const auto end = CMTimeRangeGetEnd(range);
+        if (CMTIME_IS_NUMERIC(range.start) && CMTimeCompare(range.start, kCMTimeZero) > 0 &&
+            CMTIME_IS_NUMERIC(end) && end.timescale > 0) {
+            stream.duration = reduced(end.value, end.timescale);
+            audio.start = static_cast<std::uint64_t>(
+                CMTimeConvertScale(range.start, static_cast<std::int32_t>(audio.sampleRate),
+                                   kCMTimeRoundingMethod_RoundHalfAwayFromZero)
+                    .value);
+        }
         // Sample frames, or coded packets of 1024 sample frames for AAC.
         const auto frames = static_cast<std::uint64_t>(
             std::llround(CMTimeGetSeconds(duration) * static_cast<double>(audio.sampleRate)));
@@ -1362,11 +1378,23 @@ struct Reader::State final {
             channel.reserve(request.samples);
         const auto take = [&](const std::vector<float>& interleaved, const std::uint64_t begin) {
             // Sample frames of `interleaved` (starting at `begin`) that fall inside the block.
-            const auto filled = block.channels.front().size();
-            const auto wanted = request.frame + filled;
+            auto filled = block.channels.front().size();
+            auto wanted = request.frame + filled;
             const auto frames = interleaved.size() / channels;
             if (begin + frames <= wanted)
                 return frames;
+            // Before the track's first sample, in a movie whose audio starts after its video
+            // (#789): silence up to it. The decoded samples wait for the block that reaches them.
+            if (begin > wanted && begin <= track.start) {
+                const auto silence =
+                    std::min<std::uint64_t>(begin - wanted, request.samples - filled);
+                for (auto& channel : block.channels)
+                    channel.resize(channel.size() + static_cast<std::size_t>(silence), 0.0F);
+                filled = block.channels.front().size();
+                wanted = request.frame + filled;
+                if (filled == request.samples)
+                    return std::size_t{0};
+            }
             require(begin <= wanted, "Audio timestamp gap");
             const auto skip = static_cast<std::size_t>(wanted - begin);
             const auto count = std::min<std::size_t>(frames - skip, request.samples - filled);

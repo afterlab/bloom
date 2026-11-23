@@ -233,6 +233,17 @@ void extent(int w, int h) {
                 static_cast<std::uint64_t>(w) * static_cast<unsigned>(h) <= Limits::pixels,
             "Video dimensions exceed limits", Error::Oversized);
 }
+// The stream the audio of a file with video is placed against: its first video stream that is not
+// an attached picture (cover art). Audio counts from this stream's first presentation (#789).
+const AVStream* originVideo(const AVFormatContext& format) {
+    for (unsigned i = 0; i < format.nb_streams; ++i) {
+        const auto* stream = format.streams[i];
+        if (stream->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+            (stream->disposition & AV_DISPOSITION_ATTACHED_PIC) == 0)
+            return stream;
+    }
+    return nullptr;
+}
 ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
     ProbeResult result;
     result.container = input.format->iformat->name;
@@ -312,6 +323,22 @@ ProbeResult probe(Input& input, const Digest& digest, std::uint64_t bytes) {
             s.sampleRate = static_cast<std::uint32_t>(p.sample_rate);
             s.rate = {p.sample_rate, 1};
             s.channelLayout = channels(p.ch_layout);
+            // In a file with video the audio is read on the video's timeline (see openAudio), so
+            // its length is where it ends measured from the first video presentation (#789):
+            // audio that starts after its video begins with that much silence, and audio that
+            // starts before it loses what precedes it.
+            const auto* video = originVideo(*input.format);
+            if (video && stream.start_time != AV_NOPTS_VALUE && stream.duration != AV_NOPTS_VALUE &&
+                stream.duration > 0) {
+                const auto videoStart =
+                    video->start_time == AV_NOPTS_VALUE
+                        ? 0
+                        : av_rescale_q(video->start_time, video->time_base, stream.time_base);
+                const auto end =
+                    av_sat_sub64(av_sat_add64(stream.start_time, stream.duration), videoStart);
+                if (end > 0)
+                    s.duration = timestamp(end, stream.time_base);
+            }
         } else
             s.kind = MediaKind::Data;
         result.streams.push_back(std::move(s));
@@ -1057,6 +1084,9 @@ struct AudioCursor final {
     std::vector<std::string> layout;
     // Both node outputs use the first video presentation as their local origin.
     std::int64_t origin = 0;
+    // Local sample at which the stream's first audio presents. Audio that starts after its video
+    // (#789) is silent until then; a gap anywhere later is refused.
+    std::int64_t leadingEnd = 0;
     bool eof = false;
     std::optional<std::int64_t> previousEnd;
     // Converted samples decoded past the previous block's end, starting at `pendingBegin`.
@@ -1081,23 +1111,20 @@ void openAudio(AudioCursor& cursor, std::unique_ptr<Input> input, const unsigned
             "Audio request exceeds limits", Error::Oversized);
     decoder(in, stream, nullptr);
     cursor.layout = channels(stream.codecpar->ch_layout);
-    // Container timestamps can start well after zero (for example MPEG-TS).
-    bool video = false;
-    for (unsigned i = 0; i < in.format->nb_streams; ++i) {
-        const auto& candidate = *in.format->streams[i];
-        if (candidate.codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            video = true;
-            if (candidate.start_time != AV_NOPTS_VALUE)
-                cursor.origin =
-                    av_rescale_q(candidate.start_time, candidate.time_base, {1, cursor.rate});
-            break;
-        }
-    }
+    // Container timestamps can start well after zero (for example MPEG-TS). Cover art is not the
+    // video the audio is placed against.
+    const auto* origin = originVideo(*in.format);
+    const bool video = origin != nullptr;
+    if (video && origin->start_time != AV_NOPTS_VALUE)
+        cursor.origin = av_rescale_q(origin->start_time, origin->time_base, {1, cursor.rate});
     // A file without video counts from its audio's own first presentation, as its probed
     // duration does (#770). An MP3 whose Xing header declares the encoder delay starts there: the
     // demuxer trims the delay, so the first decoded frame is timed after zero.
     if (!video && stream.start_time != AV_NOPTS_VALUE)
         cursor.origin = av_rescale_q(stream.start_time, stream.time_base, {1, cursor.rate});
+    if (stream.start_time != AV_NOPTS_VALUE)
+        cursor.leadingEnd = av_sat_sub64(
+            av_rescale_q(stream.start_time, stream.time_base, {1, cursor.rate}), cursor.origin);
     // Its length is then the stream's own, counted from the same first presentation, unless the
     // demuxer estimated it from the bit rate (an MP3 without a Xing header).
     if (!video && stream.duration != AV_NOPTS_VALUE && stream.duration > 0 &&
@@ -1123,10 +1150,24 @@ AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
     // Appends converted samples beginning at local sample `begin`; returns true when the block
     // is complete. Samples past the block are kept for a continuing request.
     const auto deliver = [&](const std::int64_t begin, std::vector<std::vector<float>>& planes) {
-        const auto filled = static_cast<std::int64_t>(result.channels.front().size());
+        auto filled = static_cast<std::int64_t>(result.channels.front().size());
         const auto available = static_cast<std::int64_t>(planes.front().size());
         if (begin + available <= first + filled)
             return false;
+        // Before the stream's first sample, in a movie whose audio starts after its video
+        // (#789): silence up to it. The decoded frame waits for the block that reaches it.
+        if (begin > first + filled && begin <= cursor.leadingEnd) {
+            const auto silence = std::min(begin - (first + filled),
+                                          static_cast<std::int64_t>(request.samples) - filled);
+            for (auto& channel : result.channels)
+                channel.resize(channel.size() + static_cast<std::size_t>(silence), 0.0F);
+            filled += silence;
+            if (filled == static_cast<std::int64_t>(request.samples)) {
+                cursor.pendingBegin = begin;
+                cursor.pending = std::move(planes);
+                return true;
+            }
+        }
         require(begin <= first + filled, "Audio timestamp gap");
         const auto skip = static_cast<std::size_t>(first + filled - begin);
         const auto count = std::min(static_cast<std::size_t>(available) - skip,
