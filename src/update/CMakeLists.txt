@@ -105,6 +105,7 @@ add_library(bloom_update STATIC
     feed.cpp
     file_verification.cpp
     install_kind.cpp
+    installer_activity.cpp
     keys.cpp
     mapped_file.cpp
     mapped_file.hpp
@@ -124,6 +125,7 @@ target_sources(bloom_update PUBLIC FILE_SET HEADERS BASE_DIRS include
           include/bloom/update/feed.hpp
           include/bloom/update/file_verification.hpp
           include/bloom/update/install_kind.hpp
+          include/bloom/update/installer_activity.hpp
           include/bloom/update/keys.hpp
           include/bloom/update/refusal.hpp
           include/bloom/update/release_version.hpp
@@ -168,7 +170,8 @@ if(BUILD_TESTING)
     include(BloomTesting)
 
     set(bloom_update_fixtures "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures")
-    foreach(bloom_update_test IN ITEMS ed25519 feed verify policy install_kind helper staging zsync)
+    foreach(bloom_update_test IN ITEMS ed25519 feed verify policy install_kind installer_activity
+                                       helper staging zsync)
         add_executable(bloom_update_${bloom_update_test}_test
                        tests/${bloom_update_test}_tests.cpp)
         target_link_libraries(bloom_update_${bloom_update_test}_test PRIVATE bloom_update)

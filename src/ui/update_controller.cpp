@@ -366,6 +366,18 @@ void UpdateController::openDownloadPage() const {
 }
 
 void UpdateController::noticeAtStartup(const update::StartupResult& result) {
+    if (result.installFailed.has_value()) {
+        // The Windows installer could not install an update and put this version back (#788).
+        auto text = tr("Bloom %1 could not be installed. The version you had is still installed "
+                       "and works as before.")
+                        .arg(QString::fromStdString(result.installFailed->version));
+        if (!result.installFailed->reason.empty()) {
+            text += QLatin1Char(' ') + QString::fromStdString(result.installFailed->reason);
+        }
+        qInfo().noquote() << "Update:" << text;
+        kit::inform(owner_, kit::KPromptTone::Warning, tr("Update"), text, {},
+                    QStringLiteral("updateInstallFailedNotice"));
+    }
     if (!result.restoredFrom.has_value()) {
         return;
     }

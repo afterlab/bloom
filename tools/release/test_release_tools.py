@@ -214,6 +214,77 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(appcast.build_version(label), compact, label)
 
 
+class WindowsUpdateInstallerTests(unittest.TestCase):
+    """#788: what the Windows installer and Bloom agree on while an update installs."""
+
+    def setUp(self) -> None:
+        self.script = (ROOT / "packaging" / "windows" / "bloom.iss").read_text(encoding="utf-8")
+        self.header = (ROOT / "src" / "update" / "include" / "bloom" / "update" /
+                       "installer_activity.hpp").read_text(encoding="utf-8")
+
+    def define(self, name: str) -> str:
+        found = re.search(rf'^\s*#define {name} "([^"]*)"', self.script, re.MULTILINE)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def constant(self, name: str) -> str:
+        found = re.search(rf'{name} = L?"([^"]*)"', self.header)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def test_installer_arguments(self) -> None:
+        release = load("bloom_release_release", TOOLS / "release.py")
+        arguments = release.INSTALLER_ARGUMENTS.split()
+        # A visible progress window and nothing else: no question, no cancel, no close of a Bloom.
+        for wanted in ("/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL", "/NORESTART",
+                       "/NOCLOSEAPPLICATIONS", "/RELAUNCH=1"):
+            self.assertIn(wanted, arguments)
+        self.assertNotIn("/VERYSILENT", arguments)
+
+    def test_bloom_and_the_installer_agree(self) -> None:
+        self.assertEqual(self.define("SetupMutexName"), self.constant("kWindowsSetupMutex"))
+        e2e = (TOOLS / "update_e2e.py").read_text(encoding="utf-8")
+        self.assertIn(f'SETUP_MUTEX = "{self.constant("kWindowsSetupMutex")}"', e2e)
+        self.assertIn("SetupMutex={#SetupMutexName}", self.script)
+        started = self.define("StartedByInstaller")
+        self.assertEqual(started, self.constant("kStartedByInstallerArgument"))
+        # Every start of Bloom by the installer carries the argument, or it would end at once.
+        runs = [line for line in self.script.splitlines()
+                if line.startswith('Filename: "{app}\\Bloom.exe"')]
+        self.assertEqual(len(runs), 2)
+        for line in runs:
+            self.assertIn('Parameters: "{#StartedByInstaller}"', line)
+        self.assertIn("Exec(Folder + '\\Bloom.exe', '{#StartedByInstaller}'", self.script)
+        # The window a Bloom opened during the install looks for.
+        self.assertEqual(self.define("AppName"), "Bloom")
+        self.assertIn("WizardForm.Caption := 'Updating {#AppName}'", self.script)
+        self.assertEqual(self.constant("kUpdatingWindowTitle"), "Updating Bloom")
+        self.assertEqual(self.constant("kSetupWindowTitle"), "Setup - Bloom")
+        # The notice of an update that was not installed.
+        self.assertIn(f"FailureNoticeName = '{self.constant('kInstallFailureNoticeName')}'",
+                      self.script)
+
+    def test_an_update_never_installs_without_the_kept_version(self) -> None:
+        prepare = self.script[self.script.index("function PrepareToInstall"):]
+        prepare = prepare[:prepare.index("\nend;\n") + 6]
+        # In an update a folder that cannot be renamed stops the install before anything is
+        # copied; only an install without /RELAUNCH=1 goes on over the folder.
+        update_branch = prepare.index("if RelaunchRequested() then\n      begin")
+        self.assertLess(update_branch, prepare.index("installing over it"))
+        self.assertIn("Result := '{#AppName} was not updated: '", prepare)
+        self.assertIn("KeptAside := True;", prepare)
+        # A stopped update puts the kept version back, tells it and starts it.
+        deinit = self.script[self.script.index("procedure DeinitializeSetup"):]
+        for step in ("RenameFile(KeptFolder, Folder)", "SaveStringToFile(Folder + '\\' + "
+                     "FailureNoticeName", "Exec(Folder + '\\Bloom.exe'"):
+            self.assertIn(step, deinit)
+        # The program is installed after the files beside it and before the folders.
+        files = self.script[self.script.index("[Files]"):self.script.index("[Icons]")]
+        self.assertLess(files.index('Excludes: "\\Bloom.exe"'),
+                        files.index('Source: "{#SourceDir}\\Bloom.exe"'))
+        self.assertLess(files.index('Source: "{#SourceDir}\\Bloom.exe"'), files.index("#sub AddFolder"))
+
+
 class AppcastTests(unittest.TestCase):
     def test_notes_to_html(self) -> None:
         text = appcast.notes_to_html(changelog.section(GOOD, VERSION))

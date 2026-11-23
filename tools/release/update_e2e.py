@@ -48,6 +48,16 @@ carries the release's, so the test also puts its own public key into the candida
 Info.plist and seals the bundle again, which keeps the two the pair an update between two
 releases is; every program in it stays the candidate's.
 
+On Windows the update part starts the installer with the release's own arguments
+(release.py, INSTALLER_ARGUMENTS) and checks what #788 asks of it: while the installer runs,
+Bloom opened by hand ends at once and says that Bloom is being updated, without starting the
+version being replaced; the new version is started by the installer; and the version it
+replaced is kept beside it (<folder>.previous) for going back. A third part, "failed", keeps a
+file in the installed folder open, so the installer cannot keep the installed version aside:
+the update must then install nothing, start the installed version again and leave it the
+notice it shows (src/update/installer_activity.hpp). The installer writes its log beside each
+part (/LOG), which a failed part prints.
+
 A candidate "that cannot start": on Linux and macOS its main program is replaced by one that
 ends at once; on Windows the installer is the candidate's own and is started without the
 argument that starts Bloom again, so the new version never confirms its start. On macOS and
@@ -81,6 +91,10 @@ TOOLS = Path(__file__).resolve().parent
 NAME = re.compile(r"^Bloom-(\d+\.\d+\.\d+(?:-[0-9A-Za-z.]+)?)-(linux|macos|windows)-")
 SYSTEM = {"Linux": "linux", "Darwin": "macos", "Windows": "windows"}.get(platform.system(), "")
 INSTALLER_ARGUMENTS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART"
+# The mutex the Windows installer holds while it runs (packaging/windows/bloom.iss, SetupMutex;
+# src/update/include/bloom/update/installer_activity.hpp, kWindowsSetupMutex).
+SETUP_MUTEX = "AfterlabBloomSetup"
+BEING_UPDATED = "Bloom is being updated"
 PROFILE_ORGANIZATION = "BloomPackageCheck"
 PROFILE_VARIABLE = "BLOOM_PACKAGE_CHECK_PROFILE"
 
@@ -182,6 +196,22 @@ def desktop_problem(allowed: bool) -> str:
         return (f"the desktop is {console}'s and this is {getpass.getuser()}: the platform's "
                 "updater needs the desktop of the user the test runs as")
     return ""
+
+
+def installer_running() -> bool:
+    """Windows: true while some process holds the installer's mutex in this session."""
+    if SYSTEM != "windows":
+        return False
+    import ctypes
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.OpenMutexW.restype = ctypes.c_void_p
+    kernel32.OpenMutexW.argtypes = [ctypes.c_uint32, ctypes.c_int, ctypes.c_wchar_p]
+    kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
+    handle = kernel32.OpenMutexW(0x00100000, 0, SETUP_MUTEX)  # SYNCHRONIZE
+    if handle:
+        kernel32.CloseHandle(handle)
+        return True
+    return ctypes.get_last_error() == 5  # ERROR_ACCESS_DENIED: it exists all the same
 
 
 def same_bytes(file: Path, wanted: bytes) -> bool:
@@ -600,6 +630,21 @@ class Run:
                     pass
         say(f"{name}: processes of this test still running after they were stopped: "
             f"{len(self.processes())}")
+        if self.kind == "installer":
+            try:
+                lines = self.setup_log(name).read_text("utf-8", errors="replace").splitlines()
+            except OSError:
+                lines = []
+            say(f"{name}: the installer's log, last lines of {len(lines)}:")
+            for line in lines[-80:]:
+                say(f"    {line[:300]}")
+            for attempt in (1, 2):
+                try:
+                    said = (self.work / name / f"by-hand-{attempt}.txt").read_text(
+                        "utf-8", errors="replace").strip()
+                    say(f"{name}: Bloom opened by hand ({attempt}) said: {said[:400]}")
+                except OSError:
+                    pass
         if SYSTEM == "macos":
             # The platform's updater and its installer write to the system's log, not to Bloom's
             # output.
@@ -617,10 +662,18 @@ class Run:
             for line in lines[-200:]:
                 say(f"    {line[:400]}")
 
-    def part(self, name: str, file: Path, installer_arguments: str, expect_new: bool) -> bool:
+    def setup_log(self, name: str) -> Path:
+        """Windows: where the installer of a part writes its log (/LOG)."""
+        return self.work / name / "setup.log"
+
+    def part(self, name: str, file: Path, installer_arguments: str, expect_new: bool,
+             hold_folder: bool = False) -> bool:
+        if self.kind == "installer":
+            log = str(self.setup_log(name))
+            installer_arguments += f' /LOG="{log}"' if " " in log else f" /LOG={log}"
         served = self.release(name, file, installer_arguments)
         try:
-            passed = self.run_part(name, served, expect_new)
+            passed = self.run_part(name, served, expect_new, hold_folder)
         except BaseException:
             self.explain(name, served)
             raise
@@ -628,19 +681,123 @@ class Run:
             self.explain(name, served)
         return passed
 
-    def run_part(self, name: str, served: Served, expect_new: bool) -> bool:
+    def by_hand(self, name: str, served: Served, program: Path, attempt: int,
+                required: bool) -> bool:
+        """Windows (#788): Bloom opened by hand while the installer runs ends at once and says
+        that Bloom is being updated; it neither runs the version being replaced nor holds its
+        folder. `required`: the program must be there to open (it is, until the installer has
+        moved the installed folder aside); otherwise a moment without one is waited out."""
+        log = self.work / name / f"by-hand-{attempt}.txt"
+        while True:
+            began = time.monotonic()
+            try:
+                with log.open("wb") as output:
+                    process = subprocess.Popen([str(program)], env=self.environment(name, served),
+                                               cwd=str(self.work / name),
+                                               stdin=subprocess.DEVNULL, stdout=output,
+                                               stderr=subprocess.STDOUT)
+            except OSError as error:
+                if not required and installer_running():
+                    time.sleep(0.2)
+                    continue
+                if required:
+                    say(f"FAILED: Bloom could not be opened by hand during the install ({error})")
+                    return False
+                say(f"{name}: the installer had ended before Bloom could be opened by hand again")
+                return True
+            break
+        try:
+            code = process.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            if not required and not installer_running() and self.started(name) == self.new:
+                say(f"{name}: Bloom opened by hand ({attempt}) as the installer ended is "
+                    f"{self.new}, the new version")
+                return True
+            say(f"FAILED: Bloom opened by hand during the install ({attempt}) still ran after 60 "
+                "seconds: it runs the version being replaced")
+            return False
+        took = time.monotonic() - began
+        said = log.read_text("utf-8", errors="replace").strip()
+        if code != 0 or BEING_UPDATED not in said:
+            say(f"FAILED: Bloom opened by hand during the install ({attempt}) ended with {code} "
+                f"and said '{said[:300]}'")
+            return False
+        say(f"{name}: Bloom opened by hand during the install ({attempt}) ended after "
+            f"{took:.1f} s and said: {said}")
+        return True
+
+    def during_install(self, name: str, served: Served, program: Path,
+                       bloom: subprocess.Popen) -> bool:
+        """Windows (#788): Bloom is opened by hand as soon as the installer runs (the Bloom that
+        asked for the update is still closing), and again once that Bloom has gone, while the
+        installer replaces the folder."""
+        deadline = time.monotonic() + self.timeout
+        while not installer_running():
+            if time.monotonic() > deadline or self.started(name) == self.new:
+                say("FAILED: the installer's run was not seen (its mutex was never held)")
+                return False
+            time.sleep(0.1)
+        say(f"{name}: the installer runs")
+        if not self.by_hand(name, served, program, 1, required=True):
+            return False
+        while bloom.poll() is None and installer_running():
+            time.sleep(0.1)
+        if not installer_running():
+            say(f"{name}: the installer had ended when the Bloom that asked for the update "
+                "was gone")
+            return True
+        return self.by_hand(name, served, program, 2, required=False)
+
+    def failed_install(self, name: str, root: Path, program: Path) -> bool:
+        """Windows (#788): an update the installer cannot install, because a file in the
+        installed folder stays open, installs nothing; the installed version is started again
+        and takes the installer's notice."""
+        if not self.wait("the helper seeing the installed version start again",
+                         lambda: "unchanged:" in self.helper_log(name)):
+            return False
+        say(f"{name}: {self.old} started again after the update that was not installed")
+        notice = root / "update-failed"
+        if not self.wait("the version started again taking the installer's notice",
+                         lambda: not notice.exists()):
+            return False
+        try:
+            log = self.setup_log(name).read_text("utf-8", errors="replace")
+        except OSError:
+            log = ""
+        if "the update installs nothing" not in log:
+            say("FAILED: the installer's log does not say that the update installed nothing")
+            return False
+        for problem in ("Could not write the notice", "Could not start the version",
+                        "installing over it"):
+            if problem in log:
+                say(f"FAILED: the installer's log says '{problem}'")
+                return False
+        say(f"{name}: the installer installed nothing, left its notice and started {self.old}, "
+            "which took the notice")
+        self.stop()
+        if self.reported(program) != self.old:
+            say(f"FAILED: after the update that was not installed the installation reports "
+                f"'{self.reported(program)}', not {self.old}")
+            return False
+        say(f"{name}: the installation is still {self.old}")
+        return True
+
+    def run_part(self, name: str, served: Served, expect_new: bool,
+                 hold_folder: bool = False) -> bool:
         root, program = self.install(name)
         output = (self.work / name / "bloom-output.txt").open("wb")
+        held = None
         try:
             if self.reported(program) != self.old:
                 say(f"FAILED: the installed test build does not report {self.old}")
                 return False
             say(f"{name}: installed {self.old}; the release offers {self.new}")
-            def start() -> None:
+            def start() -> subprocess.Popen:
                 # Not collected while the part runs (Python does so only at its next start of a
                 # program): an ended Bloom stays a zombie, as under a launcher that has not yet
                 # asked how it ended, and the helper has to take it for ended all the same.
-                subprocess.Popen([str(program)], env=self.environment(name, served),
+                return subprocess.Popen([str(program)], env=self.environment(name, served),
                                  cwd=str(self.work / name), stdin=subprocess.DEVNULL,
                                  stdout=output, stderr=subprocess.STDOUT,
                                  start_new_session=SYSTEM != "windows")
@@ -656,7 +813,16 @@ class Run:
                     say("FAILED: the system's launcher did not take the identity's variable "
                         f"(it gives '{given.strip()}')")
                     return False
-            start()
+            if hold_folder:
+                # Another program keeps a file of the installed folder open, so the folder cannot
+                # be moved aside.
+                held = (root / "install-kind").open("rb")
+            bloom = start()
+            if SYSTEM == "windows" and expect_new and not hold_folder and \
+                    not self.during_install(name, served, program, bloom):
+                return False
+            if hold_folder:
+                return self.failed_install(name, root, program)
             if SYSTEM == "macos":
                 # The platform's updater asks Bloom to quit, replaces the application and has
                 # the system's launcher start it: the installed program is then the served
@@ -693,6 +859,14 @@ class Run:
                         f"not {self.new}")
                     return False
                 say(f"{name}: the installation is {self.new}")
+                if self.kind == "installer":
+                    # The version it replaced is kept beside it for going back (ADR 0041, #788).
+                    kept = root.with_name(root.name + ".previous") / "Bloom.exe"
+                    if self.reported(kept) != self.old:
+                        say(f"FAILED: the kept version {kept} reports '{self.reported(kept)}', "
+                            f"not {self.old}")
+                        return False
+                    say(f"{name}: {self.old} is kept beside it, in {kept.parent.name}")
                 return True
             if not self.wait("the helper putting the kept version back",
                              lambda: "restored:" in self.helper_log(name)):
@@ -712,6 +886,8 @@ class Run:
             say(f"{name}: the installation is {self.old} again, and it started")
             return True
         finally:
+            if held is not None:
+                held.close()
             if SYSTEM == "macos":
                 subprocess.run(["launchctl", "unsetenv", PROFILE_VARIABLE], check=False)
             self.running(name)
@@ -761,8 +937,14 @@ def main(arguments: list[str]) -> int:
             say(f"{run.kind} on {run.platform}: {run.old} -> {run.new}")
             # Nothing of an earlier run may be read as this run's.
             run.clean()
-            passed = run.part("update", run.candidate, INSTALLER_ARGUMENTS + " /RELAUNCH=1",
-                              expect_new=True)
+            # Windows: the installer is started as the release's update list starts it.
+            update_arguments = (load("release").INSTALLER_ARGUMENTS if run.kind == "installer"
+                                else INSTALLER_ARGUMENTS + " /RELAUNCH=1")
+            passed = run.part("update", run.candidate, update_arguments, expect_new=True)
+            if passed and run.kind == "installer":
+                run.clean()
+                passed = run.part("failed", run.candidate, update_arguments, expect_new=False,
+                                  hold_folder=True)
             if passed and not options.skip_rollback:
                 run.clean()
                 broken, installer_arguments = run.broken_candidate()

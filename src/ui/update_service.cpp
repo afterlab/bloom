@@ -114,6 +114,10 @@ update::StartupResult UpdateService::settleAtStartup() {
         return {};
     }
     auto result = update::settleAtStartup(environment_->folders, environment_->current.text());
+    if (environment_->install.kind == update::InstallKind::WindowsInstaller) {
+        // The installer put this version back after an update it could not install (#788).
+        result.installFailed = update::takeInstallFailure(environment_->install.root);
+    }
     if (result.finishPlan && environment_->startHelper && !environment_->installedHelper.empty()) {
         // The swap happened and this is the new version: the helper only has to see the
         // confirmation that was just written, and ends.

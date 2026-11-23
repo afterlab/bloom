@@ -62,7 +62,12 @@ ROOT = TOOLS.parents[1]
 TAG = re.compile(r"^v(\d+\.\d+\.\d+(?:-(?:alpha|beta|rc)\.\d+)?)$")
 DEFAULT_VERSION = re.compile(r'^set\(BLOOM_PACKAGE_VERSION "([^"]+)" CACHE STRING', re.MULTILINE)
 VALIDATION_CONTEXT = "bloom/hardware-validation"
-INSTALLER_ARGUMENTS = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH=1"
+# How WinSparkle starts the Windows installer of an update (packaging/windows/bloom.iss, #788):
+# its progress window only, titled "Updating Bloom", from Bloom's close until the new version
+# opens (/SILENT); no question and no cancel (/SUPPRESSMSGBOXES, /NOCANCEL); it never closes a
+# Bloom (/NOCLOSEAPPLICATIONS); and it starts the new version when it is done (/RELAUNCH=1).
+INSTALLER_ARGUMENTS = ("/SILENT /SUPPRESSMSGBOXES /NOCANCEL /NORESTART /NOCLOSEAPPLICATIONS "
+                       "/RELAUNCH=1")
 
 
 def load(name: str):

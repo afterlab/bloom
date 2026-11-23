@@ -751,6 +751,24 @@ void testRestoredNotice() {
                heading->text() == QStringLiteral("Bloom 0.2.0-alpha.3 could not start, so the "
                                                  "version you had was put back."),
            "notice: says which version could not start and that the earlier one was put back");
+
+    // #788: an update the Windows installer could not install is told, with its reason.
+    update::StartupResult failed;
+    failed.installFailed = update::InstallFailure{
+        .version = "0.2.0-alpha.3", .reason = "Something kept Bloom's folder in use."};
+    rig.controller->noticeAtStartup(failed);
+    QLabel* failure = nullptr;
+    for (auto* widget : QApplication::allWidgets()) {
+        if (widget->objectName() == QStringLiteral("updateInstallFailedNoticeHeading")) {
+            failure = qobject_cast<QLabel*>(widget);
+        }
+    }
+    expect(failure != nullptr &&
+               failure->text() ==
+                   QStringLiteral("Bloom 0.2.0-alpha.3 could not be installed. The version you "
+                                  "had is still installed and works as before. Something kept "
+                                  "Bloom's folder in use."),
+           "notice: says which update was not installed, that the old version works, and why");
 }
 
 // Every state of the window, for review (BLOOM_UPDATE_CAPTURE_DIR). Written after the change only.
