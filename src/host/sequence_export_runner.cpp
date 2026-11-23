@@ -1196,17 +1196,28 @@ struct SequenceExportRunnerV1::State {
         if (const auto* failure = result.failure();
             failure && failure->stage() == OutputAnalysisAttemptStageV1::Evaluating)
             if (const auto* evaluation = failure->payloadAs<runtime::EvaluationDiagnosticCode>();
-                evaluation && *evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
+                evaluation &&
+                (*evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable ||
+                 *evaluation == runtime::EvaluationDiagnosticCode::MediaResourceLimit)) {
                 // #790: a changed, moved or deleted source file is the artist's to fix, not a
                 // fault in Bloom: name the file; the stage, codes and reason go to the log.
+                // #772: a resource limit that refused a source is named as that limit, not as a
+                // changed file.
+                const bool limit = *evaluation == runtime::EvaluationDiagnosticCode::MediaResourceLimit;
                 const auto index = work->request.range.firstFrame + frame.offset;
-                std::string detail = "frame " + std::to_string(index) + " source unavailable; " +
+                std::string detail = "frame " + std::to_string(index) +
+                                     (limit ? " source refused by a resource limit; "
+                                            : " source unavailable; ") +
                                      describeOutputAnalysisAttemptV1(result);
                 std::cerr << "Bloom export: " << detail << '\n';
                 diagnostic = std::move(detail);
                 SequenceExportResultV1 unavailable;
-                unavailable.failureStage = SequenceExportFailureStageV1::SourceUnavailable;
-                fail({Error::Unavailable, exportSourceUnavailableSentenceV1(failure->subject())},
+                unavailable.failureStage = limit ? SequenceExportFailureStageV1::SourceResourceLimit
+                                                 : SequenceExportFailureStageV1::SourceUnavailable;
+                fail({Error::Unavailable,
+                      limit ? exportSourceResourceLimitSentenceV1(failure->subject(),
+                                                                  failure->message())
+                            : exportSourceUnavailableSentenceV1(failure->subject())},
                      std::move(unavailable));
                 return false;
             }
@@ -1527,6 +1538,21 @@ std::string exportSourceUnavailableSentenceV1(const std::string_view asset) {
            ", which changed, moved or was deleted since it was imported, so the export stopped. "
            "Restore the file, or relink it in Assets, then export again.";
 }
+std::string exportSourceResourceLimitSentenceV1(const std::string_view asset,
+                                                std::string_view reason) {
+    while (!reason.empty() && (reason.back() == '.' || reason.back() == ' '))
+        reason.remove_suffix(1);
+    std::string limit(reason);
+    if (!limit.empty() && limit.front() >= 'A' && limit.front() <= 'Z' &&
+        (limit.size() < 2 || !(limit[1] >= 'A' && limit[1] <= 'Z')))
+        limit.front() = static_cast<char>(limit.front() - 'A' + 'a');
+    return "Bloom couldn't open " +
+           (asset.empty() ? std::string("a source file") : "\"" + std::string(asset) + "\"") +
+           " because a resource limit was reached" + (limit.empty() ? "" : " (" + limit + ")") +
+           ", so the export stopped. This is a limit on what Bloom holds open at once, not a "
+           "changed or missing file. Free disk space or let other exports finish, then export "
+           "again.";
+}
 SequenceExportStageV1 SequenceExportRunnerV1::stage() const { return state_->stage; }
 const output::MediaOutputAnalysisV1* SequenceExportRunnerV1::analysis() const {
     if (!state_->work || state_->stage == Stage::Compiling || !state_->work->analysis)
@@ -1571,7 +1597,10 @@ std::string describeVideoSnapshotWaitV1(const runtime::LinearPassRetention::Vide
     if (wait.frame)
         std::snprintf(at, sizeof at, "%.3f s", wait.frame->toSeconds());
     return std::string(wait.frame ? "Frame at " + std::string(at) : "A frame") + ": reading \"" +
-           wait.source + "\" waited " + std::to_string((wait.nanoseconds + 500000) / 1000000) +
-           " ms for released video source snapshots to close (the snapshot quota was full).";
+           wait.source + "\" waited " +
+           (wait.nanoseconds < 500000
+                ? std::string("under 1 ms")
+                : std::to_string((wait.nanoseconds + 500000) / 1000000) + " ms") +
+           " for released video source snapshots to close (the snapshot quota was full).";
 }
 } // namespace bloom::host

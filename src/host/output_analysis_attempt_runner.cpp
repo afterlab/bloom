@@ -868,7 +868,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         if (!evalResult.diagnostics().empty()) {
                             auto detail = std::make_shared<BuildProductV1>();
                             detail->failureMessage = evalResult.diagnostics().front().summary;
-                            if (code == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable)
+                            if (code == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable ||
+                                code == runtime::EvaluationDiagnosticCode::MediaResourceLimit)
                                 detail->failureSubject = evalResult.diagnostics().front().detail;
                             failed.product = std::move(detail);
                         }

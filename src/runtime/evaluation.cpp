@@ -85,6 +85,8 @@ std::string_view evaluationDiagnosticCodeId(const EvaluationDiagnosticCode code)
         return "bloom.runtime.evaluation.ocio-config-unavailable";
     case EvaluationDiagnosticCode::MediaSourceUnavailable:
         return "bloom.runtime.evaluation.media-source-unavailable";
+    case EvaluationDiagnosticCode::MediaResourceLimit:
+        return "bloom.runtime.evaluation.media-resource-limit";
     case EvaluationDiagnosticCode::InternalInvariant:
         return "bloom.runtime.evaluation.internal-invariant";
     }

@@ -184,11 +184,20 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     // diagnostic). The result's detail is the plain sentence naming the file and the remedy
     // (exportSourceUnavailableSentenceV1); it is not an internal fault.
     SourceUnavailable,
+    // #772: a resource limit refused a source (the evaluator's media-resource-limit diagnostic:
+    // the video source snapshot quota is full). The detail is the sentence naming the file and the
+    // limit (exportSourceResourceLimitSentenceV1); the file is not reported as changed.
+    SourceResourceLimit,
 };
 // The sentence for an export stopped because a source file changed, moved or disappeared: names
 // the asset (empty: "a source file") and says to restore the file or relink it. Every surface
 // shows this sentence (#790).
 [[nodiscard]] std::string exportSourceUnavailableSentenceV1(std::string_view asset);
+// The sentence for an export stopped because a resource limit refused a source (#772): names the
+// asset (empty: "a source file") and the limit's own reason (the files, bytes and limit held), says
+// it is a resource limit and not a changed file, and what to do.
+[[nodiscard]] std::string exportSourceResourceLimitSentenceV1(std::string_view asset,
+                                                              std::string_view reason);
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
     std::optional<media::provider::Unavailable> failure;

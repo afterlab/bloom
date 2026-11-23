@@ -28,6 +28,9 @@ struct VideoSourceSelection {
     std::uint32_t interpretation = 0;
     bool inputColorSpaceAutomatic = false;
     bool cancelled = false;
+    // #772: the frame is missing because a resource limit refused its source (the snapshot quota
+    // is full, the capture exceeds its host allowance), not because the file changed or is gone.
+    bool resourceLimit = false;
     platform::FileSnapshotStatistics sourceWork;
     bool retainedRevision = false;
     // "software", "vaapi" or "software (fallback: <reason>)" for the decoded frame.

@@ -64,13 +64,16 @@ struct RenderRequest final {
 // already published remains. `DeviceRequired`: the request required a GPU device and none was
 // available, or a frame was evaluated on the CPU reference path; that frame was not published.
 // `MediaSourceUnavailable` (#790): a source file changed, moved or disappeared; the diagnostic
-// names it and says to restore or relink it.
+// names it and says to restore or relink it. `MediaResourceLimit` (#772): a resource limit refused a
+// source (the video source snapshot quota is full); the diagnostic names the file and the limit,
+// and the file is not reported as changed.
 enum class RenderDiagnosticCode {
     None,
     MissingProcessingRoot,
     Cancelled,
     DeviceRequired,
-    MediaSourceUnavailable
+    MediaSourceUnavailable,
+    MediaResourceLimit
 };
 
 struct RenderResult final {

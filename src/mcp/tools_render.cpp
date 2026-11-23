@@ -627,6 +627,13 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                 runner.result()->failure)
                 throw ToolFailure(McpToolErrorCode::ExportFailed, runner.result()->failure->detail,
                                   "export.media.unavailable");
+            // #772: a resource limit that refused a source (the video source snapshot quota is
+            // full) is classed as that limit, as the export queue reports it.
+            if (runner.result()->failureStage ==
+                    host::SequenceExportFailureStageV1::SourceResourceLimit &&
+                runner.result()->failure)
+                throw ToolFailure(McpToolErrorCode::ExportFailed, runner.result()->failure->detail,
+                                  "export.media.resource-limit");
             throw std::runtime_error(runner.result()->failure ? runner.result()->failure->detail
                                                               : "Export was not published");
         }

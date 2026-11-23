@@ -68,6 +68,8 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
         return "device-required";
     case RenderDiagnosticCode::MediaSourceUnavailable:
         return "media-source-unavailable";
+    case RenderDiagnosticCode::MediaResourceLimit:
+        return "media-resource-limit";
     }
     return "";
 }

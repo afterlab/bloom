@@ -3766,7 +3766,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedVideo->frame)
                     return EvaluationResult::failed(diagnostic(
-                        EvaluationDiagnosticCode::MediaSourceUnavailable,
+                        selectedVideo->resourceLimit ? EvaluationDiagnosticCode::MediaResourceLimit
+                                                     : EvaluationDiagnosticCode::MediaSourceUnavailable,
                         selectedVideo->warning.empty() ? "Final video source is unavailable"
                                                        : selectedVideo->warning,
                         source->asset ? source->asset->name : std::string{}, operationSubject));

@@ -488,10 +488,14 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             collectLog();
             // A changed or missing source file already has a plain sentence that names the
             // asset; the technical detail stays in the export log.
+            // #772: so has a resource limit that refused a source (its files, bytes and limit).
+            const bool limitReason =
+                failure && failure->diagnosticCode == "export.media.resource-limit";
             const bool plainReason =
-                failure && failure->diagnosticCode == "export.media.unavailable";
+                failure && (failure->diagnosticCode == "export.media.unavailable" || limitReason);
             if (!runner.stopped() && plainReason)
-                result.diagnosticCode = RenderDiagnosticCode::MediaSourceUnavailable;
+                result.diagnosticCode = limitReason ? RenderDiagnosticCode::MediaResourceLimit
+                                                    : RenderDiagnosticCode::MediaSourceUnavailable;
             if (!details.empty() && !plainReason)
                 result.diagnostic += " Details: " + details;
         }

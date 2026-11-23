@@ -32,7 +32,8 @@ class Host:
                replace: bool, require_device: bool,
                subtitles: dict[str, Any] | None) -> dict[str, Any]:
         """`succeeded`; on success `subtitles` lists the delivered tracks; on failure `diagnostic` and `diagnostic_code` ("cancelled",
-        "missing-processing-root", "device-required", "media-source-unavailable" or "")."""
+        "missing-processing-root", "device-required", "media-source-unavailable", "media-resource-limit"
+        or "")."""
         ...
     def scopes(self, options: dict[str, Any], cancellation_task: int,
                progress: Callable[[int, int], None] | None = ...) -> dict[str, Any]:

@@ -1399,10 +1399,17 @@ class ImageDriver final : public DriverBase {
                 attemptFailure->stage() == OutputAnalysisAttemptStageV1::Evaluating)
                 if (const auto* evaluation =
                         attemptFailure->payloadAs<runtime::EvaluationDiagnosticCode>();
-                    evaluation &&
-                    *evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
-                    diagnosticCode = "export.media.unavailable";
-                    reason = exportSourceUnavailableSentenceV1(attemptFailure->subject());
+                    evaluation) {
+                    if (*evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
+                        diagnosticCode = "export.media.unavailable";
+                        reason = exportSourceUnavailableSentenceV1(attemptFailure->subject());
+                    } else if (*evaluation ==
+                               runtime::EvaluationDiagnosticCode::MediaResourceLimit) {
+                        // #772: a resource limit, named with its files, bytes and limit.
+                        diagnosticCode = "export.media.resource-limit";
+                        reason = exportSourceResourceLimitSentenceV1(attemptFailure->subject(),
+                                                                     attemptFailure->message());
+                    }
                 }
             if (attemptFailure &&
                 attemptFailure->stage() == OutputAnalysisAttemptStageV1::Resolving)
@@ -2364,6 +2371,12 @@ class MediaDriver final : public DriverBase {
                     result.diagnostic.empty() ? detail : result.diagnostic);
                 return fail(failure(ExportFailureCode::EvaluationFailed,
                                     "export.media.unavailable", detail));
+            case SequenceExportFailureStageV1::SourceResourceLimit:
+                // #772: the same classification and sentence a still export reports.
+                log(runtime::DiagnosticSeverity::Error, "export.media.detail",
+                    result.diagnostic.empty() ? detail : result.diagnostic);
+                return fail(failure(ExportFailureCode::EvaluationFailed,
+                                    "export.media.resource-limit", detail));
             case SequenceExportFailureStageV1::PlatformEncoderFailed:
             case SequenceExportFailureStageV1::Unclassified:
                 break;

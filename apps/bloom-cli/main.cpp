@@ -515,10 +515,13 @@ struct OpenFrameRange final {
                 status = 6;
                 // A failed job's sentence with its class, in the form bloom-cli render uses: a
                 // changed, moved or deleted source file is classed as MCP and Python class it
-                // (#790). The job's failed event in the JSON carries the same sentence.
+                // (#790), and so is a resource limit that refused a source (#772). The job's failed
+                // event in the JSON carries the same sentence.
                 if (view.failure)
                     std::cerr << (view.failure->diagnosticCode == "export.media.unavailable"
                                       ? "error[bloom-cli.export.media-source-unavailable]: "
+                                  : view.failure->diagnosticCode == "export.media.resource-limit"
+                                      ? "error[bloom-cli.export.media-resource-limit]: "
                                       : "error[bloom-cli.export.failed]: ")
                               << view.failure->reason << '\n';
             }
@@ -732,6 +735,8 @@ struct OpenFrameRange final {
                       : result.diagnosticCode ==
                               scripting::RenderDiagnosticCode::MediaSourceUnavailable
                           ? "error[bloom-cli.render.media-source-unavailable]: "
+                      : result.diagnosticCode == scripting::RenderDiagnosticCode::MediaResourceLimit
+                          ? "error[bloom-cli.render.media-resource-limit]: "
                           : "error[bloom-cli.render]: ")
                   << result.diagnostic << '\n';
         return 5;

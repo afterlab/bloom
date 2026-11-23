@@ -517,6 +517,7 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     if (const auto* error = std::get_if<media::provider::Unavailable>(&product)) {
         selection.warning = error->detail;
         selection.cancelled = error->reason == media::provider::Error::Cancelled;
+        selection.resourceLimit = error->reason == media::provider::Error::Oversized;
         // A failed cold capture must not pin an unresolved/offline locator. On reconnect the
         // next request resolves the locator again. Pointer identity protects a newer generation.
         // A cancelled or shut-down request is not a failure of the source: the session keeps its

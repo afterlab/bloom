@@ -184,6 +184,10 @@ enum class EvaluationDiagnosticCode : std::uint8_t {
     // A final render needs a source file that is missing, unreadable or changed since it was
     // imported. `summary` is the technical reason; `detail` is the asset's display name.
     MediaSourceUnavailable,
+    // #772: a final render could not read a source because a resource limit refused it (the video
+    // source snapshot quota is full). `summary` names the files, bytes and limit; `detail` is the
+    // asset's display name. The file is not reported as changed.
+    MediaResourceLimit,
 };
 
 [[nodiscard]] std::string_view evaluationDiagnosticCodeId(EvaluationDiagnosticCode code) noexcept;

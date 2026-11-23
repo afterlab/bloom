@@ -261,8 +261,10 @@ void writeNumberedCopy(const std::filesystem::path& source, const std::filesyste
 
 // The same export through the sequence runner, whose movie source copies this test can see: the
 // copies' file limit rises with the sources the frames read and falls while the export runs as the
-// trimmed layers leave the range; and twelve small files held beside the export fill its quota for the
-// first captures, so they wait for a release the test announces, and the result says so (#772).
+// trimmed layers leave the range; and small files held beside the export fill its quota (as many as
+// it can ever admit for these sources: 8 idle + 16), so the first capture waits for a release the
+// test announces, and the result says so (#772). The release is made once a capture is waiting on
+// the quota (waitingForRelease), not after a time.
 void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
                                 const std::int64_t last) {
     const auto snapshot = currentSnapshot(f.session);
@@ -293,14 +295,16 @@ void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
     }
     std::filesystem::create_directories(folder / "held-spool");
     std::vector<std::unique_ptr<platform::ReadOnlyFileSnapshot>> held;
-    quota->setFileLimit(12);
-    for (int count = 0; count < 12; ++count) {
+    constexpr std::size_t kHeld = 8 + 16;
+    quota->setFileLimit(kHeld);
+    for (std::size_t count = 0; count < kHeld; ++count) {
         auto made = platform::ReadOnlyFileSnapshot::capture(heldFile, folder / "held-spool", quota,
                                                             std::uint64_t{1} << 20U);
         if (auto* kept = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&made))
             held.push_back(std::move(*kept));
     }
-    expect(held.size() == 12, "twelve snapshots hold the quota (" + std::to_string(held.size()) + ")");
+    expect(held.size() == kHeld,
+           "the held snapshots fill the quota (" + std::to_string(held.size()) + ")");
     quota->expectRelease();
     const auto started = std::chrono::steady_clock::now();
     const auto deadline = started + std::chrono::seconds(240);
@@ -314,8 +318,7 @@ void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
             if (analysis && frame)
                 expect(runner.approve(analysis->digest, *frame), "the export's captured identities");
         }
-        if (!released &&
-            std::chrono::steady_clock::now() - started > std::chrono::milliseconds(200)) {
+        if (!released && quota->waitingForRelease() > 0) {
             released = true;
             held.clear();
             quota->releaseExpected();
@@ -330,6 +333,7 @@ void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
             limitFellWhileRunning = true;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
+    expect(released, "a capture waited on the full quota before the release");
     expect(runner.result().has_value() && runner.result()->published(),
            "the runner export of sixteen movie layers publishes");
     expect(highestLimit >= 8 + 16,
@@ -359,6 +363,102 @@ void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
     expect(quota->fileLimit() == 8,
            "the pass's end leaves the idle limit of 8 (" + std::to_string(quota->fileLimit()) + ")");
+}
+
+// A quota that stays full (files held beside the export with no release coming) stops the export
+// as a resource limit: the sentence names the movie, the quota's files and bytes and its limit,
+// and is not the changed-source sentence (#790 is for a file that changed, moved or was deleted).
+void testFullQuotaIsAResourceLimit(Fixture& f, const std::filesystem::path& folder,
+                                   const std::int64_t last) {
+    const auto snapshot = currentSnapshot(f.session);
+    const auto& composition = f.main(snapshot);
+    host::SequenceExportRequestV1 request{
+        .composition = {snapshot, f.composition()},
+        .range = {folder / "Exports" / "refused.mov", 0, static_cast<std::uint64_t>(last),
+                  composition.format().frameRate(), composition.duration()},
+        .bwfDescription = {},
+        .assetBaseDirectory = folder,
+        .worker = {}};
+    request.preset = output::OutputPresetV1::ProResMovV1;
+    request.profile = "hq";
+    request.audio = false;
+    host::SequenceExportRunnerV1 runner(f.scheduler, f.compiler, f.publications, f.artifacts,
+                                        *f.ledger, std::move(request), *f.retirement);
+    const auto quota = runner.videoSourceSnapshotQuota();
+    expect(quota != nullptr, "full quota: the runner exposes its video source quota");
+    if (!quota)
+        return;
+    const auto heldFile = folder / "held-full.bin";
+    {
+        std::ofstream(heldFile, std::ios::binary) << "held";
+    }
+    std::filesystem::create_directories(folder / "held-full-spool");
+    // More files than the quota admits for the sixteen sources (8 idle + 16), none released.
+    constexpr std::size_t kHeld = 8 + 16;
+    std::vector<std::unique_ptr<platform::ReadOnlyFileSnapshot>> held;
+    quota->setFileLimit(kHeld);
+    for (std::size_t count = 0; count < kHeld; ++count) {
+        auto made = platform::ReadOnlyFileSnapshot::capture(heldFile, folder / "held-full-spool",
+                                                            quota, std::uint64_t{1} << 20U);
+        if (auto* kept = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&made))
+            held.push_back(std::move(*kept));
+    }
+    expect(held.size() == kHeld, "full quota: the held files fill the quota (" +
+                                     std::to_string(held.size()) + ")");
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(240);
+    while (!runner.result() && std::chrono::steady_clock::now() < deadline) {
+        runner.poll();
+        if (runner.stage() == host::SequenceExportStageV1::AwaitingApproval) {
+            const auto* analysis = runner.analysis();
+            const auto frame = runner.frameApprovalDigest();
+            if (analysis && frame)
+                expect(runner.approve(analysis->digest, *frame),
+                       "full quota: the export's captured identities");
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(runner.result().has_value() && !runner.result()->published(),
+           "full quota: the export stops and publishes nothing");
+    if (!runner.result())
+        return;
+    expect(runner.result()->failureStage == host::SequenceExportFailureStageV1::SourceResourceLimit,
+           "full quota: the failure is classed as a resource limit");
+    const auto sentence = runner.result()->failure ? runner.result()->failure->detail : std::string{};
+    std::cout << "  full quota: " << sentence << '\n';
+    expect(sentence.find("Bloom couldn't open \"layer-") != std::string::npos &&
+               sentence.find("resource limit") != std::string::npos &&
+               sentence.find("snapshot quota is full: ") != std::string::npos &&
+               sentence.find(" files and ") != std::string::npos &&
+               sentence.find(" GiB are held") != std::string::npos &&
+               sentence.find("needs one more file of ") != std::string::npos &&
+               sentence.find(" bytes") != std::string::npos &&
+               sentence.find("not a changed or missing file") != std::string::npos,
+           "full quota: the sentence names the movie, the files, the bytes and the limit: " +
+               sentence);
+    expect(sentence.find("changed, moved or was deleted") == std::string::npos &&
+               sentence.find("bug in Bloom") == std::string::npos,
+           "full quota: it is not the changed-source sentence nor an internal fault");
+    expect(!std::filesystem::exists(folder / "Exports" / "refused.mov"),
+           "full quota: no movie is written");
+}
+
+void testResourceLimitSentence() {
+    const auto sentence = host::exportSourceResourceLimitSentenceV1(
+        "plate", "Video source snapshot quota is full: 9 of 9 files and 0.5 GiB of 32.0 GiB are "
+                 "held, and this source needs one more file of 4096 bytes");
+    expect(sentence == "Bloom couldn't open \"plate\" because a resource limit was reached (video "
+                       "source snapshot quota is full: 9 of 9 files and 0.5 GiB of 32.0 GiB are "
+                       "held, and this source needs one more file of 4096 bytes), so the export "
+                       "stopped. This is a limit on what Bloom holds open at once, not a changed "
+                       "or missing file. Free disk space or let other exports finish, then export "
+                       "again.",
+           "the resource-limit sentence: " + sentence);
+    expect(host::exportSourceResourceLimitSentenceV1({}, {}).starts_with(
+               "Bloom couldn't open a source file because a resource limit was reached, so"),
+           "the resource-limit sentence without an asset or reason");
+    expect(host::exportSourceUnavailableSentenceV1("plate").find("changed, moved or was deleted") !=
+               std::string::npos,
+           "the changed-source sentence is unchanged");
 }
 
 void testSixteenMovieLayersExport() {
@@ -430,6 +530,7 @@ void testSixteenMovieLayersExport() {
         f.execute(std::move(trim), "trim a layer");
     }
     testSnapshotWaitAndRelease(f, folder, last);
+    testFullQuotaIsAResourceLimit(f, folder, last);
     document::ExportOutputSettings output;
     output.format = ExportFormat::ProResMov;
     output.codecProfile = "hq";
@@ -447,6 +548,7 @@ void testSixteenMovieLayersExport() {
 
 int main() {
     try {
+        testResourceLimitSentence();
         testSixteenMovieLayersExport();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
