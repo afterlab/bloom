@@ -615,6 +615,14 @@ window's thread, and stop when the request is cancelled (`bloom.scripting.cancel
   ID without a manifest. A point outside the layer or over no object answers "No object under the
   point". To choose mattes by name, set the node's `mattes` text with
   `bloom.node.set-parameter-value`.
+- `bloom.layer.add-from-assets` (and the other ways to add a nested composition as a layer) finds the
+  composition's layer Merge even when effect nodes sit between it and Output (a finishing chain of film grain,
+  chromatic aberration and the like), adds the layer to that Merge and leaves the chain as it is. It is refused
+  only when no layer Merge is upstream of Output, and the refusal says what it looked for.
+- `bloom.export.add-job` takes `outputs` as objects, for example `"outputs": [{"preset": "builtin:h264-mov",
+  "destination": {"path": "/exports/a.mov"}}, {"preset": "builtin:prores-422-mov", "destination": {"path":
+  "/exports/b.mov"}}]`, or as their JSON text; `bloom.export.add-output` takes its `output` the same way. A refused
+  output is named, as `outputs[1]`, with the reason.
 - `bloom.node.delete-unused` (`composition`) is the Node editor's Delete Unused button: it deletes
   every node with no path to the composition's Output (links, Merge slots, a layer's parent and
   matte sources, and drivers all count as a path) in one undo step, with Delete's rules: the Output,

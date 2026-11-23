@@ -5,6 +5,8 @@
 #include <bloom/commands/node_editor_operations.hpp>
 #include <bloom/commands/node_operations.hpp>
 #include <bloom/commands/operations.hpp>
+#include <bloom/document/chromatic_aberration_nodes.hpp>
+#include <bloom/document/film_grain_nodes.hpp>
 #include <bloom/document/layer_source.hpp>
 #include <bloom/document/new_project.hpp>
 
@@ -163,6 +165,83 @@ void testNameFollowsComposition(TestContext& test) {
                 "undo restores both names");
 }
 
+// A finishing chain after the Merge (Merge -> film grain -> chromatic aberration -> Output) does
+// not stop a layer from being added, and the chain is left exactly as it was.
+void testAddLayerThroughFinishingChain(TestContext& test) {
+    auto initial = document::makeNewProject("Chain", "Main", core::RationalTime::fromInteger(4));
+    const auto main = initial.initialCompositionId;
+    Document document(std::move(initial.project));
+    CommandStack stack(document);
+    const auto format =
+        document::CompositionFormat::create(64, 64).value_or(document::CompositionFormat{});
+    const auto nested = execute<AddComposition>(document, stack, "Precomp", format,
+                                                core::RationalTime::fromInteger(2))
+                            .outputId<document::CompositionId>(kAddCompositionOutput);
+    test.expect(nested.has_value(), "nested composition fixture");
+    if (!nested)
+        return;
+    const auto beforeSnapshot = document.snapshot();
+    const auto* before = beforeSnapshot.project().findComposition(main);
+    const auto merge = before->graph().outputMergeId().value_or(document::NodeId{});
+    const auto output = before->graph().compositionOutput().value_or(document::OutputPortRef{});
+    const auto grain = execute<AddNode>(document, stack, main,
+                                        std::string(document::kFilmGrainNodeType),
+                                        document::Vec2d{200, 0})
+                           .outputId<document::NodeId>(kAddNodeOutput)
+                           .value_or(document::NodeId{});
+    const auto aberration = execute<AddNode>(document, stack, main,
+                                             std::string(document::kChromaticAberrationNodeType),
+                                             document::Vec2d{400, 0})
+                                .outputId<document::NodeId>(kAddNodeOutput)
+                                .value_or(document::NodeId{});
+    const auto disconnected = execute<DisconnectInput>(
+        document, stack, main, document::NodeInputRef{output.nodeId, "image"});
+    test.expect(disconnected.changed(), "the Output image input is disconnected");
+    const auto step = [&](const document::OutputPortRef& from, const document::NodeInputRef& to) {
+        return execute<ConnectPorts>(document, stack, main, from, to).changed();
+    };
+    test.expect(grain.isValid() && aberration.isValid(), "the two effect nodes are added");
+    test.expect(step({merge, "image"}, {grain, "input"}), "the Merge feeds the film grain");
+    test.expect(step({grain, "image"}, {aberration, "input"}), "the grain feeds the aberration");
+    test.expect(step({aberration, "image"}, {output.nodeId, "image"}),
+                "the aberration feeds Output");
+    const auto chainedSnapshot = document.snapshot();
+    const auto* chained = chainedSnapshot.project().findComposition(main);
+    test.expect(!chained->graph().outputMergeId().has_value() &&
+                    chained->graph().upstreamMergeId() == std::optional(merge),
+                "the Merge is found upstream of Output through both effect nodes");
+
+    const auto result =
+        execute<AddCompositionSource>(document, stack, main, *nested, document::Vec2d{}, true);
+    test.expect(result.changed(), "a layer is added to a composition with a finishing chain");
+    const auto afterSnapshot = document.snapshot();
+    const auto* after = afterSnapshot.project().findComposition(main);
+    const auto feeds = [&](const document::NodeId from, const document::NodeId to) {
+        return std::ranges::any_of(after->graph().edges(), [&](const auto& edge) {
+            const auto* input = std::get_if<document::NodeInputRef>(&edge.destination);
+            return edge.source.nodeId == from && input != nullptr && input->nodeId == to &&
+                   (input->port == "image" || input->port == "input");
+        });
+    };
+    test.expect(after->graph().layerOutputs().size() == 1, "one layer was added");
+    test.expect(after->graph().layerStack().nodeId() == merge &&
+                    after->graph().layerStack().entries().size() == 1,
+                "the layer lands in the Merge");
+    test.expect(feeds(merge, grain), "the Merge still feeds the grain");
+    test.expect(feeds(grain, aberration), "the grain still feeds the aberration");
+    test.expect(feeds(aberration, output.nodeId), "the aberration still feeds Output");
+
+    // No Merge upstream: the error names what was looked for.
+    execute<DisconnectInput>(document, stack, main, document::NodeInputRef{grain, "input"});
+    const auto refused =
+        execute<AddCompositionSource>(document, stack, main, *nested, document::Vec2d{}, true);
+    test.expect(refused.status == CommandStatus::Rejected &&
+                    !refused.operationFailures.empty() &&
+                    refused.operationFailures.front().issue.message.find(
+                        "layer Merge upstream of Output") != std::string::npos,
+                "with no Merge upstream the refusal names what was searched");
+}
+
 } // namespace
 } // namespace bloom::commands::test
 
@@ -172,6 +251,7 @@ int main() {
         bloom::commands::test::testShy(test);
         bloom::commands::test::testNameFollowsAsset(test);
         bloom::commands::test::testNameFollowsComposition(test);
+        bloom::commands::test::testAddLayerThroughFinishingChain(test);
     } catch (const std::exception& error) {
         test.fail(std::string("unexpected test exception: ") + error.what());
     }

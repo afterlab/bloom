@@ -125,10 +125,13 @@ OperationResult AddCompositionSource::apply(document::Draft& draft) const {
                                          nesting.issues().front().message);
     if (!asLayer_)
         return added;
-    const auto merge = composition->graph().outputMergeId();
+    // The Merge may sit behind a finishing chain of effect nodes; the chain is left as it is.
+    const auto merge = composition->graph().upstreamMergeId();
     if (!merge)
-        return OperationResult::rejected(OperationIssueCode::InvalidTarget,
-                                         "Timeline layers need a Merge connected to Output");
+        return OperationResult::rejected(
+            OperationIssueCode::InvalidTarget,
+            "Timeline layers need a layer Merge upstream of Output: followed Output's image input "
+            "back through its effect nodes and found no Merge");
     auto layerResult = AddEditorNode(composition_, std::string(document::kLayerOutputNodeType), {},
                                      document::LayerStackInputRef{*merge, {}, "content"})
                            .apply(draft);

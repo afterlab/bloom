@@ -241,8 +241,48 @@ std::optional<NodeId> CanonicalGraph::outputMergeId() const noexcept {
     }
     return std::nullopt;
 }
+std::optional<NodeId>
+CanonicalGraph::upstreamMergeId(const NodeDefinitionRegistry& registry) const noexcept {
+    if (!compositionOutput_)
+        return std::nullopt;
+    // The node feeding `port` of `node`, when exactly one edge does.
+    const auto feeder = [this](const NodeId node,
+                               const std::string_view port) -> std::optional<NodeId> {
+        for (const auto& edge : edges_.view()) {
+            const auto* input = std::get_if<NodeInputRef>(&edge.destination);
+            if (input && input->nodeId == node && input->port == port)
+                return edge.source.nodeId;
+        }
+        return std::nullopt;
+    };
+    auto current = feeder(compositionOutput_->nodeId, kCompositionOutputInputPort);
+    // Bounded by the node count, so a cycle in a malformed graph cannot loop.
+    for (std::size_t hops = 0; current && hops <= nodes_.view().size(); ++hops) {
+        if (merge(*current))
+            return current;
+        // Through a node with one Image input (an effect: film grain, chromatic aberration, a
+        // blur); a node with several image inputs combines pictures and is not a finishing step.
+        const auto* record = findNode(*current);
+        const auto* definition =
+            record ? registry.find(record->typeId, record->schemaVersion) : nullptr;
+        if (definition == nullptr)
+            return std::nullopt;
+        const InputPortDefinition* only = nullptr;
+        for (const auto& input : definition->inputs) {
+            if (input.valueKind != SocketValueKind::Image)
+                continue;
+            if (only != nullptr)
+                return std::nullopt;
+            only = &input;
+        }
+        if (only == nullptr)
+            return std::nullopt;
+        current = feeder(*current, only->name);
+    }
+    return std::nullopt;
+}
 const LayerStack& CanonicalGraph::layerStack() const noexcept {
-    if (const auto id = outputMergeId())
+    if (const auto id = upstreamMergeId())
         return *merge(*id);
     return layerStacks_.empty() ? emptyStack_ : layerStacks_.front();
 }
