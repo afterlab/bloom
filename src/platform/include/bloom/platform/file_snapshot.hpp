@@ -42,6 +42,9 @@ class FileSnapshotQuota final {
     // Blocks until a snapshot of this quota closes, an expected release ends, or `slice` passes.
     // False at once when no release is pending (nothing to wait for).
     bool waitForRelease(std::chrono::milliseconds slice);
+    // The callers inside waitForRelease() now: a capture this quota refused that waits for a
+    // pending release. A test holds a release until a capture is waiting rather than on a timer.
+    [[nodiscard]] std::size_t waitingForRelease() const;
 
   private:
     friend class ReadOnlyFileSnapshot;
@@ -50,7 +53,7 @@ class FileSnapshotQuota final {
     mutable std::mutex mutex_;
     std::condition_variable changed_;
     std::uint64_t ceiling_ = 0, resident_ = 0;
-    std::size_t files_ = 0, count_ = 0, pending_ = 0;
+    std::size_t files_ = 0, count_ = 0, pending_ = 0, waiting_ = 0;
     std::uint64_t releases_ = 0;
 };
 // #718: where a progressive snapshot finds bytes of its source that are already local, and where

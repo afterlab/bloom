@@ -152,19 +152,23 @@ int main() {
                                 !files->waitForRelease(std::chrono::milliseconds(1)),
                             "quota: with no release pending a wait returns at once");
         files->expectRelease();
+        // The release is made only once the wait below is under way (waitingForRelease), so the
+        // wait is observed whatever the machine's speed.
+        bool sawWaiter = false;
         std::thread closer([&] {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            while (files->waitingForRelease() == 0)
+                std::this_thread::yield();
+            sawWaiter = true;
             second.reset();
             files->releaseExpected();
         });
-        const auto started = std::chrono::steady_clock::now();
-        while (files->residentFiles() == 2 && files->waitForRelease(std::chrono::milliseconds(20))) {
-        }
+        std::size_t slices = 0;
+        while (files->residentFiles() == 2 && files->waitForRelease(std::chrono::milliseconds(20)))
+            ++slices;
         closer.join();
         expectations.expect(first != nullptr && files->residentFiles() == 1 &&
-                                files->releasesPending() == 0 &&
-                                std::chrono::steady_clock::now() - started >=
-                                    std::chrono::milliseconds(40),
+                                files->releasesPending() == 0 && sawWaiter && slices > 0 &&
+                                files->waitingForRelease() == 0,
                             "quota: a wait lasts until the expected release closes its file");
         files->setFileLimit(2);
         expectations.expect(capture() != nullptr,

@@ -89,8 +89,14 @@ bool FileSnapshotQuota::waitForRelease(const std::chrono::milliseconds slice) {
     if (pending_ == 0)
         return false;
     const auto seen = releases_;
+    ++waiting_;
     changed_.wait_for(lock, slice, [&] { return releases_ != seen || pending_ == 0; });
+    --waiting_;
     return true;
+}
+std::size_t FileSnapshotQuota::waitingForRelease() const {
+    const std::lock_guard lock(mutex_);
+    return waiting_;
 }
 // #718: the fill state of a snapshot that is usable before it is whole. The file has the source's
 // full length from the start; a chunk is Present once its bytes were written. The holder of this
