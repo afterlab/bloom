@@ -1393,6 +1393,43 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
                                       kMediaDisplayTolerance16, "ACES 1.0 SDR");
         }
     }
+    // #785: frames reused on the GPU route. A first export with "Use cached frames" evaluates every
+    // frame on the device and offers it (with its display-referred payload) to the provider's
+    // frame cache; a second takes every frame from it. Both files are the same bytes as the
+    // export above, which reused nothing.
+    {
+        auto first = f.request(directory / "gpu-reuse-first.mov", output::OutputPresetV1::ProResMovV1);
+        first.gpuProvider = provider;
+        first.useCachedFrames = true;
+        const auto evaluated = f.run(std::move(first));
+        auto second =
+            f.request(directory / "gpu-reuse-second.mov", output::OutputPresetV1::ProResMovV1);
+        second.gpuProvider = provider;
+        second.useCachedFrames = true;
+        const auto reused = f.run(std::move(second));
+        verify(reused, directory / "gpu-reuse-second.mov", true);
+        check(result.framesReused == 0 && evaluated.framesReused == 0 &&
+                  evaluated.gpuEvaluatedFrames == result.gpuEvaluatedFrames,
+              "GPU reuse: an export with an empty cache evaluates every frame on the device");
+        check(reused.framesReused == reused.encodedFrames && reused.encodedFrames > 0 &&
+                  reused.gpuEvaluatedFrames == 0,
+              "GPU reuse: the second export takes every frame from the cache (" +
+                  std::to_string(reused.framesReused) + " of " +
+                  std::to_string(reused.encodedFrames) + ")");
+        if (provider->gpuDisplayPreparationAvailable())
+            check(reused.gpuDisplayFrames == reused.encodedFrames && reused.cpuDisplayFrames == 0,
+                  "GPU reuse: a reused frame keeps its GPU display payload; no CPU display "
+                  "transform runs");
+        const auto bytes = [](const std::filesystem::path& file) {
+            std::ifstream in(file, std::ios::binary);
+            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        };
+        check(bytes(directory / "gpu-reuse-first.mov") == bytes(path) &&
+                  bytes(directory / "gpu-reuse-second.mov") == bytes(path),
+              "GPU reuse: both movies are byte-identical to the export without reuse");
+        if (const auto cache = provider->exportFrameCache())
+            cache->clear();
+    }
     check(retirement.finish(), "GPU video: native and host owners retire before proof publication");
     std::cout << "GPU video frames=" << result.gpuEvaluatedFrames
               << " dispatches=" << result.gpuNativeDispatches

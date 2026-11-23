@@ -566,7 +566,8 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
              gpuProvider = std::move(gpuProvider), processingPolicy = std::move(processingPolicy),
              forceCpuFallback, outputColorCommand = std::move(outputColorCommand),
              mediaDisplay = std::move(mediaDisplay), displayName = state_->request.displayName,
-             viewName = state_->request.viewName, requestLabel](
+             viewName = state_->request.viewName, requestLabel,
+             frameReuse = state_->request.frameReuse](
                 runtime::TaskContext& context) mutable -> runtime::TaskResult<BuildOutcomeV1> {
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
@@ -622,7 +623,57 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                         outputColorCommand = mediaDisplayCommand;
                     }
                 }
-                if (gpuProvider != nullptr && !forceCpuFallback) {
+                // #785: a frame the export frame cache holds for this exact render identity and
+                // route is taken as it is; everything after evaluation (identity, analysis,
+                // approval, the encoder) treats it as the frame a fresh evaluation gives.
+                std::optional<ExportFrameReuseKeyV1> reuseKey;
+                if (frameReuse.has_value() && frameReuse->cache != nullptr && plan != nullptr) {
+                    const bool gpuRoute = gpuProvider != nullptr && !forceCpuFallback &&
+                                          gpuProvider->deviceAvailable();
+                    if (auto frameKey =
+                            runtime::compositeFrameKeyFor(plan, evaluation, assetBaseDirectory)) {
+                        reuseKey = ExportFrameReuseKeyV1{
+                            .frame = std::move(*frameKey),
+                            .gpuRoute = gpuRoute,
+                            .outputCommand = gpuRoute && outputColorCommand != nullptr
+                                                 ? outputColorCommand->identity()
+                                                 : core::Sha256Digest{}};
+                    }
+                    if (context.isCancellationRequested()) {
+                        return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                    }
+                    const auto hit =
+                        reuseKey ? frameReuse->cache->lookup(*reuseKey, frameReuse->run) : nullptr;
+                    // A frame is reused only from the route a fresh evaluation takes now (a frame
+                    // the CPU reference evaluated on a GPU route evaluates again, so a device-only
+                    // export still refuses it), and a payload only for the display it was made
+                    // for (the key's command identity already pins the transform).
+                    const bool payloadsFit =
+                        hit != nullptr && hit->gpuEvaluated == reuseKey->gpuRoute &&
+                        (hit->mediaDisplay == nullptr || mediaDisplay != nullptr) &&
+                        (hit->display == nullptr || resolved->color.display.identity != nullptr);
+                    if (payloadsFit) {
+                        evaluatedFrame = hit->frame;
+                        frameOnGpu = hit->gpuEvaluated;
+                        gpuProvenance.reused = true;
+                        if (hit->mediaDisplay != nullptr) {
+                            gpuMediaDisplay.pixels =
+                                render::FinalRgba32fStorage::shared(hit->mediaDisplay);
+                            gpuMediaDisplay.width = hit->mediaDisplayWidth;
+                            gpuMediaDisplay.height = hit->mediaDisplayHeight;
+                            gpuMediaDisplay.commandIdentity = hit->mediaDisplayCommand;
+                            gpuMediaDisplay.displayDigest = mediaDisplay->display().digest();
+                        }
+                        if (hit->display != nullptr) {
+                            gpuDisplay.pixels = render::FinalRgba8Storage::shared(hit->display);
+                            gpuDisplay.width = hit->displayWidth;
+                            gpuDisplay.height = hit->displayHeight;
+                            gpuDisplay.commandIdentity = hit->displayCommand;
+                            gpuDisplay.displayIdentity = resolved->color.display.identity;
+                        }
+                    }
+                }
+                if (gpuProvider != nullptr && !forceCpuFallback && evaluatedFrame == nullptr) {
                     auto evaluator = gpuProvider->evaluator();
                     if (evaluator != nullptr) {
                         auto gpuOutcome =
@@ -831,6 +882,34 @@ std::optional<OutputAnalysisAttemptOutcomeV1> OutputAnalysisAttemptRunnerV1::try
                 hostPhase.reset();
                 if (context.isCancellationRequested()) {
                     return runtime::TaskResult<BuildOutcomeV1>::cancelled();
+                }
+                // #785: offer the evaluated frame to the cache. Its payloads become shared,
+                // immutable owners: this attempt and the cache hold the same rooted pixels.
+                if (reuseKey.has_value() && !gpuProvenance.reused && evaluatedFrame != nullptr) {
+                    auto entry = std::make_shared<ExportCachedFrameV1>();
+                    entry->frame = evaluatedFrame;
+                    entry->gpuEvaluated = frameOnGpu;
+                    if (gpuMediaDisplay.isPresent()) {
+                        auto owner = std::make_shared<const render::FinalRgba32fStorage>(
+                            std::move(gpuMediaDisplay.pixels));
+                        gpuMediaDisplay.pixels = render::FinalRgba32fStorage::shared(owner);
+                        entry->mediaDisplay = std::move(owner);
+                        entry->mediaDisplayWidth = gpuMediaDisplay.width;
+                        entry->mediaDisplayHeight = gpuMediaDisplay.height;
+                        entry->mediaDisplayCommand = gpuMediaDisplay.commandIdentity;
+                        entry->mediaDisplayDigest = gpuMediaDisplay.displayDigest;
+                    }
+                    if (gpuDisplay.isPresent()) {
+                        auto owner = std::make_shared<const render::FinalRgba8Storage>(
+                            std::move(gpuDisplay.pixels));
+                        gpuDisplay.pixels = render::FinalRgba8Storage::shared(owner);
+                        entry->display = std::move(owner);
+                        entry->displayWidth = gpuDisplay.width;
+                        entry->displayHeight = gpuDisplay.height;
+                        entry->displayCommand = gpuDisplay.commandIdentity;
+                    }
+                    (void)frameReuse->cache->insert(std::move(*reuseKey), std::move(entry),
+                                                    frameReuse->run);
                 }
 
                 context.reportProgress({.phase = "Identifying",

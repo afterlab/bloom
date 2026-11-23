@@ -2,6 +2,8 @@
 
 #include "gpu_export_provider_test_access.hpp"
 
+#include <bloom/host/export_frame_cache.hpp>
+
 #include <bloom/runtime/gpu_ocio_context.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
@@ -125,6 +127,8 @@ struct GpuExportProvider::State final {
     const bool ownsProcessSampling;
     const std::shared_ptr<std::timed_mutex> bootstrapGate;
     std::shared_ptr<runtime::PackedHostRetirementOwner> packedHostOwner;
+    std::mutex frameCacheMutex;
+    std::shared_ptr<ExportFrameCacheV1> frameCache;
     std::mutex samplingMutex;
     std::shared_ptr<runtime::MemoryBudgetLedger> samplingLedger;
     // Same sampled root; escaped contexts keep its ledger alive through unregister.
@@ -414,6 +418,15 @@ std::shared_ptr<const runtime::GpuSceneOcioContext> GpuExportProvider::sceneOcio
 std::shared_ptr<runtime::GpuProcessingPhasePolicy>
 GpuExportProvider::processingPhasePolicy() const noexcept {
     return state_ ? state_->options.processingPhasePolicy : nullptr;
+}
+
+std::shared_ptr<ExportFrameCacheV1> GpuExportProvider::exportFrameCache() {
+    if (!state_ || !state_->options.processingPhasePolicy)
+        return nullptr;
+    const std::lock_guard lock(state_->frameCacheMutex);
+    if (!state_->frameCache)
+        state_->frameCache = ExportFrameCacheV1::create(state_->options.processingPhasePolicy);
+    return state_->frameCache;
 }
 
 std::shared_ptr<runtime::PackedHostRetirementOwner>

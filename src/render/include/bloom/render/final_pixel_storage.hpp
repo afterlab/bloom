@@ -81,6 +81,18 @@ template <class T> class FinalPixelStorage final {
     [[nodiscard]] static FinalPixelStorage legacy(std::vector<T>&& pixels) noexcept {
         return FinalPixelStorage(std::move(pixels));
     }
+    // A read-only view of an immutable payload that several owners retain at once (#785: a frame
+    // an export reuses keeps the payload its first evaluation produced). The view holds the owner
+    // alive, reports the owner's root authority and byte cost (the bytes stay charged once, to
+    // the originating root), and never exposes mutable pixels.
+    [[nodiscard]] static FinalPixelStorage
+    shared(std::shared_ptr<const FinalPixelStorage> owner) noexcept {
+        FinalPixelStorage view;
+        if (owner != nullptr && !owner->empty())
+            view.storage_.template emplace<std::shared_ptr<const FinalPixelStorage>>(
+                std::move(owner));
+        return view;
+    }
     [[nodiscard]] static ImageResult<FinalPixelStorage>
     create(std::size_t count, const std::shared_ptr<GpuProcessingPhaseLease>& phase,
            std::size_t byteLimit, HostPixelStorageDomain domain, T clear = clearPixel()) noexcept {
@@ -117,6 +129,8 @@ template <class T> class FinalPixelStorage final {
             return *p;
         if (const auto* p = std::get_if<OwnedVector>(&storage_))
             return *p;
+        if (const auto* p = std::get_if<std::shared_ptr<const FinalPixelStorage>>(&storage_))
+            return (*p)->pixels();
         return {};
     }
     [[nodiscard]] std::span<T> mutablePixels() noexcept {
@@ -129,6 +143,8 @@ template <class T> class FinalPixelStorage final {
     [[nodiscard]] std::shared_ptr<PackedHostStorageAuthority> authority() const noexcept {
         if (const auto* p = std::get_if<OwnedVector>(&storage_))
             return p->get_allocator().authority();
+        if (const auto* p = std::get_if<std::shared_ptr<const FinalPixelStorage>>(&storage_))
+            return (*p)->authority();
         return {};
     }
     [[nodiscard]] std::size_t size() const noexcept { return pixels().size(); }
@@ -138,6 +154,8 @@ template <class T> class FinalPixelStorage final {
             return p->capacity();
         if (const auto* p = std::get_if<OwnedVector>(&storage_))
             return p->capacity();
+        if (const auto* p = std::get_if<std::shared_ptr<const FinalPixelStorage>>(&storage_))
+            return (*p)->capacity();
         return 0;
     }
     [[nodiscard]] std::size_t byteCost() const noexcept { return capacity() * sizeof(T); }
@@ -159,7 +177,9 @@ template <class T> class FinalPixelStorage final {
         : storage_(std::in_place_type<std::vector<T>>, std::move(pixels)) {}
     explicit FinalPixelStorage(OwnedVector&& pixels) noexcept
         : storage_(std::in_place_type<OwnedVector>, std::move(pixels)) {}
-    std::variant<std::monostate, std::vector<T>, OwnedVector> storage_;
+    std::variant<std::monostate, std::vector<T>, OwnedVector,
+                 std::shared_ptr<const FinalPixelStorage>>
+        storage_;
 };
 using FinalRgba32fStorage = FinalPixelStorage<Rgba32f>;
 using FinalRgba8Storage = FinalPixelStorage<Rgba8>;

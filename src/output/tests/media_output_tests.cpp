@@ -328,27 +328,7 @@ int main() {
         check(std::holds_alternative<p::Unavailable>(
                   o::analyzeMediaOutputV1(o::OutputPresetV1::Av1Mp4V1, opusInMp4)),
               "AV1 MP4 carries AAC, not Opus");
-        check(o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Vp9WebmV1, "8bit") &&
-                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Av1Mp4V1, "8bit") &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::Av1WebmV1, "10bit"),
-              "8-bit VP9/AV1 may reuse cached frames; 10-bit renders fresh");
         testDisplayPayloadQuantizationMatchesReference();
-        // Composite-cache reuse is limited to outputs coarser than half precision.
-        check(o::compositeFrameReuseEligibleV1(o::OutputPresetV1::ProResMovV1, "hq") &&
-                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::H264Mp4V1, "high") &&
-                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::HevcMovV1, "main10") &&
-                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::DnxhrMxfV1, "dnxhr_hq") &&
-                  o::compositeFrameReuseEligibleV1(o::OutputPresetV1::PngRgba8SrgbV1, {}),
-              "lossy video and 8-bit PNG may reuse cached frames");
-        check(!o::compositeFrameReuseEligibleV1(o::OutputPresetV1::ProResMovV1, "4444") &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::ProResMovV1, "4444xq") &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::DnxhrMxfV1, "dnxhr_hqx") &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::DnxhrMxfV1, "dnxhr_444") &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::TiffRgba16SrgbV1, {}) &&
-                  !o::compositeFrameReuseEligibleV1(
-                      o::OutputPresetV1::FlatExrRgba32fLinRec709SceneV1, {}) &&
-                  !o::compositeFrameReuseEligibleV1(o::OutputPresetV1::PcmWavV1, "pcm_s16le"),
-              "12-bit and deeper, 16-bit, float and audio outputs always render fresh");
     } catch (const std::exception& error) {
         std::cerr << error.what() << '\n';
         return 1;

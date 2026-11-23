@@ -53,6 +53,7 @@
 // The CPU reference evaluator remains the correctness oracle; this provider never flips an
 // operation's qualification or claims an unsupported scene as GPU.
 namespace bloom::host {
+class ExportFrameCacheV1;
 namespace detail {
 struct GpuExportProviderTestAccess;
 }
@@ -104,6 +105,10 @@ class GpuExportProvider final {
     // return null; their composition root alone closes and collects its host retirement owner.
     [[nodiscard]] std::shared_ptr<runtime::PackedHostRetirementOwner>
     ownedPackedHostRetirementOwner() const noexcept;
+    // #785: the frames this provider's exports evaluated, for exports whose output reuses cached
+    // frames. One cache per provider, created on first use over processingPhasePolicy() (whose
+    // reclaimers give its memory back). Thread-safe.
+    [[nodiscard]] std::shared_ptr<ExportFrameCacheV1> exportFrameCache();
     // Worker-only. Provider-owned roots refresh at most once per five seconds; injected GUI
     // roots use their existing asynchronous application sampler and never sample here.
     void refreshProcessingCapacity(const runtime::CancellationToken& cancellation = {});

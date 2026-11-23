@@ -121,6 +121,10 @@ struct detail::SequenceExportWorkV1 {
     std::uint64_t gpuProcessPayloadBytes = 0;
     std::uint64_t gpuEncodedPayloadBytes = 0;
     std::uint64_t gpuDeviceOwnershipEpoch = 0;
+    // #785: the export frame cache and this export's run serial (useCachedFrames), and the frames
+    // taken from it.
+    std::optional<ExportFrameReuseV1> frameReuse;
+    std::uint64_t framesReused = 0;
     // The encode worker's memory as of the last time the encoder was alive.
     media::provider::EncodeWorkerMemoryV1 workerMemory;
     // The export's display/view as one GPU command shared by every frame attempt (video only).
@@ -240,6 +244,7 @@ struct detail::SequenceExportWorkV1 {
         out.gpuProcessPayloadBytes = gpuProcessPayloadBytes;
         out.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
         out.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
+        out.framesReused = framesReused;
         out.gpuDisplayFrames = gpuDisplayFrames;
         out.cpuDisplayFrames = cpuDisplayFrames;
         out.cpuDisplayReason = cpuDisplayReason;
@@ -1015,7 +1020,8 @@ struct SequenceExportRunnerV1::State {
             .preset = preset,
             .gpuProvider = work->request.gpuProvider,
             .mediaDisplay = work->mediaDisplay,
-            .useRootPixelCapacity = true};
+            .useRootPixelCapacity = true,
+            .frameReuse = work->frameReuse};
         auto begin = beginOutputAnalysisAttemptV1(scheduler, artifacts, ledger, std::move(request));
         if (!begin) {
             fail({Error::Busy, "Frame analysis admission refused"});
@@ -1078,7 +1084,9 @@ struct SequenceExportRunnerV1::State {
     bool complete(const std::size_t position, OutputAnalysisAttemptOutcomeV1 result) {
         auto& frame = window[position];
         if (const auto& provenance = result.gpuProvenance();
-            provenance.has_value() && provenance->gpuEvaluated()) {
+            result && provenance.has_value() && provenance->reused) {
+            ++work->framesReused;
+        } else if (provenance.has_value() && provenance->gpuEvaluated()) {
             ++work->gpuEvaluatedFrames;
             work->gpuNativeDispatches += provenance->counters.nativeDispatches;
             work->gpuReadbacks += provenance->counters.readbacks;
@@ -1316,6 +1324,11 @@ SequenceExportRunnerV1::SequenceExportRunnerV1(
         state_->work->request.gpuProvider = GpuExportProvider::create(std::move(options));
         state_->work->ownsDefaultGpuProvider = true;
         state_->work->request.gpuProvider->prepare(scheduler);
+    }
+    // #785: the output's "Use cached frames": this export takes part in the provider's frame cache.
+    if (state_->work->request.useCachedFrames) {
+        if (auto cache = state_->work->request.gpuProvider->exportFrameCache())
+            state_->work->frameReuse = ExportFrameReuseV1{.cache = cache, .run = cache->beginRun()};
     }
     state_->depthLimit = detail::sequenceExportFramesInFlightV1(
         state_->work->request.gpuProvider.get(), state_->work->request.framesInFlight);

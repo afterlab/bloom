@@ -7,6 +7,8 @@
 // to stereo through the ITU-R BS.775 downmix instead of losing every channel past the second.
 // Issue #459: an automated level exports as a continuous ramp, not a step every mix block.
 // Issue #569: an audio effect chain exports the samples the playback mixer plays.
+// Issue #785: an output that uses cached frames reuses frames an earlier export evaluated, with the
+// same delivered file as a fresh render.
 #include "fixed_memory_budget.hpp"
 #include "unique_temp_dir.hpp"
 #include <bloom/commands/animation_operations.hpp>
@@ -21,6 +23,7 @@
 #include <bloom/document/new_project.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/export_queue.hpp>
+#include <bloom/host/export_frame_cache.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
@@ -1531,6 +1534,322 @@ void testBackgroundOnTheVideoRoute() {
     }
 }
 
+// #785: "Use cached frames". A small generated picture (a PNG written here) over the audio layer.
+// Every published file is compared byte for byte with the same export rendered with reuse off.
+std::uint32_t crc32Of(const std::uint8_t* data, const std::size_t size, std::uint32_t crc = 0) {
+    crc = ~crc;
+    for (std::size_t i = 0; i < size; ++i) {
+        crc ^= data[i];
+        for (int bit = 0; bit < 8; ++bit)
+            crc = (crc >> 1) ^ (0xEDB88320U & (0U - (crc & 1U)));
+    }
+    return ~crc;
+}
+
+// An RGB PNG of width x height whose pixels depend on seed, deflated as stored blocks (no zlib).
+void writePng(const std::filesystem::path& path, const std::uint32_t width,
+              const std::uint32_t height, const std::uint8_t seed) {
+    std::vector<std::uint8_t> raw;
+    for (std::uint32_t y = 0; y < height; ++y) {
+        raw.push_back(0);
+        for (std::uint32_t x = 0; x < width; ++x) {
+            raw.push_back(static_cast<std::uint8_t>(x * 255 / std::max(1U, width - 1)));
+            raw.push_back(static_cast<std::uint8_t>(y * 255 / std::max(1U, height - 1)));
+            raw.push_back(static_cast<std::uint8_t>(seed + (x ^ y) * 7));
+        }
+    }
+    std::vector<std::uint8_t> z{0x78, 0x01};
+    for (std::size_t at = 0; at < raw.size(); at += 65535) {
+        const auto length = static_cast<std::uint16_t>(std::min<std::size_t>(65535, raw.size() - at));
+        z.push_back(at + length >= raw.size() ? 1 : 0);
+        z.push_back(static_cast<std::uint8_t>(length));
+        z.push_back(static_cast<std::uint8_t>(length >> 8));
+        z.push_back(static_cast<std::uint8_t>(~length));
+        z.push_back(static_cast<std::uint8_t>(static_cast<std::uint16_t>(~length) >> 8));
+        z.insert(z.end(), raw.begin() + static_cast<std::ptrdiff_t>(at),
+                 raw.begin() + static_cast<std::ptrdiff_t>(at + length));
+    }
+    std::uint32_t a = 1, b = 0;
+    for (const auto byte : raw) {
+        a = (a + byte) % 65521U;
+        b = (b + a) % 65521U;
+    }
+    const auto adler = (b << 16) | a;
+    for (int shift = 24; shift >= 0; shift -= 8)
+        z.push_back(static_cast<std::uint8_t>(adler >> shift));
+    std::vector<std::uint8_t> png{0x89, 'P', 'N', 'G', 0x0D, 0x0A, 0x1A, 0x0A};
+    const auto chunk = [&png](const char* type, const std::vector<std::uint8_t>& data) {
+        const auto size = static_cast<std::uint32_t>(data.size());
+        for (int shift = 24; shift >= 0; shift -= 8)
+            png.push_back(static_cast<std::uint8_t>(size >> shift));
+        std::vector<std::uint8_t> body(type, type + 4);
+        body.insert(body.end(), data.begin(), data.end());
+        png.insert(png.end(), body.begin(), body.end());
+        const auto crc = crc32Of(body.data(), body.size());
+        for (int shift = 24; shift >= 0; shift -= 8)
+            png.push_back(static_cast<std::uint8_t>(crc >> shift));
+    };
+    std::vector<std::uint8_t> header;
+    for (const auto value : {width, height})
+        for (int shift = 24; shift >= 0; shift -= 8)
+            header.push_back(static_cast<std::uint8_t>(value >> shift));
+    header.insert(header.end(), {8, 2, 0, 0, 0});
+    chunk("IHDR", header);
+    chunk("IDAT", z);
+    chunk("IEND", {});
+    std::ofstream out(path, std::ios::binary | std::ios::trunc);
+    out.write(reinterpret_cast<const char*>(png.data()), static_cast<std::streamsize>(png.size()));
+}
+
+std::string fileBytes(const std::filesystem::path& path) {
+    std::ifstream in(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
+}
+
+void testCachedFramesAreReused() {
+    Fixture f("frame-reuse", WavEncoding::Pcm16);
+    const auto plate = f.folder / "plate.png";
+    // Smaller than the 64 x 32 composition, so the background shows around it.
+    writePng(plate, 32, 16, 40);
+    {
+        commands::Transaction import("Import");
+        import.emplace<commands::ImportAssets>(std::vector<std::filesystem::path>{plate}, f.folder);
+        expect(f.session.execute(std::move(import)).changed(), "reuse: the picture imports");
+        const auto picture = currentSnapshot(f.session).project().assets().back().id;
+        commands::Transaction layer("Add picture layer");
+        layer.emplace<commands::AddDroppedLayers>(f.composition(),
+                                                  std::vector<commands::LayerDropItem>{picture},
+                                                  commands::LayerDropPlacement{});
+        expect(f.session.execute(std::move(layer)).changed(), "reuse: the picture layer is added");
+    }
+    {
+        // A colour the #760 export background shows around the picture.
+        commands::CompositionSettingsChange change;
+        change.background = core::Color4d{0.8, 0.2, 0.1, 1.0};
+        commands::Transaction transaction("Background");
+        transaction.emplace<commands::UpdateCompositionSettings>(f.composition(), change);
+        expect(f.session.execute(std::move(transaction)).changed(),
+               "reuse: the composition's Background Color is set");
+    }
+    const auto cache = f.gpu->exportFrameCache();
+    expect(cache != nullptr, "reuse: the provider has an export frame cache");
+    if (cache == nullptr)
+        return;
+    const auto settingsOf = [](const bool reuse) {
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::ProResMov;
+        settings.codecProfile = "hq";
+        settings.includeAudio = true;
+        settings.useCachedFrames = reuse;
+        return settings;
+    };
+    // Adds one job with these outputs (settings and file), runs it and returns its finished view.
+    const auto runJob = [&f](const std::vector<std::pair<document::ExportOutputSettings, std::string>>& outputs,
+                             const std::string& name) {
+        document::ExportJob job;
+        job.composition = f.composition();
+        job.render.range = {document::ExportRangeKind::Composition, 0, 0};
+        for (const auto& [settings, path] : outputs) {
+            document::ExportOutput output;
+            output.presetId = "test";
+            output.settings = settings;
+            output.destination = {"project-relative", path, document::ExportOverwritePolicy::Replace};
+            job.outputs.push_back(output);
+        }
+        commands::Transaction transaction("Add export job");
+        transaction.emplace<commands::AddExportJob>(job);
+        const auto result = f.session.execute(std::move(transaction));
+        if (!result.changed())
+            throw std::runtime_error("add job");
+        const auto id = *result.command->outputId<document::ExportJobId>(commands::kExportJobOutput);
+        return std::make_pair(id, f.run(id, name));
+    };
+    const auto reused = [](const std::optional<host::ExportJobView>& view, const std::size_t output) {
+        if (!view || output >= view->outputs.size() || !view->outputs[output].verification)
+            return std::uint64_t{~0ULL};
+        return view->outputs[output].verification->provenance.framesReused;
+    };
+    const auto frames = [](const std::optional<host::ExportJobView>& view, const std::size_t output) {
+        if (!view || output >= view->outputs.size() || !view->outputs[output].verification)
+            return std::uint64_t{0};
+        const auto& p = view->outputs[output].verification->provenance;
+        return p.gpuFrames + p.cpuReferenceFrames + p.framesReused;
+    };
+
+    // Reuse off: the reference file, and nothing enters the cache.
+    const auto [offJob, off] = runJob({{settingsOf(false), "Exports/off.mov"}}, "reuse off");
+    expect(published(off), "reuse off: the movie publishes");
+    expect(reused(off, 0) == 0 && cache->stats().entries == 0,
+           "reuse off: no frame is reused or retained");
+    const auto reference = fileBytes(f.folder / "Exports/off.mov");
+    const auto total = frames(off, 0);
+    expect(total > 1 && !reference.empty(), "reuse off: the reference movie has frames");
+
+    // Two outputs of one job: the first evaluates every frame, the second reuses every one.
+    const auto [twoJob, two] =
+        runJob({{settingsOf(true), "Exports/first.mov"}, {settingsOf(true), "Exports/second.mov"}},
+               "two outputs");
+    expect(published(two), "two outputs: the job publishes");
+    expect(reused(two, 0) == 0 && frames(two, 0) == total,
+           "two outputs: the first output evaluates every frame (" + std::to_string(reused(two, 0)) +
+               " reused)");
+    expect(reused(two, 1) == total,
+           "two outputs: the second output reuses every frame (" + std::to_string(reused(two, 1)) +
+               " of " + std::to_string(total) + ")");
+    expect(fileBytes(f.folder / "Exports/first.mov") == reference &&
+               fileBytes(f.folder / "Exports/second.mov") == reference,
+           "two outputs: both movies are byte-identical to the reuse-off export");
+
+    // The same export again: every frame is reused, the file is the same.
+    const auto [againJob, again] = runJob({{settingsOf(true), "Exports/again.mov"}}, "repeated");
+    {
+        const auto stats = cache->stats();
+        expect(published(again) && reused(again, 0) == total,
+               "repeated: a repeated export reuses every frame (" + std::to_string(reused(again, 0)) +
+                   "; cache entries " + std::to_string(stats.entries) + " hits " +
+                   std::to_string(stats.hits) + " misses " + std::to_string(stats.misses) +
+                   " insertions " + std::to_string(stats.insertions) + " refusals " +
+                   std::to_string(stats.refusals) + " evictions " + std::to_string(stats.evictions) +
+                   ")");
+    }
+    expect(fileBytes(f.folder / "Exports/again.mov") == reference,
+           "repeated: the movie is byte-identical to the reuse-off export");
+
+    // A setting that changes the frame reuses nothing: the #760 export background.
+    {
+        auto opaque = settingsOf(true);
+        opaque.background = document::ExportBackground::CompositionColor;
+        auto opaqueOff = opaque;
+        opaqueOff.useCachedFrames = false;
+        const auto [bgJob, bg] = runJob({{opaque, "Exports/opaque.mov"}}, "background");
+        expect(published(bg) && reused(bg, 0) == 0,
+               "background: an export over the composition background reuses nothing (" +
+                   std::to_string(reused(bg, 0)) + ")");
+        const auto [bgOffJob, bgOff] = runJob({{opaqueOff, "Exports/opaque-off.mov"}}, "background off");
+        const auto opaqueBytes = fileBytes(f.folder / "Exports/opaque.mov");
+        expect(published(bgOff) && opaqueBytes == fileBytes(f.folder / "Exports/opaque-off.mov"),
+               "background: the movie is byte-identical to the same export with reuse off");
+        expect(opaqueBytes != reference,
+               "background: the movie is its own render over the background, not the cached "
+               "frames without it");
+    }
+
+    // The picture's input colour changes the frame: nothing is reused; set back, the cached
+    // frames are reused again.
+    {
+        const auto snapshot = currentSnapshot(f.session);
+        const auto asset = std::ranges::find_if(snapshot.project().assets(), [](const auto& record) {
+            return record.locator.path.ends_with("plate.png");
+        });
+        expect(asset != snapshot.project().assets().end(), "input colour: the picture asset exists");
+        if (asset != snapshot.project().assets().end()) {
+            const auto id = asset->id;
+            const auto legacy = asset->interpretation.colorSpace;
+            const auto exact = asset->interpretation.inputColorSpaceId;
+            commands::Transaction raw("Raw input colour");
+            raw.emplace<commands::SetAssetInputColor>(id, document::AssetColorSpace::Raw, "");
+            expect(f.session.execute(std::move(raw)).changed(), "input colour: set to Raw");
+            const auto [rawJob, rawView] = runJob({{settingsOf(true), "Exports/raw.mov"}}, "raw");
+            const auto [rawOffJob, rawOff] = runJob({{settingsOf(false), "Exports/raw-off.mov"}}, "raw off");
+            expect(published(rawView) && reused(rawView, 0) == 0 &&
+                       fileBytes(f.folder / "Exports/raw.mov") ==
+                           fileBytes(f.folder / "Exports/raw-off.mov") &&
+                       fileBytes(f.folder / "Exports/raw.mov") != reference,
+                   "input colour: another input colour reuses nothing and renders fresh (" +
+                       std::to_string(reused(rawView, 0)) + ")");
+            commands::Transaction back("Input colour back");
+            back.emplace<commands::SetAssetInputColor>(id, legacy, exact);
+            expect(f.session.execute(std::move(back)).changed(), "input colour: set back");
+            const auto [backJob, backView] = runJob({{settingsOf(true), "Exports/back.mov"}}, "back");
+            expect(published(backView) && reused(backView, 0) == total &&
+                       fileBytes(f.folder / "Exports/back.mov") == reference,
+                   "input colour: set back, the cached frames are reused, byte-identical (" +
+                       std::to_string(reused(backView, 0)) + ")");
+        }
+    }
+
+    // The picture changes on disk: a cached frame of the old picture is never delivered. The
+    // export fails as a fresh render does (the file is not the content the project recorded).
+    writePng(plate, 32, 16, 200);
+    {
+        const auto [staleJob, stale] = runJob({{settingsOf(true), "Exports/stale.mov"}}, "stale");
+        expect(!published(stale) && reused(stale, 0) == 0 &&
+                   !std::filesystem::exists(f.folder / "Exports/stale.mov"),
+               "stale media: no cached frame of the old picture is published");
+        const auto snapshot = currentSnapshot(f.session);
+        const auto asset = std::ranges::find_if(snapshot.project().assets(), [](const auto& record) {
+            return record.locator.path.ends_with("plate.png");
+        });
+        expect(asset != snapshot.project().assets().end(), "stale media: the picture asset exists");
+        if (asset != snapshot.project().assets().end()) {
+            commands::Transaction relink("Relink");
+            relink.emplace<commands::RelinkAsset>(asset->id, plate, f.folder);
+            expect(f.session.execute(std::move(relink)).changed(), "stale media: the picture relinks");
+            const auto [newJob, renewed] = runJob({{settingsOf(true), "Exports/new.mov"}}, "relinked");
+            auto newOff = settingsOf(false);
+            const auto [newOffJob, renewedOff] = runJob({{newOff, "Exports/new-off.mov"}}, "relinked off");
+            expect(published(renewed) && reused(renewed, 0) == 0 &&
+                       fileBytes(f.folder / "Exports/new.mov") ==
+                           fileBytes(f.folder / "Exports/new-off.mov") &&
+                       fileBytes(f.folder / "Exports/new.mov") != reference,
+                   "stale media: the new picture renders fresh and reuses nothing");
+        }
+    }
+
+    // The retained frames are charged to the processing root and go back to it when work needs
+    // the memory: the root's reclaimers (the cache's among them) give them back.
+    {
+        const auto policy = f.gpu->processingPhasePolicy();
+        const auto held = cache->stats();
+        const auto before = policy->usableCapacity().hostClaimBytes;
+        expect(held.entries > 0 && held.bytes > 0 && before >= held.bytes,
+               "memory: the retained frames are claims on the processing root (" +
+                   std::to_string(held.bytes) + " of " + std::to_string(before) + " bytes)");
+        policy->reclaimFor(render::GpuProcessingPhaseDomain::Host,
+                           policy->usableCapacity().hostUsableBytes + held.bytes);
+        const auto after = policy->usableCapacity().hostClaimBytes;
+        expect(cache->stats().entries == 0 && before - after >= held.bytes,
+               "memory: a host wait on the root releases every retained frame (" +
+                   std::to_string(before) + " -> " + std::to_string(after) + " bytes)");
+    }
+
+    // An export that reuses frames stays stoppable: a long range (its first second cached) stops.
+    {
+        const auto [warmJob, warm] = runJob({{settingsOf(true), "Exports/warm.mov"}}, "warm");
+        expect(published(warm), "stop: the cache is warm again");
+        commands::CompositionSettingsChange longer;
+        longer.duration = core::RationalTime::fromInteger(20);
+        commands::Transaction transaction("Longer");
+        transaction.emplace<commands::UpdateCompositionSettings>(f.composition(), longer);
+        expect(f.session.execute(std::move(transaction)).changed(), "stop: the composition is longer");
+        document::ExportJob job;
+        job.composition = f.composition();
+        job.render.range = {document::ExportRangeKind::Composition, 0, 0};
+        document::ExportOutput output;
+        output.presetId = "test";
+        output.settings = settingsOf(true);
+        output.destination = {"project-relative", "Exports/stopped.mov",
+                              document::ExportOverwritePolicy::Replace};
+        job.outputs = {output};
+        commands::Transaction add("Add export job");
+        add.emplace<commands::AddExportJob>(job);
+        const auto added = f.session.execute(std::move(add));
+        const auto id = *added.command->outputId<document::ExportJobId>(commands::kExportJobOutput);
+        expect(f.pumpUntil([&] { return f.service->canStart(id).available; }, 20),
+               "stop: the job becomes startable");
+        const document::ExportJobId ids[] = {id};
+        expect(f.service->start(ids).accepted, "stop: start");
+        expect(f.pumpUntil([&] { return f.view(id)->state == ExportJobState::Rendering; }, 20),
+               "stop: the job renders");
+        (void)f.service->stop(id);
+        expect(f.pumpUntil([&] { return host::isTerminal(f.view(id)->state); }, 60),
+               "stop: the job ends after stop");
+        expect(f.view(id)->state == ExportJobState::Stopped &&
+                   !std::filesystem::exists(f.folder / "Exports/stopped.mov"),
+               "stop: the job is stopped and publishes nothing");
+    }
+}
+
 int main(const int argc, char** argv) {
     // #760: the video route's background (bloom.host.export-background-video).
     if (argc > 1 && std::string_view(argv[1]) == "--background") {
@@ -1542,6 +1861,18 @@ int main(const int argc, char** argv) {
         }
         if (failures == 0)
             std::cout << "export background video: ok\n";
+        return failures == 0 ? 0 : 1;
+    }
+    // #785: frames reused from the export frame cache (bloom.host.export-frame-reuse).
+    if (argc > 1 && std::string_view(argv[1]) == "--frame-reuse") {
+        try {
+            testCachedFramesAreReused();
+        } catch (const std::exception& error) {
+            std::cerr << "FAIL: " << error.what() << '\n';
+            return 1;
+        }
+        if (failures == 0)
+            std::cout << "export frame reuse: ok\n";
         return failures == 0 ? 0 : 1;
     }
     // #761: the per-preset stream walk is its own test (bloom.host.export-written-streams).

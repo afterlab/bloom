@@ -155,6 +155,12 @@ OutputModuleDialog::OutputModuleDialog(const host::ExportOutputView& output,
     import_ = check(this, QStringLiteral("exportImportIntoAssets"), tr("Add to Assets when done"));
     (void)mainRight->addCheckRow(tr("Post-render"), *import_, tr("Add to Assets when done"));
     cachedFrames_ = check(this, QStringLiteral("exportUseCachedFrames"), tr("Use cached frames"));
+    // #785: what the setting reuses, so it is not mistaken for the Viewer's RAM Preview.
+    cachedFrames_->setToolTip(
+        tr("Reuse frames an earlier export in this session already rendered for the same "
+           "composition and frame settings, such as another output of the job or the same export "
+           "run again. The file is the same as a fresh render. Viewer and RAM Preview frames are "
+           "not used."));
     (void)mainRight->addCheckRow(tr("Cached frames"), *cachedFrames_, tr("Use cached frames"));
 
     // How the frames are encoded: only what this format takes.

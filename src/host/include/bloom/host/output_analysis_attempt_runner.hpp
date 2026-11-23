@@ -1,6 +1,7 @@
 #pragma once
 
 #include <bloom/host/existing_export_target.hpp>
+#include <bloom/host/export_frame_cache.hpp>
 #include <bloom/host/gpu_export_provider.hpp>
 #include <bloom/output/display_output.hpp>
 #include <bloom/output/output_analysis_analyzer.hpp>
@@ -88,6 +89,10 @@ struct OutputAnalysisAttemptGpuProvenanceV1 final {
     // Why this frame was evaluated on the CPU reference path rather than the GPU; empty for a GPU
     // frame. Never empty for a CPU frame: a fallback always carries its reason (#553).
     std::string cpuFallbackReason;
+    // #785: the frame was taken from the export frame cache instead of being evaluated (its
+    // pixels are the ones an earlier evaluation of the same render identity produced). Neither a
+    // GPU nor a CPU reference frame of this attempt; the counters above are zero.
+    bool reused = false;
 
     // True only for a frame the device produced. A frame that took the CPU reference path carries
     // its reason and is never a GPU frame, whatever the evaluator's status says (#648).
@@ -204,6 +209,11 @@ struct OutputAnalysisAttemptRequestV1 final {
     // sampled processing root on the Evaluating CPU worker. Explicit caller byte limits, including
     // zero, remain unchanged when this flag is false.
     bool useRootPixelCapacity = false;
+    // #785: the output reuses cached frames. A frame whose render identity and evaluation route
+    // match a cache entry takes that entry's pixels instead of being evaluated (it is still
+    // identified, analysed and approved); a frame evaluated here is offered to the cache. Absent:
+    // every frame is evaluated and nothing is retained.
+    std::optional<ExportFrameReuseV1> frameReuse = std::nullopt;
 };
 
 enum class OutputAnalysisAttemptStageV1 : std::uint8_t {

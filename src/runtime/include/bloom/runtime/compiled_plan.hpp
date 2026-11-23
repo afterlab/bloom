@@ -2156,6 +2156,10 @@ class CompiledCompositionPlan final {
 
     // Memoization controls and derived dependence tables are not semantic identity inputs.
     friend bool operator==(const CompiledCompositionPlan&, const CompiledCompositionPlan&);
+    // #785: the same rendered content: equal in everything but the document revision each plan was
+    // compiled from (nested plans compared the same way). Two such plans evaluate to the same
+    // pixels at every time, so an export may reuse one's frames for the other.
+    friend bool sameRenderedContent(const CompiledCompositionPlan&, const CompiledCompositionPlan&);
 
   private:
     bool bypassOperationCache_ = false;

@@ -13,6 +13,7 @@ target_sources(
         export_background.cpp
         export_presets.cpp
         export_queue_service.cpp
+        export_frame_cache.cpp
         export_run_backend.cpp
         export_queue_service_views.cpp
         export_verification.cpp
@@ -468,6 +469,11 @@ if(BUILD_TESTING)
         bloom_add_test(NAME bloom.host.export-background-video
                        COMMAND bloom_host_export_audio_formats_test --background
                        LABELS unit host media output TIMEOUT 300)
+        # #785: frames reused across two outputs and a repeated export, byte-identical to a fresh
+        # render; nothing reused across a background, working space or media change.
+        bloom_add_test(NAME bloom.host.export-frame-reuse
+                       COMMAND bloom_host_export_audio_formats_test --frame-reuse
+                       LABELS unit host media output TIMEOUT 600)
 
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)

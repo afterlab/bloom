@@ -726,6 +726,20 @@ class ImageDriver final : public DriverBase {
     // A publication still waiting for its turn never outlives the driver's interest in it.
     ~ImageDriver() override { cancelPublications(); }
 
+    // #785: the output's "Use cached frames": this output's frames take part in the provider's
+    // export frame cache under one run serial. Absent when the setting is off or no provider.
+    [[nodiscard]] std::optional<ExportFrameReuseV1> frameReuse() {
+        if (!input_.output.record.settings.useCachedFrames || dependencies_.gpu == nullptr)
+            return std::nullopt;
+        if (!frameReuse_) {
+            auto cache = dependencies_.gpu->exportFrameCache();
+            if (cache == nullptr)
+                return std::nullopt;
+            frameReuse_ = ExportFrameReuseV1{.cache = cache, .run = cache->beginRun()};
+        }
+        return frameReuse_;
+    }
+
     void poll() override {
         if (done_ || !pollSubtitles())
             return;
@@ -1212,7 +1226,8 @@ class ImageDriver final : public DriverBase {
             .displayProcessorProvider = dependencies_.displayProcessor,
             .gpuProvider = dependencies_.gpu,
             .mediaDisplay = mediaDisplay_,
-            .useRootPixelCapacity = true};
+            .useRootPixelCapacity = true,
+            .frameReuse = frameReuse()};
         // Issue #409: PNG and TIFF use the output's own display/view (the Viewer's default pair
         // when it names none), as movies do.
         request.displayName = input_.output.record.settings.displayName;
@@ -1305,7 +1320,10 @@ class ImageDriver final : public DriverBase {
             }
         }
         if (const auto& provenance = outcome.gpuProvenance();
-            provenance && provenance->gpuEvaluated()) {
+            outcome && provenance && provenance->reused) {
+            // #785: taken from the export frame cache, evaluated by an earlier export.
+            ++report_.verification.provenance.framesReused;
+        } else if (provenance && provenance->gpuEvaluated()) {
             auto& counters = report_.verification.provenance;
             ++counters.gpuFrames;
             counters.gpuNativeDispatches += provenance->counters.nativeDispatches;
@@ -1815,6 +1833,7 @@ class ImageDriver final : public DriverBase {
     }
 
     OutputPresetV1 preset_;
+    std::optional<ExportFrameReuseV1> frameReuse_;
     output::FlatExrRgba32fOptionsV1 exr_;
     std::string dpxColourSpace_;
     std::shared_ptr<const runtime::CompiledCompositionPlan> plan_;
@@ -2167,9 +2186,10 @@ class MediaDriver final : public DriverBase {
     void finish(const SequenceExportResultV1& result) {
         auto& provenance = report_.verification.provenance;
         provenance.gpuFrames = result.gpuEvaluatedFrames;
-        provenance.cpuReferenceFrames = result.encodedFrames > result.gpuEvaluatedFrames
-                                            ? result.encodedFrames - result.gpuEvaluatedFrames
-                                            : 0;
+        // Reused frames (#785) were evaluated by an earlier export: neither GPU nor CPU here.
+        const auto evaluatedHere = result.gpuEvaluatedFrames + result.framesReused;
+        provenance.cpuReferenceFrames =
+            result.encodedFrames > evaluatedHere ? result.encodedFrames - evaluatedHere : 0;
         provenance.gpuNativeDispatches = result.gpuNativeDispatches;
         provenance.gpuReadbacks = result.gpuReadbacks;
         provenance.gpuReadbackSubmissions = result.gpuReadbackSubmissions;

@@ -319,33 +319,6 @@ Result<FrameProduct> prepareMediaRgba16V1(const render::Rgba32fImage& image, Rat
     result.planes.push_back(std::move(plane));
     return result;
 }
-bool compositeFrameReuseEligibleV1(const OutputPresetV1 preset,
-                                   const std::string_view profile) noexcept {
-    switch (preset) {
-    case OutputPresetV1::H264MovV1:
-    case OutputPresetV1::H264Mp4V1:
-    case OutputPresetV1::HevcMovV1:
-    case OutputPresetV1::HevcMp4V1:
-    case OutputPresetV1::PngRgba8SrgbV1:
-        return true;
-    // 8-bit VP9 and AV1 quantize coarser than half precision; 10-bit renders fresh.
-    case OutputPresetV1::Vp9WebmV1:
-    case OutputPresetV1::Av1WebmV1:
-    case OutputPresetV1::Av1Mp4V1:
-        return profile == "8bit";
-    case OutputPresetV1::ProResMovV1:
-        return profile == "proxy" || profile == "lt" || profile == "standard" || profile == "hq";
-    case OutputPresetV1::DnxhrMxfV1:
-        return profile == "dnxhr_lb" || profile == "dnxhr_sq" || profile == "dnxhr_hq";
-    case OutputPresetV1::FlatExrRgba32fLinRec709SceneV1:
-    case OutputPresetV1::TiffRgba16SrgbV1:
-    case OutputPresetV1::DpxRgb10V1:
-    case OutputPresetV1::DpxRgb16V1:
-    case OutputPresetV1::PcmWavV1:
-        return false;
-    }
-    return false;
-}
 Result<FrameProduct>
 prepareMediaRgba16FromDisplayV1(const std::span<const render::Rgba32f> pixels,
                                 const std::uint32_t width, const std::uint32_t height,

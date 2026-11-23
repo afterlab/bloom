@@ -62,6 +62,27 @@ void CompiledCompositionPlan::analyzeAssetValidity() {
         operationAssetsValid_.push_back(runtime::operationAssetsValid(operation) ? 1 : 0);
 }
 
+bool sameRenderedContent(const CompiledCompositionPlan& lhs, const CompiledCompositionPlan& rhs) {
+    return &lhs == &rhs ||
+           (lhs.projectId_ == rhs.projectId_ && lhs.compositionId_ == rhs.compositionId_ &&
+            lhs.format_ == rhs.format_ && lhs.operations_ == rhs.operations_ &&
+            lhs.output_ == rhs.output_ && lhs.scalarCurves_ == rhs.scalarCurves_ &&
+            lhs.vec2Curves_ == rhs.vec2Curves_ && lhs.vec3Curves_ == rhs.vec3Curves_ &&
+            lhs.color4Curves_ == rhs.color4Curves_ && lhs.valueOperations_ == rhs.valueOperations_ &&
+            lhs.valueOutputCount_ == rhs.valueOutputCount_ &&
+            lhs.planSemanticsVersion_ == rhs.planSemanticsVersion_ &&
+            lhs.animationSamplingSemanticsVersion_ == rhs.animationSamplingSemanticsVersion_ &&
+            lhs.audioMix_ == rhs.audioMix_ && lhs.analysisAudioMixes_ == rhs.analysisAudioMixes_ &&
+            lhs.duration_ == rhs.duration_ && lhs.clocks_ == rhs.clocks_ &&
+            lhs.operationClocks_ == rhs.operationClocks_ &&
+            lhs.placementClocks_ == rhs.placementClocks_ &&
+            std::ranges::equal(lhs.nestedPlans_, rhs.nestedPlans_,
+                               [](const auto& left, const auto& right) {
+                                   return left == right ||
+                                          (left && right && sameRenderedContent(*left, *right));
+                               }));
+}
+
 bool operator==(const CompiledCompositionPlan& lhs, const CompiledCompositionPlan& rhs) {
     return lhs.sourceRevision_ == rhs.sourceRevision_ && lhs.projectId_ == rhs.projectId_ &&
            lhs.compositionId_ == rhs.compositionId_ && lhs.format_ == rhs.format_ &&

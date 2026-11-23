@@ -22,10 +22,6 @@ reserveSequenceExportQueueV1(output::ExportResourceLedgerV1&, std::uint64_t byte
                              std::optional<std::uint64_t> explicitJobLimit,
                              std::shared_ptr<GpuExportProvider>, const runtime::CancellationToken&,
                              output::ExportResourceAdmissionStatusV1&) noexcept;
-// Whether a cached composite frame can reach the encoder without the CPU display transform. A hit
-// skips evaluation, so its output colour needs a display-only GPU job over the cached image; the
-// export evaluator does not provide one, so no frame is reused and every frame is evaluated.
-[[nodiscard]] constexpr bool compositeFrameReuseAvailableV1() noexcept { return false; }
 // Frames analysed ahead of the ordered encoder for one sequence export: the capacity seam. At
 // least one; `cap` is an explicit caller ceiling (tests that need one frame at a time).
 [[nodiscard]] std::size_t sequenceExportFramesInFlightV1(const GpuExportProvider* provider,
@@ -116,10 +112,10 @@ struct SequenceExportRequestV1 {
     std::shared_ptr<GpuExportProvider> gpuProvider = nullptr;
     // Ceiling on frames analysed ahead of the ordered encoder; absent uses the capacity seam.
     std::optional<std::size_t> framesInFlight = std::nullopt;
-    // The output's "Use cached frames" setting. A frame is taken from the composite cache only when
-    // this is set, output::compositeFrameReuseEligibleV1 accepts the preset and profile, and the
-    // GPU display-only transform for a cached frame is available
-    // (detail::compositeFrameReuseAvailableV1); every other frame is evaluated.
+    // #785: the output's "Use cached frames" setting. Frames are looked up in, and evaluated frames
+    // offered to, the GPU provider's export frame cache (ExportFrameCacheV1): a frame an earlier
+    // export of this provider evaluated with the same render identity and route is taken as it is,
+    // so the delivered file is the same as a fresh render's. Off: every frame is evaluated.
     bool useCachedFrames = false;
     // #570: normalize the audio to this loudness (two passes over the mix). Absent exports the audio
     // as mixed. Ignored without audio.
@@ -224,7 +220,8 @@ struct SequenceExportResultV1 {
     std::uint64_t gpuDisplayFrames = 0;
     std::uint64_t cpuDisplayFrames = 0;
     std::string cpuDisplayReason;
-    // Frames taken from the composite cache instead of being evaluated (useCachedFrames).
+    // Frames taken from the export frame cache instead of being evaluated (useCachedFrames); counted
+    // in neither gpuEvaluatedFrames nor the CPU reference frames.
     std::uint64_t framesReused = 0;
     // #570: measured and delivered loudness of a normalizing export; absent when the audio was not
     // normalized. #771: final* are the delivered file's own measurement once its reopen measured it
