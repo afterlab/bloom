@@ -382,22 +382,26 @@ class ResourceLimit(unittest.TestCase):
             server.close()
 
     def test_python_render_reports_the_resource_limit(self):
+        # The project is made and saved by another process, as for bloom-cli: a process that
+        # imported the movies itself can still hold their verified snapshots (the macOS media
+        # worker keeps them), and a render shares a snapshot already held instead of capturing
+        # one, so it needs no new file and reaches no limit. Opened here, every layer needs one.
+        server = Server()
+        try:
+            movie_project(server, self.root, self.movies)
+            saved = server.tool('project.save-as', {'path': str(self.root / 'python-quota.bloom')})
+            self.assertNotIn('error', saved, json.dumps(saved))
+        finally:
+            server.close()
         sys.path.insert(0, PYTHON)
         import _bloom
         import bloom
         from bloom import _state
         os.environ[LIMIT_ENV] = '0'
         self.addCleanup(os.environ.pop, LIMIT_ENV, None)
-        host = _bloom.Host()
+        host = _bloom.Host(str(self.root / 'python-quota.bloom'))
         token = _state.bind(host)
         self.addCleanup(_state._host.reset, token)
-        self.assertTrue(bloom.ops.composition.set_duration(FRAMES)['succeeded'])
-        self.assertTrue(bloom.ops.composition.set_format(width=64, height=36)['succeeded'])
-        imported = bloom.ops.asset.import_(tuple(str(movie) for movie in self.movies),
-                                           str(self.root))
-        self.assertTrue(imported['succeeded'], imported)
-        added = bloom.ops.layer.add_from_assets(outputs(imported, 'asset'), time=0)
-        self.assertTrue(added['succeeded'], added)
         # A still sequence reads its layers one at a time and releases a source before the next, so
         # only a limit of 0 files fills its quota.
         out = self.root / 'python-shots'
