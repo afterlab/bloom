@@ -237,6 +237,13 @@ stopped playing gives its memory back a second later. If the memory for a sound 
 the job fails with a message that names the audio asset, the bytes it needed and the limit that
 refused them, for example "the processing memory has 1048576 of 134217728 bytes free".
 
+An MP3 plays from its first sound in the export as it does in preview. Many MP3 files, such as
+those from text-to-speech services or FFmpeg, declare the encoder's start delay in a header at the
+start of the file; the export skips that delay, so the sound neither starts late nor fails to
+decode. A sound file that ends before the length its own header declares (a download cut short,
+say) fails the export with a message that names the audio asset, instead of publishing the missing
+part as silence.
+
 **Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
 the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).
 With a cap set, a job that reaches it waits for the worker instead of using more memory, and fails
