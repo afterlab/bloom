@@ -1284,20 +1284,39 @@ frame logs its reason. GPU parity against the CPU reference is measured in RGBA1
 Neutral and the ACES 1.0 SDR view; the tolerance is 16 codes of 65535 (binary32 GPU OCIO against the
 binary64 CPU reference), and the measured difference on the export fixture is 0 on both.
 
-### Composite-cache reuse
+### Export frame reuse
 
-An output's "Use cached frames" setting lets an export take a frame from the scene-referred composite
-cache (premultiplied RGBA half in the working space, full resolution, Reference quality) instead of
-evaluating it. `output::compositeFrameReuseEligibleV1` admits only outputs whose quantization is
-coarser than half precision's error: H.264, HEVC, ProRes 422 (proxy, LT, standard, HQ), 8-bit DNxHR
-(LB, SQ, HQ) and 8-bit PNG. 16-bit TIFF, float EXR, ProRes 4444 and 4444 XQ, DNxHR HQX and 444, and
-audio-only outputs always render fresh. A reused frame's approval identity is computed over the
-widened half pixels, because those are the pixels that are encoded, so its process-pixel digest
-differs from a freshly evaluated frame's; the verification records it in
-`ExportDeviceProvenance::framesReused`. A hit skips evaluation, so its output color needs a
-display-only GPU job over the cached image. The export evaluator does not provide one, so
-`detail::compositeFrameReuseAvailableV1()` is false and every frame is evaluated; the CPU display
-transform is never used to serve a hit.
+An output's "Use cached frames" setting (`useCachedFrames`, default on; #785) lets an export take a
+frame an earlier export already evaluated instead of evaluating it again: another output of the same
+job, the true-peak re-render of an output, or the same export run again. The frames live in
+`host::ExportFrameCacheV1`, one per `GpuExportProvider` (so one per application or headless
+session), and an attempt with the setting on looks a frame up before evaluating and offers every
+frame it evaluates.
+
+An entry is the exact evaluated frame: the scene-referred float process image and, when the GPU ran
+the export's display/view in the same readback, that display-referred payload (shared, immutable,
+still charged to its root; `render::FinalPixelStorage::shared`). Nothing is rounded or re-mapped, so
+a reused frame reaches identity, analysis, approval and the encoder as the same pixels a fresh
+evaluation gives and the delivered file is the same bytes. Viewer and RAM Preview frames are 8-bit
+display products for the Viewer's own display and are never a source.
+
+The key is the full render identity (`runtime::CompositeFrameKey`: the compiled plan, which carries
+every parameter, asset digest and the #760 export background; the time and output; the colour
+intent; the verified content of every media file the plan reads) plus the route a fresh evaluation
+takes now: GPU or CPU reference, and the identity of the output colour command the GPU runs with the
+frame. Plans compare by rendered content (`runtime::sameRenderedContent`), not by document revision,
+so an unrelated edit (a new export job) keeps frames reusable; a reused frame's process identity
+names the revision that evaluated it. A frame the CPU reference evaluated on a GPU route is not
+reused (it evaluates again, so a device-only export still refuses it). Bypassed looks, proxies and
+ROIs are never cached, and a media file that no longer matches its recorded digest builds no key.
+
+Retained frames stay claims on the provider's processing root: frames whose backing is not rooted
+there are not kept, retention is bounded to half the root's usable host memory, and the cache
+registers a retention reclaimer, so any work that waits for host memory takes them back (least
+recently used first). An insertion never evicts frames the inserting export itself used, so a range
+longer than the bound keeps its first frames for the next export. A reused frame is counted in
+`ExportDeviceProvenance::framesReused` and `SequenceExportResultV1::framesReused`, in neither the
+GPU nor the CPU reference frames.
 
 See [media I/O](media-io.md#time-based-export-media-4) for the resource, tolerance and QC records,
 and [Export](../user-guide/exporting-video.md) for artist-facing controls.

@@ -139,6 +139,16 @@ output stores that name, so the result never depends on the configuration's own 
 encoder choice, audio sample rate and file-name pattern an output already has are kept and
 used; the panel does not edit them.
 
+**Use cached frames** (on by default) lets an export reuse frames an earlier export in this
+session already rendered for the same composition and frame settings: the second output of a job
+that writes the same frames twice (a master and a review copy, say), or the same export run again.
+The file is exactly what a fresh render gives. A change that alters the picture (an edit, the
+**Background**, a picture's input colour, a source file that changed on disk) means those frames
+are rendered again. Viewer and RAM Preview frames are never used: they are made for the Viewer's own
+display. Kept frames give their memory back as soon as other work needs it. The export's
+verification counts reused frames apart from the frames rendered on the GPU or the CPU. Turn the
+setting off to render every frame again.
+
 - **H.264** is encoded by OpenH264, which ships with Bloom on Linux, macOS and Windows; nothing is
   downloaded or installed. On a computer with an NVIDIA graphics driver, Bloom encodes on the GPU
   (NVENC) unless the encoder is set to **Software**. With **Hardware** chosen on Linux, a VA-API
