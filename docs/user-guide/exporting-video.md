@@ -121,9 +121,17 @@ HEVC, and the file's average rate lands near it. **Normalize loudness** brings t
 streaming level, -23 a broadcast level) and **True peak** is the ceiling in dBTP that the sound is never
 allowed to pass (-1 by default). Bloom first measures the whole mix, then gives it the gain that reaches
 the target and holds the ceiling with a limiter, so a loud peak is turned down instead of clipping. The
-job's details report the loudness measured before and delivered after, the true peak and how far the
-limiter reduced it. Silent audio is left alone. Normalizing renders the sound twice, which adds time to
-an export with a lot of audio.
+ceiling holds in the delivered file, not only in what the encoder is given: AAC (MP4) and Opus (WebM)
+rebuild the sound with peaks a little above the samples they were given, so for those formats Bloom
+first encodes the sound alone, decodes it and measures it, and lowers the limiter by any overshoot
+until the encoded sound stays under the ceiling. Every movie and WAV is then decoded back from the
+finished file and measured again; a file whose true peak is still over the ceiling is not published,
+and the output renders again with the limiter lower by the overshoot (at most three more times). The
+job's details report the loudness measured before and the loudness and true peak measured on the
+delivered file, and how far the limiter reduced the peaks. The export log has one line with the
+delivered file's loudness and true peak, what the encoder was given, the ceiling the limiter held and,
+for AAC and Opus, how many trial encodes set it. Silent audio is left alone. Normalizing renders the
+sound twice (more for AAC and Opus), which adds time to an export with a lot of audio.
 **Color space**, **Display** and **View** are lists of what the
 project's color setup offers, with **Project default** first, so a name cannot be mistyped.
 **Project default** is the Viewer's starting view (plain sRGB, **Un-tone-mapped** under ACES CG); the
