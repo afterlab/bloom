@@ -448,6 +448,20 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
     add_dependencies(bloom_media_mp3_audio_test bloom-media-worker)
     bloom_add_test(NAME bloom.media.mp3-audio COMMAND bloom_media_mp3_audio_test
                    LABELS unit media audio TIMEOUT 60)
+    # Issue #789: a generated movie whose audio starts after its video plays it at its time in
+    # preview and export, its clip length ends where the audio ends, and a gap in the middle of a
+    # stream is still refused. The movies are written at test time with the bundled FFmpeg.
+    add_executable(bloom_media_late_audio_test tests/late_audio_movie_tests.cpp)
+    target_include_directories(bloom_media_late_audio_test PRIVATE
+                               "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_media_late_audio_test PRIVATE bloom_host bloom_commands
+                          bloom_media_video FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+    set_target_properties(bloom_media_late_audio_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_late_audio_test)
+    add_dependencies(bloom_media_late_audio_test bloom-media-worker)
+    bloom_add_test(NAME bloom.media.late-audio COMMAND bloom_media_late_audio_test
+                   LABELS unit media audio output TIMEOUT 300)
     # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
     bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" --nvenc
