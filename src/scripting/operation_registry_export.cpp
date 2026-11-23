@@ -8,6 +8,9 @@
 
 #include "operation_values.hpp"
 
+#include <charconv>
+#include <cmath>
+#include <cstdio>
 #include <functional>
 #include <memory>
 #include <string>
@@ -137,6 +140,86 @@ rangeArguments(const Arguments& arguments, const std::string& op, OperationCreat
                                         source->assetBaseDirectory);
 }
 
+// #769: an output may be given as an object (a dict from Python, an object over MCP) instead of
+// its JSON text; the text is what exportOutputFromJson reads. False when the value holds something
+// a JSON output cannot (a path, a gradient, a reference).
+bool appendJson(const Value& value, std::string& out) {
+    if (const auto* text = std::get_if<std::string>(&value.storage)) {
+        out += '"';
+        for (const char character : *text) {
+            if (character == '"' || character == '\\') {
+                out += '\\';
+                out += character;
+            } else if (static_cast<unsigned char>(character) < 0x20) {
+                char escape[8];
+                std::snprintf(escape, sizeof escape, "\\u%04x",
+                              static_cast<unsigned>(static_cast<unsigned char>(character)));
+                out += escape;
+            } else {
+                out += character;
+            }
+        }
+        out += '"';
+        return true;
+    }
+    if (const auto* flag = std::get_if<bool>(&value.storage)) {
+        out += *flag ? "true" : "false";
+        return true;
+    }
+    if (const auto* whole = std::get_if<std::int64_t>(&value.storage)) {
+        out += std::to_string(*whole);
+        return true;
+    }
+    if (const auto* real = std::get_if<double>(&value.storage)) {
+        if (!std::isfinite(*real))
+            return false;
+        char buffer[64];
+        const auto [end, error] = std::to_chars(buffer, buffer + sizeof buffer, *real);
+        if (error != std::errc{})
+            return false;
+        out.append(buffer, end);
+        return true;
+    }
+    if (const auto* list = std::get_if<ValueArray>(&value.storage)) {
+        out += '[';
+        for (std::size_t index = 0; index < list->size(); ++index) {
+            if (index != 0)
+                out += ',';
+            if (!appendJson((*list)[index], out))
+                return false;
+        }
+        out += ']';
+        return true;
+    }
+    if (const auto* mapping = std::get_if<ValueMapping>(&value.storage)) {
+        out += '{';
+        for (std::size_t index = 0; index < mapping->keys.size(); ++index) {
+            if (index != 0)
+                out += ',';
+            if (!appendJson(Value(mapping->keys[index]), out))
+                return false;
+            out += ':';
+            if (!appendJson(mapping->values[index], out))
+                return false;
+        }
+        out += '}';
+        return true;
+    }
+    return false;
+}
+
+// The JSON text of one output argument: the text as given, or an object written out.
+std::optional<std::string> outputText(const Value& item) {
+    if (const auto* text = std::get_if<std::string>(&item.storage))
+        return *text;
+    if (std::holds_alternative<ValueMapping>(item.storage)) {
+        std::string text;
+        if (appendJson(item, text))
+            return text;
+    }
+    return std::nullopt;
+}
+
 const std::string kOutputSummary =
     R"(One output as JSON: {"preset": id, "settings": {output settings}, )"
     R"("destination": {"portability", "path", "overwrite"}, "enabled", "importIntoAssets"}; every )"
@@ -189,7 +272,10 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
              ValueArray{Value(std::int64_t{255}), Value(std::int64_t{0}), Value(std::int64_t{0})},
              "Optional row label as three integers 0..255."),
          argument("outputs", ValueKind::Array, false, ValueArray{},
-                  "Outputs as JSON strings; omitted adds one H.264 MP4 output. " + kOutputSummary)},
+                  "Outputs as objects, or as JSON text; omitted adds one H.264 MP4 output. "
+                  R"(Example: [{"preset": "builtin:h264-mov", "destination": {"path": "/exports/a.mov"}}, )"
+                  R"({"preset": "builtin:prores-422-mov", "destination": {"path": "/exports/b.mov"}}]. )" +
+                      kOutputSummary)},
         [](const std::string& op, const Arguments& args, const OperationContext& context) {
             OperationCreateResult error(nullptr, std::nullopt);
             const auto composition = idArgument<document::CompositionId>(args, "composition");
@@ -219,15 +305,16 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
             if (const auto* outputs = find(args, "outputs")) {
                 const auto* list = std::get_if<ValueArray>(&outputs->storage);
                 if (!list)
-                    return argumentFailure(op, "outputs", "Expected an array of JSON strings.");
+                    return argumentFailure(op, "outputs",
+                                           "Expected an array of output objects (or JSON strings).");
                 for (const auto& item : *list) {
-                    const auto* text = std::get_if<std::string>(&item.storage);
-                    std::string reason = "An output is not a JSON string.";
+                    const auto text = outputText(item);
+                    std::string reason = "An output is an object (or its JSON text).";
                     auto output = text ? host::exportOutputFromJson(*text, &reason) : std::nullopt;
                     if (!output)
                         return argumentFailure(op, "outputs",
-                                               "Output " + std::to_string(job.outputs.size()) +
-                                                   " is refused: " + reason + " " + kOutputSummary);
+                                               "outputs[" + std::to_string(job.outputs.size()) +
+                                                   "] is refused: " + reason + " " + kOutputSummary);
                     job.outputs.push_back(std::move(*output));
                 }
             }
@@ -344,7 +431,7 @@ void addExportOperations(std::vector<OperationDescriptor>& descriptors) {
         [](const std::string& op, const Arguments& args, const OperationContext& context) {
             const auto job = idArgument<ExportJobId>(args, "job");
             const auto text = textArgument(args, "output");
-            std::string reason = "Expected an output as a JSON string.";
+            std::string reason = "Expected an output as an object or JSON text.";
             auto output = text ? host::exportOutputFromJson(*text, &reason) : std::nullopt;
             if (!job)
                 return argumentFailure(op, "job", "Expected a job id.");

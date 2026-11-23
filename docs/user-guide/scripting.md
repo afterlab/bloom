@@ -180,7 +180,9 @@ object: `{"preset", "settings": {"format", "codecProfile", ...}, "destination": 
 built-in `preset` and gives no `settings` takes that preset's settings, as `apply-preset` does
 (`{"preset": "builtin:prores-422hq-mov", "destination": {"path": "Exports/{name}.mov"}}`); a preset
 that is not built in needs `settings`, and a refused output says why. Without `outputs`, `add-job`
-adds one H.264 MP4 output at `Exports/{name}.mp4`.
+adds one H.264 MP4 output at `Exports/{name}.mp4`. `outputs` is a list of such objects (a Python
+dict, or a JSON object over MCP and `run` scripts), or of their JSON text; a refused output is named by its position, as
+`outputs[1]`, with the reason. `bloom.export.add-output` takes one the same way.
 
 **Session calls** act on runtime state only (never undoable, never saved): `export.start`,
 `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`,
