@@ -67,6 +67,10 @@ class ChannelSetImage;
 class NativeSampleImage;
 } // namespace bloom::render
 
+namespace bloom::platform {
+class FileSnapshotQuota;
+} // namespace bloom::platform
+
 namespace bloom::runtime {
 
 class OperationCache;
@@ -721,6 +725,10 @@ struct GpuSceneMediaContext final {
     // one to a second owner drops every session with its verified source snapshot, and the next
     // frame copies and hashes the whole file again.
     [[nodiscard]] static std::shared_ptr<detail::VideoSourceContext> makeVideoSources();
+    // #772: the snapshot quota that bounds `sources`' source copies (tests and diagnostics read
+    // and hold its files; null for a null context).
+    [[nodiscard]] static std::shared_ptr<platform::FileSnapshotQuota>
+    videoSourceSnapshotQuota(const std::shared_ptr<detail::VideoSourceContext>& sources);
 };
 
 class PreparedGpuScene final {

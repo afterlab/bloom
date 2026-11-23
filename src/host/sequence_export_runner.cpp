@@ -6,10 +6,13 @@
 #include <bloom/host/sequence_export_runner.hpp>
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/output/export_audio_sources.hpp>
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/prepared_gpu_scene.hpp>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdio>
+#include <iterator>
 #include <deque>
 #include <exception>
 #include <iostream>
@@ -141,6 +144,13 @@ struct detail::SequenceExportWorkV1 {
     // The range is one linear pass: shared caches retain only what recurs between its frames.
     std::shared_ptr<runtime::LinearPassRetention> linearPass =
         std::make_shared<runtime::LinearPassRetention>();
+    // #772: waits taken from the pass so far, kept for the result.
+    std::vector<runtime::LinearPassRetention::VideoSnapshotWait> videoSnapshotWaits;
+    void collectVideoSnapshotWaits() {
+        auto taken = linearPass->takeVideoSnapshotWaits();
+        videoSnapshotWaits.insert(videoSnapshotWaits.end(), std::make_move_iterator(taken.begin()),
+                                  std::make_move_iterator(taken.end()));
+    }
     explicit SequenceExportWorkV1(SequenceExportRequestV1 r,
                                   std::shared_ptr<output::ExportResourceLedgerV1> lifetime)
         : request(std::move(r)), ledgerLifetime(std::move(lifetime)) {}
@@ -245,6 +255,8 @@ struct detail::SequenceExportWorkV1 {
         out.gpuEncodedPayloadBytes = gpuEncodedPayloadBytes;
         out.gpuDeviceOwnershipEpoch = gpuDeviceOwnershipEpoch;
         out.framesReused = framesReused;
+        collectVideoSnapshotWaits();
+        out.videoSnapshotWaits = videoSnapshotWaits;
         out.gpuDisplayFrames = gpuDisplayFrames;
         out.cpuDisplayFrames = cpuDisplayFrames;
         out.cpuDisplayReason = cpuDisplayReason;
@@ -1010,7 +1022,8 @@ struct SequenceExportRunnerV1::State {
                            .colorIntent = work->colorIntent(),
                            .pixelStorageByteLimit = 0,
                            .bypassLookNodes = work->request.bypassLookNodes,
-                           .linearPass = work->linearPass},
+                           .linearPass = work->linearPass,
+                           .linearPassFrame = *time},
             .assetBaseDirectory = work->request.assetBaseDirectory,
             .fallbackEvaluator = work->fallbackEvaluator,
             .targetPath = work->request.range.destination,
@@ -1083,6 +1096,13 @@ struct SequenceExportRunnerV1::State {
     // Consumes the completed analysis of window[position]. False after a terminal failure.
     bool complete(const std::size_t position, OutputAnalysisAttemptOutcomeV1 result) {
         auto& frame = window[position];
+        // #772: an evaluated frame (a reused frame is one) releases the movie sources whose layers
+        // left the range before it.
+        if (result) {
+            if (const auto time = FrameRangeRunnerV1::timeForFrame(
+                    work->request.range, work->request.range.firstFrame + frame.offset))
+                work->linearPass->frameEvaluated(*time);
+        }
         if (const auto& provenance = result.gpuProvenance();
             result && provenance.has_value() && provenance->reused) {
             ++work->framesReused;
@@ -1512,5 +1532,23 @@ std::uint64_t SequenceExportRunnerV1::totalFrames() const {
 }
 const std::optional<SequenceExportResultV1>& SequenceExportRunnerV1::result() const {
     return state_->outcome;
+}
+std::vector<runtime::LinearPassRetention::VideoSnapshotWait>
+SequenceExportRunnerV1::takeVideoSnapshotWaits() {
+    return state_->work ? state_->work->linearPass->takeVideoSnapshotWaits()
+                        : std::vector<runtime::LinearPassRetention::VideoSnapshotWait>{};
+}
+std::shared_ptr<platform::FileSnapshotQuota> SequenceExportRunnerV1::videoSourceSnapshotQuota() const {
+    return state_->work ? runtime::GpuSceneMediaContext::videoSourceSnapshotQuota(
+                              state_->work->fallbackEvaluator->videoContext())
+                        : nullptr;
+}
+std::string describeVideoSnapshotWaitV1(const runtime::LinearPassRetention::VideoSnapshotWait& wait) {
+    char at[48] = "";
+    if (wait.frame)
+        std::snprintf(at, sizeof at, "%.3f s", wait.frame->toSeconds());
+    return std::string(wait.frame ? "Frame at " + std::string(at) : "A frame") + ": reading \"" +
+           wait.source + "\" waited " + std::to_string((wait.nanoseconds + 500000) / 1000000) +
+           " ms for released video source snapshots to close (the snapshot quota was full).";
 }
 } // namespace bloom::host

@@ -12,6 +12,10 @@
 #include <string>
 #include <vector>
 
+namespace bloom::platform {
+class FileSnapshotQuota;
+} // namespace bloom::platform
+
 namespace bloom::host {
 namespace detail {
 struct SequenceExportWorkV1;
@@ -223,6 +227,9 @@ struct SequenceExportResultV1 {
     // Frames taken from the export frame cache instead of being evaluated (useCachedFrames); counted
     // in neither gpuEvaluatedFrames nor the CPU reference frames.
     std::uint64_t framesReused = 0;
+    // #772: each frame whose movie layer had to wait for released video source snapshots to close
+    // before its source could be copied; the export log and the headless report say so.
+    std::vector<runtime::LinearPassRetention::VideoSnapshotWait> videoSnapshotWaits;
     // #570: measured and delivered loudness of a normalizing export; absent when the audio was not
     // normalized. #771: final* are the delivered file's own measurement once its reopen measured it
     // (finalFromDeliveredFile); a TruePeakExceeded failure carries it too.
@@ -260,6 +267,10 @@ struct SequenceExportResultV1 {
 // One compile, exact SCRIPT-0 frame mapping, several frames analysed ahead of one ordered encoder
 // (frames reach the encoder strictly in order, one acknowledged product at a time), one
 // publication. The first frame waits for approve(); later frames are approved in order.
+// #772: the sentence the export log and the headless report give for one snapshot-quota wait.
+[[nodiscard]] std::string
+describeVideoSnapshotWaitV1(const runtime::LinearPassRetention::VideoSnapshotWait& wait);
+
 class SequenceExportRunnerV1 final {
   public:
     SequenceExportRunnerV1(runtime::TaskScheduler&, const runtime::SnapshotCompiler&,
@@ -291,6 +302,11 @@ class SequenceExportRunnerV1 final {
     [[nodiscard]] std::uint64_t encodedFrames() const;
     [[nodiscard]] std::uint64_t totalFrames() const;
     [[nodiscard]] const std::optional<SequenceExportResultV1>& result() const;
+    // The snapshot-quota waits of the frames evaluated so far, not yet taken (live reporting).
+    [[nodiscard]] std::vector<runtime::LinearPassRetention::VideoSnapshotWait>
+    takeVideoSnapshotWaits();
+    // The snapshot quota that bounds this export's movie source copies (tests and diagnostics).
+    [[nodiscard]] std::shared_ptr<platform::FileSnapshotQuota> videoSourceSnapshotQuota() const;
 
   private:
     struct State;

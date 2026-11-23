@@ -41,6 +41,10 @@ GpuSceneMediaContext GpuSceneMediaContext::fromEvaluator(const CpuCompositionEva
 std::shared_ptr<detail::VideoSourceContext> GpuSceneMediaContext::makeVideoSources() {
     return std::make_shared<detail::VideoSourceContext>();
 }
+std::shared_ptr<platform::FileSnapshotQuota>
+GpuSceneMediaContext::videoSourceSnapshotQuota(const std::shared_ptr<detail::VideoSourceContext>& sources) {
+    return sources ? sources->snapshotQuota() : nullptr;
+}
 
 std::shared_ptr<const render::Rgba32fImage>
 GpuSceneBuildUploads::find(const std::string& key) const {

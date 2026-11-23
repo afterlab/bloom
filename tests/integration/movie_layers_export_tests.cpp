@@ -25,7 +25,9 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/output/media_output.hpp>
 #include <bloom/output/output_export_resource_ledger.hpp>
+#include <bloom/platform/file_snapshot.hpp>
 #include <bloom/platform/staged_artifact.hpp>
 #include <bloom/runtime/node_definition_registry.hpp>
 #include <bloom/runtime/snapshot_compiler.hpp>
@@ -257,6 +259,108 @@ void writeNumberedCopy(const std::filesystem::path& source, const std::filesyste
     out.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
 }
 
+// The same export through the sequence runner, whose movie source copies this test can see: the
+// copies' file limit rises with the sources the frames read and falls while the export runs as the
+// trimmed layers leave the range; and nine small files held beside the export fill its quota for the
+// first captures, so they wait for a release the test announces, and the result says so (#772).
+void testSnapshotWaitAndRelease(Fixture& f, const std::filesystem::path& folder,
+                                const std::int64_t last) {
+    const auto snapshot = currentSnapshot(f.session);
+    const auto& composition = f.main(snapshot);
+    host::SequenceExportRequestV1 request{
+        .composition = {snapshot, f.composition()},
+        .range = {folder / "Exports" / "runner.mov", 0, static_cast<std::uint64_t>(last),
+                  composition.format().frameRate(), composition.duration()},
+        .bwfDescription = {},
+        .assetBaseDirectory = folder,
+        .worker = {}};
+    request.preset = output::OutputPresetV1::ProResMovV1;
+    request.profile = "hq";
+    request.audio = false;
+    std::shared_ptr<platform::FileSnapshotQuota> quota;
+    std::vector<std::size_t> limits;
+    std::size_t lastSeen = 0;
+    {
+    host::SequenceExportRunnerV1 runner(f.scheduler, f.compiler, f.publications, f.artifacts,
+                                        *f.ledger, std::move(request), *f.retirement);
+    quota = runner.videoSourceSnapshotQuota();
+    expect(quota != nullptr, "the runner exposes its video source quota");
+    if (!quota)
+        return;
+    const auto heldFile = folder / "held.bin";
+    {
+        std::ofstream(heldFile, std::ios::binary) << "held";
+    }
+    std::filesystem::create_directories(folder / "held-spool");
+    std::vector<std::unique_ptr<platform::ReadOnlyFileSnapshot>> held;
+    quota->setFileLimit(9);
+    for (int count = 0; count < 9; ++count) {
+        auto made = platform::ReadOnlyFileSnapshot::capture(heldFile, folder / "held-spool", quota,
+                                                            std::uint64_t{1} << 20U);
+        if (auto* kept = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&made))
+            held.push_back(std::move(*kept));
+    }
+    expect(held.size() == 9, "nine snapshots hold the quota (" + std::to_string(held.size()) + ")");
+    quota->expectRelease();
+    const auto started = std::chrono::steady_clock::now();
+    const auto deadline = started + std::chrono::seconds(240);
+    bool released = false, limitFellWhileRunning = false;
+    std::size_t highestLimit = 0;
+    while (!runner.result() && std::chrono::steady_clock::now() < deadline) {
+        runner.poll();
+        if (runner.stage() == host::SequenceExportStageV1::AwaitingApproval) {
+            const auto* analysis = runner.analysis();
+            const auto frame = runner.frameApprovalDigest();
+            if (analysis && frame)
+                expect(runner.approve(analysis->digest, *frame), "the export's captured identities");
+        }
+        if (!released &&
+            std::chrono::steady_clock::now() - started > std::chrono::milliseconds(200)) {
+            released = true;
+            held.clear();
+            quota->releaseExpected();
+        }
+        const auto limit = quota->fileLimit();
+        if (limits.empty() || limits.back() != limit)
+            limits.push_back(limit);
+        if (runner.result() && lastSeen == 0)
+            lastSeen = limit;
+        highestLimit = std::max(highestLimit, limit);
+        if (limit < highestLimit && !runner.result())
+            limitFellWhileRunning = true;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    expect(runner.result().has_value() && runner.result()->published(),
+           "the runner export of sixteen movie layers publishes");
+    expect(highestLimit >= 8 + 16,
+           "the quota admitted all sixteen sources (" + std::to_string(highestLimit) + ")");
+    expect(limitFellWhileRunning,
+           "the quota's limit fell during the export as layers left the range");
+    std::cout << "  limit when the export ended: " << lastSeen << '\n';
+    std::cout << "  limits:";
+    for (const auto value : limits)
+        std::cout << ' ' << value;
+    std::cout << '\n';
+    if (!runner.result())
+        return;
+    const auto& waits = runner.result()->videoSnapshotWaits;
+    expect(!waits.empty(), "the result reports a snapshot wait");
+    for (const auto& wait : waits) {
+        const auto text = host::describeVideoSnapshotWaitV1(wait);
+        std::cout << "  " << text << '\n';
+        expect(text.find("waited") != std::string::npos &&
+                   text.find("for released video source snapshots to close") != std::string::npos &&
+                   text.find("layer-") != std::string::npos,
+               "the wait names the movie, how long and why: " + text);
+    }
+    } // the runner (and its pass) ends here
+    // The pass ends on the retirement lane a moment after the runner is gone.
+    for (int wait = 0; wait < 2000 && quota->fileLimit() != 8; ++wait)
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    expect(quota->fileLimit() == 8,
+           "the pass's end leaves the idle limit of 8 (" + std::to_string(quota->fileLimit()) + ")");
+}
+
 void testSixteenMovieLayersExport() {
     const auto folder =
         bloom::test_support::processTempDirectory() /
@@ -325,6 +429,7 @@ void testSixteenMovieLayersExport() {
             f.frameTime(static_cast<std::int64_t>(index) - 5));
         f.execute(std::move(trim), "trim a layer");
     }
+    testSnapshotWaitAndRelease(f, folder, last);
     document::ExportOutputSettings output;
     output.format = ExportFormat::ProResMov;
     output.codecProfile = "hq";

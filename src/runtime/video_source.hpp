@@ -97,6 +97,9 @@ class VideoSourceContext final : public std::enable_shared_from_this<VideoSource
     [[nodiscard]] std::uint64_t sourceSnapshotBytes() const { return quota_->residentBytes(); }
     [[nodiscard]] std::size_t sourceSnapshotCount() const { return quota_->residentFiles(); }
     [[nodiscard]] std::size_t sourceSnapshotFileLimit() const { return quota_->fileLimit(); }
+    [[nodiscard]] std::shared_ptr<platform::FileSnapshotQuota> snapshotQuota() const {
+        return quota_;
+    }
     // Retained sessions are admitted by memory, not a fixed count: their estimated worker bytes
     // must fit this budget (default usable memory, the ledger's automatic total: no fixed fraction,
     // ADR 0037). At least two sources are kept so two sources can alternate. Idle sources are

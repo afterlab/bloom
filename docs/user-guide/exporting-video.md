@@ -262,6 +262,12 @@ decode. A sound file that ends before the length its own header declares (a down
 say) fails the export with a message that names the audio asset, instead of publishing the missing
 part as silence.
 
+**Many movie layers.** An export reads every movie its frames show, however many play at once; each
+movie's source copy is kept while its layer is in the range and given back as soon as the layer
+ends. If a movie has to wait for another's copy to close, the export waits (you can stop it) and the
+log says which movie waited and for how long. If the disk has no room for the copies, the export
+stops and names the files and space it needed.
+
 **Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
 the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).
 With a cap set, a job that reaches it waits for the worker instead of using more memory, and fails

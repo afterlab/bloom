@@ -594,6 +594,9 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                       "), so Bloom's FFmpeg encoder rendered the export again";
         if (runner.result()->published())
             report += truePeakNote;
+        // #772: the sources that waited for released snapshots to close, as the export log says.
+        for (const auto& wait : runner.result()->videoSnapshotWaits)
+            report += "; " + host::describeVideoSnapshotWaitV1(wait);
         if (!runner.result()->published()) {
             if (runner.result()->failureStage ==
                     host::SequenceExportFailureStageV1::TruePeakExceeded &&

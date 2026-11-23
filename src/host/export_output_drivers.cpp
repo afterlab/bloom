@@ -869,6 +869,13 @@ class ImageDriver final : public DriverBase {
                                         "resolution; the details are in the log.",
                                     frame.index));
             }
+            // #772: an evaluated frame (a reused frame is one) releases the movie sources whose
+            // layers left the range, and says which waits its sources had.
+            if (*outcome && frame.time)
+                linearPass_->frameEvaluated(*frame.time);
+            for (const auto& wait : linearPass_->takeVideoSnapshotWaits())
+                log(runtime::DiagnosticSeverity::Information, "export.video.snapshot-wait",
+                    describeVideoSnapshotWaitV1(wait), frame.index);
             frame.outcome.emplace(std::move(*outcome));
         }
         if (republishPending()) {
@@ -964,6 +971,8 @@ class ImageDriver final : public DriverBase {
     struct WindowFrame final {
         std::uint64_t index = 0;
         std::filesystem::path target;
+        // #772: the composition time of the frame, for the pass's source release.
+        std::optional<core::RationalTime> time;
         std::optional<OutputAnalysisAttemptRunnerV1> runner;
         std::optional<OutputAnalysisAttemptOutcomeV1> outcome;
         bool awaitingCapacity = false;
@@ -1204,6 +1213,7 @@ class ImageDriver final : public DriverBase {
             return false;
         }
         frame.target = *path;
+        frame.time = *time;
         // A name pattern without a frame number publishes every frame to one file: this run's own
         // earlier publication of it is replaced.
         const auto rule =
@@ -1219,7 +1229,8 @@ class ImageDriver final : public DriverBase {
                            .colorIntent = input_.colorIntent,
                            .pixelStorageByteLimit = 0,
                            .bypassLookNodes = !input_.output.record.settings.bakeLook,
-                           .linearPass = linearPass_},
+                           .linearPass = linearPass_,
+                           .linearPassFrame = *time},
             .assetBaseDirectory = input_.assetBaseDirectory,
             .targetPath = frame.target,
             .overwritePolicy = rule.policy,
@@ -2239,6 +2250,10 @@ class MediaDriver final : public DriverBase {
         // log, where a user or an agent reads it.
         for (const auto& note : result.sourceRouting)
             log(runtime::DiagnosticSeverity::Information, "export.source.routing", note);
+        // #772: a movie layer's source copy had to wait for released copies to close.
+        for (const auto& wait : result.videoSnapshotWaits)
+            log(runtime::DiagnosticSeverity::Information, "export.video.snapshot-wait",
+                describeVideoSnapshotWaitV1(wait));
         if (!result.published()) {
             if (stopRequested_ ||
                 (result.failure && result.failure->reason == media::provider::Error::Cancelled))
