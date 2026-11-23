@@ -47,9 +47,50 @@ bool FileSnapshotQuota::reserve(const std::uint64_t bytes) {
     return true;
 }
 void FileSnapshotQuota::release(const std::uint64_t bytes) {
+    {
+        const std::lock_guard lock(mutex_);
+        resident_ -= bytes;
+        --count_;
+        ++releases_;
+    }
+    changed_.notify_all();
+}
+std::uint64_t FileSnapshotQuota::ceilingBytes() const {
     const std::lock_guard lock(mutex_);
-    resident_ -= bytes;
-    --count_;
+    return ceiling_;
+}
+std::size_t FileSnapshotQuota::fileLimit() const {
+    const std::lock_guard lock(mutex_);
+    return files_;
+}
+void FileSnapshotQuota::setFileLimit(const std::size_t files) {
+    const std::lock_guard lock(mutex_);
+    files_ = files;
+}
+void FileSnapshotQuota::expectRelease() {
+    const std::lock_guard lock(mutex_);
+    ++pending_;
+}
+void FileSnapshotQuota::releaseExpected() {
+    {
+        const std::lock_guard lock(mutex_);
+        if (pending_ > 0)
+            --pending_;
+        ++releases_;
+    }
+    changed_.notify_all();
+}
+std::size_t FileSnapshotQuota::releasesPending() const {
+    const std::lock_guard lock(mutex_);
+    return pending_;
+}
+bool FileSnapshotQuota::waitForRelease(const std::chrono::milliseconds slice) {
+    std::unique_lock lock(mutex_);
+    if (pending_ == 0)
+        return false;
+    const auto seen = releases_;
+    changed_.wait_for(lock, slice, [&] { return releases_ != seen || pending_ == 0; });
+    return true;
 }
 // #718: the fill state of a snapshot that is usable before it is whole. The file has the source's
 // full length from the start; a chunk is Present once its bytes were written. The holder of this

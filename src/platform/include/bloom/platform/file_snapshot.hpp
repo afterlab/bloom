@@ -1,4 +1,6 @@
 #pragma once
+#include <chrono>
+#include <condition_variable>
 #include <bloom/core/sha256.hpp>
 #include <bloom/platform/process_supervisor.hpp>
 #include <bloom/platform/source_identity.hpp>
@@ -14,6 +16,10 @@ namespace bloom::platform {
 struct FileSnapshotStatistics final {
     std::uint64_t bytesRead = 0, bytesHashed = 0;
     std::uint64_t ioNanoseconds = 0, hashNanoseconds = 0;
+    // #772: the times a capture found its quota full and waited for a released snapshot of the
+    // same quota to close, and how long it waited in all.
+    std::uint32_t quotaWaits = 0;
+    std::uint64_t quotaWaitNanoseconds = 0;
 };
 // Disk quota includes captures in flight and unlinked files waiting for their last handle to close.
 class FileSnapshotQuota final {
@@ -21,14 +27,31 @@ class FileSnapshotQuota final {
     FileSnapshotQuota(std::uint64_t bytes, std::size_t files) : ceiling_(bytes), files_(files) {}
     [[nodiscard]] std::uint64_t residentBytes() const;
     [[nodiscard]] std::size_t residentFiles() const;
+    [[nodiscard]] std::uint64_t ceilingBytes() const;
+    [[nodiscard]] std::size_t fileLimit() const;
+    // #772: the holder sizes the file count by what it needs now (a linear pass admits every
+    // source its frames read). A lower limit refuses new captures until enough snapshots closed;
+    // it never closes one.
+    void setFileLimit(std::size_t files);
+    // #772: a holder that dropped a snapshot whose close is queued (a retirement lane closes it a
+    // moment later) calls expectRelease(), and releaseExpected() once it closed. A capture refused
+    // meanwhile waits for that close instead of failing.
+    void expectRelease();
+    void releaseExpected();
+    [[nodiscard]] std::size_t releasesPending() const;
+    // Blocks until a snapshot of this quota closes, an expected release ends, or `slice` passes.
+    // False at once when no release is pending (nothing to wait for).
+    bool waitForRelease(std::chrono::milliseconds slice);
 
   private:
     friend class ReadOnlyFileSnapshot;
     bool reserve(std::uint64_t bytes);
     void release(std::uint64_t bytes);
     mutable std::mutex mutex_;
+    std::condition_variable changed_;
     std::uint64_t ceiling_ = 0, resident_ = 0;
-    std::size_t files_ = 0, count_ = 0;
+    std::size_t files_ = 0, count_ = 0, pending_ = 0;
+    std::uint64_t releases_ = 0;
 };
 // #718: where a progressive snapshot finds bytes of its source that are already local, and where
 // it keeps the bytes it reads from the source (the local mirror's byte ranges of one file). Called

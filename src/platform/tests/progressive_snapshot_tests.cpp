@@ -127,6 +127,49 @@ int main() {
     write(source, bytes);
     const auto digest = *bloom::core::Sha256Hasher::hash(bytes);
     const auto quota = std::make_shared<FileSnapshotQuota>(std::uint64_t{64} * kChunk, 4);
+    // #772: the file count follows what the holder needs, and a capture refused while a released
+    // snapshot is still closing can wait for that close; with nothing closing there is nothing
+    // to wait for.
+    {
+        const auto files = std::make_shared<FileSnapshotQuota>(std::uint64_t{64} * kChunk, 1);
+        const auto capture = [&] {
+            return take(ReadOnlyFileSnapshot::capture(source, spool, files,
+                                                      std::uint64_t{1} << 40U));
+        };
+        auto first = capture();
+        expectations.expect(first != nullptr && files->residentFiles() == 1 &&
+                                files->fileLimit() == 1,
+                            "quota: one file is admitted under a one-file limit");
+        expectations.expect(capture() == nullptr, "quota: a second file is refused at the limit");
+        files->setFileLimit(2);
+        auto second = capture();
+        expectations.expect(second != nullptr && files->residentFiles() == 2,
+                            "quota: a raised limit admits another file");
+        files->setFileLimit(1);
+        expectations.expect(files->residentFiles() == 2 && capture() == nullptr,
+                            "quota: a lowered limit closes nothing and refuses new files");
+        expectations.expect(files->releasesPending() == 0 &&
+                                !files->waitForRelease(std::chrono::milliseconds(1)),
+                            "quota: with no release pending a wait returns at once");
+        files->expectRelease();
+        std::thread closer([&] {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            second.reset();
+            files->releaseExpected();
+        });
+        const auto started = std::chrono::steady_clock::now();
+        while (files->residentFiles() == 2 && files->waitForRelease(std::chrono::milliseconds(20))) {
+        }
+        closer.join();
+        expectations.expect(first != nullptr && files->residentFiles() == 1 &&
+                                files->releasesPending() == 0 &&
+                                std::chrono::steady_clock::now() - started >=
+                                    std::chrono::milliseconds(40),
+                            "quota: a wait lasts until the expected release closes its file");
+        files->setFileLimit(2);
+        expectations.expect(capture() != nullptr,
+                            "quota: the closed file's place is free for a new capture");
+    }
     const auto request = [&](std::shared_ptr<SourceChunkStore> chunks, const bool background) {
         ProgressiveSnapshotRequest value;
         value.source = source;

@@ -1008,6 +1008,72 @@ void waiterAdmission() {
                                   bloom::media::video::kFrameWaiterMaximumBypass) == 1U,
           "a backward request is admitted after a bounded number of grants");
 }
+// #772: a capture refused because its quota is full waits, cancellably, while a snapshot of that
+// quota is still closing (a session given up for a layer that left the range, on its retirement
+// lane), and the source work counts the wait. With nothing closing it fails at once, naming the
+// quota's files and bytes.
+void snapshotQuotaWait(const std::filesystem::path& directory) {
+    using namespace bloom::media;
+    const auto quota = std::make_shared<bloom::platform::FileSnapshotQuota>(1ULL << 36U, 1);
+    auto holder = std::make_unique<video::VideoDecodeSession>(
+        directory / "numbered-h264.mp4", video::VideoDecodeSession::defaultWorker(), quota);
+    check(std::holds_alternative<provider::ProbeResult>(holder->probe()),
+          "quota wait: the first source probes");
+    check(quota->residentFiles() == 1, "quota wait: the first source holds the one file");
+    std::optional<provider::ProbeResult> probe;
+    {
+        video::VideoDecodeSession reader(directory / "numbered-prores.mov");
+        const auto probed = reader.probe();
+        check(std::holds_alternative<provider::ProbeResult>(probed),
+              "quota wait: the second source probes on its own");
+        probe = std::get<provider::ProbeResult>(probed);
+    }
+    // The reader's copy must not be adopted: the waiting session captures its own.
+    video::releaseRetainedSourceSnapshots();
+    const auto stream = std::ranges::find(probe->streams, provider::MediaKind::Video,
+                                          &provider::StreamDescriptor::kind);
+    check(stream != probe->streams.end(), "quota wait: the second source has a video stream");
+    video::VideoDecodeSession waiting(directory / "numbered-prores.mov",
+                                      video::VideoDecodeSession::defaultWorker(), quota);
+    const auto decode = [&](const video::Cancel& cancel,
+                            bloom::platform::FileSnapshotStatistics& work) {
+        return waiting.frame(*probe, stream->id, 0, 0, nullptr, {}, {}, provider::Digest{}, cancel,
+                             {.work = &work});
+    };
+    bloom::platform::FileSnapshotStatistics work;
+    auto decoded = decode({}, work);
+    const auto* refused = std::get_if<provider::Unavailable>(&decoded);
+    check(refused != nullptr && refused->reason == provider::Error::Oversized &&
+              refused->detail.find("snapshot quota is full: 1 of 1 files") != std::string::npos &&
+              work.quotaWaits == 0,
+          "quota wait: with nothing closing a full quota fails at once and names it");
+    // A release is pending but never comes: the wait ends when the request is cancelled.
+    quota->expectRelease();
+    const auto cancelAt = std::chrono::steady_clock::now() + std::chrono::milliseconds(80);
+    work = {};
+    decoded = decode([&] { return std::chrono::steady_clock::now() >= cancelAt; }, work);
+    refused = std::get_if<provider::Unavailable>(&decoded);
+    check(refused != nullptr && refused->reason == provider::Error::Cancelled &&
+              refused->detail.find("waited for released source snapshots") != std::string::npos &&
+              work.quotaWaits > 0,
+          "quota wait: a waiting capture is cancellable and says what it waited for");
+    // The pending release comes: the first source's snapshot closes 150 ms later, and the waiting
+    // capture takes its place.
+    std::thread closer([&] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        holder.reset();
+        quota->releaseExpected();
+    });
+    work = {};
+    decoded = decode({}, work);
+    closer.join();
+    check(std::holds_alternative<std::shared_ptr<const provider::FrameProduct>>(decoded),
+          "quota wait: the capture succeeds once the released snapshot closed");
+    check(work.quotaWaits > 0 && work.quotaWaitNanoseconds >= 100'000'000ULL,
+          "quota wait: the source work counts the wait and its length");
+    check(quota->residentFiles() == 1 && quota->releasesPending() == 0,
+          "quota wait: one file is held and nothing is pending");
+}
 int main(int argc, char** argv) {
     try {
         check(argc == 2, "fixture directory");
@@ -1023,6 +1089,7 @@ int main(int argc, char** argv) {
         timingAndLayout(argv[1]);
         lazyIndex(argv[1]);
         eightK(argv[1]);
+        snapshotQuotaWait(argv[1]);
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;
