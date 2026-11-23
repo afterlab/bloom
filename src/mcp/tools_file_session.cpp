@@ -235,16 +235,21 @@ McpQueueRoute queueRoute(McpServerCore::State& core, const McpCall& call) {
     return {core.dependencies.exports, core.retiredTransients, nullptr};
 }
 
-std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments) {
+std::optional<std::filesystem::path> projectFileAsGiven(yyjson_val* arguments) {
     if (arguments == nullptr || !yyjson_is_obj(arguments))
         return std::nullopt;
     auto* value = member(arguments, "projectFile");
     if (value == nullptr)
         return std::nullopt;
-    const std::filesystem::path path(string(value, 4096));
+    std::filesystem::path path(string(value, 4096));
     if (path.empty() || !path.is_absolute())
         throw InvalidInput("projectFile is the absolute path of a Bloom project file");
-    return normalized(path);
+    return path;
+}
+
+std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments) {
+    const auto given = projectFileAsGiven(arguments);
+    return given ? std::optional{normalized(*given)} : std::nullopt;
 }
 
 FrozenJson withoutProjectFile(yyjson_val* arguments) {
@@ -383,7 +388,8 @@ std::shared_ptr<McpFileExports> fileExportsFor(McpServerCore::State& core,
 }
 
 yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, const McpTool tool,
-                                const std::filesystem::path& path, yyjson_val* arguments,
+                                const std::filesystem::path& path,
+                                const std::filesystem::path& given, yyjson_val* arguments,
                                 const McpRequestControl& control) {
     const std::lock_guard lock(core.fileMutex);
     auto& session = fileSessionFor(core, path, control, tool != McpTool::ProjectClose);
@@ -393,7 +399,7 @@ yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, const Mcp
     if (exports)
         owner = std::unique_lock(*exports);
     auto* value = out.object();
-    out.set(value, "projectFile", out.text(path.string()));
+    out.set(value, "projectFile", out.text(given.string()));
     if (tool == McpTool::ProjectSave) {
         const auto saved = session.save();
         // Issue #748: a save that ran and did not write the file names where it stopped and why,
@@ -533,6 +539,7 @@ Comparison compareWithFile(McpServerCore::State& core, const std::filesystem::pa
 std::optional<McpOpenProjectAttachment> attachToOpenProject(McpServerCore::State& core,
                                                             const McpTool tool,
                                                             const std::filesystem::path& path,
+                                                            const std::filesystem::path& given,
                                                             const McpRequestControl& control) {
     std::optional<scripting::SessionRenderSourceSnapshot> open;
     std::uint64_t generation = 0;
@@ -596,7 +603,7 @@ std::optional<McpOpenProjectAttachment> attachToOpenProject(McpServerCore::State
     }
     const auto compared = compareWithFile(core, path, *open, generation);
     return McpOpenProjectAttachment{
-        .path = path, .fileDiffers = compared.differs, .difference = compared.difference};
+        .path = given, .fileDiffers = compared.differs, .difference = compared.difference};
 }
 
 void addAttachment(Json& out, yyjson_mut_val* value, const McpOpenProjectAttachment& attachment) {

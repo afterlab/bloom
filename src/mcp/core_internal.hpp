@@ -457,15 +457,18 @@ inline constexpr std::size_t kMcpFileSessions = 4;
 // The `projectFile` argument: an absolute path to an existing project file, normalised, or nullopt
 // when absent.
 [[nodiscard]] std::optional<std::filesystem::path> projectFileArgument(yyjson_val* arguments);
+// The same argument exactly as the caller gave it (absolute; not resolved through links, short
+// names or case), or nullopt when absent. What a result names back to the caller: the normalised
+// path above is only the file's identity.
+[[nodiscard]] std::optional<std::filesystem::path> projectFileAsGiven(yyjson_val* arguments);
 // `arguments` without projectFile, for the tools that do not know the member.
 using FrozenJson = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>;
 [[nodiscard]] FrozenJson withoutProjectFile(yyjson_val* arguments);
 // The headless session for `path`, opened on first use. The caller holds State::fileMutex. Refuses
 // a file that is open in the application or as the server's own project, and more than
-// kMcpFileSessions files at once. The open-in-Bloom check runs on every call (`recheck`; project.close
-// skips it), so a
-// file the artist opened after the session did is refused, and it fails closed when the
-// application cannot be asked in time.
+// kMcpFileSessions files at once. The open-in-Bloom check runs on every call (`recheck`;
+// project.close skips it), so a file the artist opened after the session did is refused, and it
+// fails closed when the application cannot be asked in time.
 [[nodiscard]] scripting::Session& fileSessionFor(McpServerCore::State& core,
                                                  const std::filesystem::path& path,
                                                  const McpRequestControl& control,
@@ -479,8 +482,10 @@ using FrozenJson = std::unique_ptr<yyjson_doc, decltype(&yyjson_doc_free)>;
 [[nodiscard]] yyjson_mut_val* saveFailedAnswer(Json& out, const std::string& message,
                                                const std::string& stage, const std::string& cause);
 
+// `given`: the projectFile as the caller gave it, which the result names.
 [[nodiscard]] yyjson_mut_val* fileProjectTool(McpServerCore::State& core, Json& out, McpTool tool,
                                               const std::filesystem::path& path,
+                                              const std::filesystem::path& given,
                                               yyjson_val* arguments,
                                               const McpRequestControl& control);
 
@@ -505,6 +510,9 @@ existingFileExports(McpServerCore::State& core, const std::filesystem::path& pat
 // to that open project instead of being refused, and says whether the open copy differs from the
 // file on disk.
 struct McpOpenProjectAttachment final {
+    // The projectFile as the caller gave it (projectFileAsGiven), which project.open accepts and
+    // which names the file the caller knows; never the normalised identity, which can name the same
+    // file through another form (a resolved link, a long name for a short one, another case).
     std::filesystem::path path;
     bool fileDiffers = false;
     // Why, when it differs: one plain sentence.
@@ -517,7 +525,7 @@ struct McpOpenProjectAttachment final {
 // be asked in time.
 [[nodiscard]] std::optional<McpOpenProjectAttachment>
 attachToOpenProject(McpServerCore::State& core, McpTool tool, const std::filesystem::path& path,
-                    const McpRequestControl& control);
+                    const std::filesystem::path& given, const McpRequestControl& control);
 // Adds projectFile, attachedToOpenProject, fileDiffers and, when it differs, fileDifference and
 // the reload offer to a result object.
 void addAttachment(Json& out, yyjson_mut_val* value, const McpOpenProjectAttachment& attachment);
@@ -586,7 +594,8 @@ struct WorkerLimitArguments final {
 [[nodiscard]] yyjson_mut_val* workerMemoryValue(Json& out, const host::ExportWorkerMemory& memory);
 
 // Reads loudnessLufs (-40..-5) and truePeakDbtp (-12..0, default -1) of an audio-carrying export
-// (#570). Absent when loudnessLufs is not given; truePeakDbtp alone is refused. Throws InvalidInput.
+// (#570). Absent when loudnessLufs is not given; truePeakDbtp alone is refused. Throws
+// InvalidInput.
 [[nodiscard]] std::optional<document::ExportLoudness> loudnessArguments(yyjson_val* arguments);
 // The optional `subtitles` argument of render and export (#752): {sidecar:[srt|vtt|ttml], embed,
 // nodes:[node ids]}. Sidecars and nodes are stored ascending. Absent when not given. Throws

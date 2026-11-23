@@ -1053,7 +1053,9 @@ without `projectFile`) instead of opening a second copy. The result then adds
 the file on disk. When it differs (changes in Bloom that are not saved, or a window showing a copy
 that is not the file's), `fileDifference` says so and `reload` offers the call that makes them
 agree, `project.open` with the path and `discardChanges: true`; `project.save` keeps Bloom's
-copy instead. `project.close` with that `projectFile` answers `closed: false`: there is no
+copy instead. The result's `projectFile` and the reload's path are the path exactly as the call
+gave it, on every platform: Bloom recognizes the file through links, short names and `.` parts,
+but answers with your form of the path. `project.close` with that `projectFile` answers `closed: false`: there is no
 separate session to close. A session that already held the file when the artist opened it in
 Bloom is closed when it has no unsaved changes, so calls attach; with unsaved changes the call is
 refused with `bloom.mcp.preflight-blocked` and what to do (`project.close` it with

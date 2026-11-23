@@ -471,6 +471,48 @@ void attachToTheWindowsProject() {
     expect(window.projectPath == stale, "the window keeps its project");
 }
 
+// The projectFile comes back as the caller gave it, in projectFile and in the reload offer, and
+// never as the normalised path the server matches files by, which can name the same file another
+// way: through a "." component (every platform) and through a folder reached by a link (where the
+// platform lets a test make one). project.open accepts what comes back, and it names the file the
+// caller knows.
+void attachNamesTheFileAsGiven() {
+    const UniqueTempDir folder("bloom-mcp-as-given");
+    Live window;
+    const auto real = folder / "real";
+    std::filesystem::create_directories(real);
+    const auto path = real / "shot.bloom";
+    expect(window.session->saveAs(path).succeeded(), "as given: the window's project is saved");
+    window.bind(path);
+    // An edit the file lacks, so the answer carries the reload offer.
+    const auto edited = window.call(
+        "transact",
+        R"({"expectedRevision":)" +
+            firstMatch(window.call("query", R"({"kind":"project"})"), R"re("revision":(\d+))re") +
+            R"(,"operations":[{"op":"bloom.layer.add-solid","args":{"composition":1,)"
+            R"("name":"Unsaved","color":[0,0,1,1]}}]})");
+    expect(contains(edited, R"("succeeded":true)"), "as given: the window has an unsaved edit");
+    std::vector<std::filesystem::path> forms{real / "." / "shot.bloom"};
+    std::error_code linked;
+    std::filesystem::create_directory_symlink(real, folder / "link", linked);
+    if (!linked)
+        forms.push_back(folder / "link" / "shot.bloom");
+    else
+        std::cout << "NOTE: this account cannot make a directory link (" << linked.message()
+                  << "); the \".\" form is checked\n";
+    for (const auto& given : forms) {
+        const auto read =
+            window.call("query", R"({"projectFile":)" + quoted(given) + R"(,"kind":"project"})");
+        expect(contains(read, R"("attachedToOpenProject":true)") &&
+                   contains(read, R"("fileDiffers":true)"),
+               "as given: " + given.string() + " attaches to the window's project: " + read);
+        expect(contains(read, R"("projectFile":)" + quoted(given)) &&
+                   contains(read, R"("reload":{"tool":"project.open","arguments":{"path":)" +
+                                      quoted(given) + R"(,"discardChanges":true})"),
+               "as given: projectFile and the reload name " + given.string() + ": " + read);
+    }
+}
+
 } // namespace
 
 int main() {
@@ -478,6 +520,7 @@ int main() {
         fileSessionJobs();
         preservationReportParity();
         attachToTheWindowsProject();
+        attachNamesTheFileAsGiven();
     } catch (const std::exception& error) {
         std::cerr << "FAILED: " << error.what() << '\n';
         return 1;

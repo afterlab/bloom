@@ -772,6 +772,7 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                 FrozenJson withoutFile(nullptr, yyjson_doc_free);
                 yyjson_val* toolArguments = member(params, "arguments");
                 auto projectFile = projectFileArgument(toolArguments);
+                const auto projectFileGiven = projectFileAsGiven(toolArguments);
                 if (projectFile) {
                     switch (*tool) {
                     case McpTool::Query:
@@ -794,7 +795,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     withoutFile = withoutProjectFile(toolArguments);
                     toolArguments = yyjson_doc_get_root(withoutFile.get());
                     // #775: the file Bloom has open is that open project, not a second copy.
-                    attached = attachToOpenProject(state, *tool, *projectFile, control);
+                    attached =
+                        attachToOpenProject(state, *tool, *projectFile,
+                                            projectFileGiven.value_or(*projectFile), control);
                     if (attached)
                         projectFile.reset();
                 }
@@ -813,8 +816,9 @@ McpHandled McpServerCore::handle(McpProtocolSession& protocol, const McpEnvelope
                     value = profilerSnapshotTool(state, out, control);
                 } else if (projectFile &&
                            (*tool == McpTool::ProjectSave || *tool == McpTool::ProjectClose)) {
-                    value =
-                        fileProjectTool(state, out, *tool, *projectFile, toolArguments, control);
+                    value = fileProjectTool(state, out, *tool, *projectFile,
+                                            projectFileGiven.value_or(*projectFile), toolArguments,
+                                            control);
                 } else if (attached && *tool == McpTool::ProjectClose) {
                     value = attachedCloseAnswer(out, *attached);
                 } else if (toolUsesLiveUi(*tool)) {
