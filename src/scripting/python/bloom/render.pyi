@@ -29,7 +29,7 @@ def frame(number: int, *, out: str | PathLike[str], composition: int | Proxy | N
           preset: str = ..., replace: bool = ..., require_device: bool = ...,
           subtitles: dict[str, Any] | None = ...,
           background: str = ...) -> RenderResult: ...
-def range(first: int, last: int, *, out: str | PathLike[str],
+def range(first: int | None = ..., last: int | None = ..., *, out: str | PathLike[str],
           composition: int | Proxy | None = ..., preset: str = ...,
           replace: bool = ..., require_device: bool = ...,
           subtitles: dict[str, Any] | None = ...,

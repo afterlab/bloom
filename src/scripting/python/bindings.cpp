@@ -62,8 +62,8 @@ void bindHost(nb::module_& module) {
         .def("set_color_settings", &NativeHost::setColorSettings, nb::arg("config"),
              nb::arg("working_space") = nb::none(), nb::arg("file") = nb::none(),
              nb::arg("project_relative") = false, nb::arg("context") = nb::none())
-        .def("render", &NativeHost::render, nb::arg("composition"), nb::arg("first"),
-             nb::arg("last"), nb::arg("range"), nb::arg("preset"), nb::arg("destination"),
+        .def("render", &NativeHost::render, nb::arg("composition"), nb::arg("first").none(),
+             nb::arg("last").none(), nb::arg("range"), nb::arg("preset"), nb::arg("destination"),
              nb::arg("cancellation_task"), nb::arg("replace"), nb::arg("require_device"),
              nb::arg("subtitles") = nb::none(), nb::arg("background") = "transparent")
         .def("scopes", &NativeHost::scopes, nb::arg("options"), nb::arg("cancellation_task"),

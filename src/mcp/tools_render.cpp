@@ -292,6 +292,28 @@ ResolvedPreset resolvePreset(McpServerCore::State& core, McpCall& call,
     return {.preset = std::move(*preset), .still = still, .extension = extension};
 }
 
+// #766: without `first` and `last` a render or export covers the composition's whole range, and
+// giving one of them takes the composition's range for the other. `frame` is one frame.
+struct FrameSpan final {
+    std::uint64_t first = 0;
+    std::uint64_t last = 0;
+};
+[[nodiscard]] FrameSpan frameSpan(yyjson_val* arguments, const bool frameGiven,
+                                  const document::Composition& composition) {
+    if (frameGiven) {
+        const auto frame = integer(member(arguments, "frame"));
+        return {frame, frame};
+    }
+    const auto rate = composition.format().frameRate();
+    const auto mapping = core::FrameTimeMapping::create(composition.duration(), rate.numerator(),
+                                                        rate.denominator());
+    if (!mapping)
+        throw InvalidInput("The composition has no frames to render");
+    auto* first = member(arguments, "first");
+    auto* last = member(arguments, "last");
+    return {first ? integer(first) : 0, last ? integer(last) : mapping.value()->maximumFrameIndex()};
+}
+
 yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, bool compositionExport);
 
@@ -319,12 +341,6 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
-    const auto last = frameGiven ? first : integer(member(arguments, "last"));
-    if (first > last || last - first >= 10000)
-        throw InvalidInput("Range must contain 1..10000 frames");
-    // A one-frame range is a still: one file named as given, not a sequence.
-    const bool range = !frameGiven && first != last;
     const auto mapping = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
     // #650: every other preset the catalogue lists runs as a transient export queue job, the same
     // way the in-app server runs every export.
@@ -343,6 +359,14 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         snapshot.project().findComposition(document::CompositionId::fromRaw(id));
     if (!composition)
         throw InvalidInput("Composition does not exist");
+    const auto span = frameSpan(arguments, frameGiven, *composition);
+    const auto first = span.first;
+    const auto last = span.last;
+    // A movie is not limited to the sequence cap: its frames are not files.
+    if (first > last || (stillPreset && last - first >= 10000))
+        throw InvalidInput("Range must contain 1..10000 frames");
+    // A one-frame range is a still: one file named as given, not a sequence.
+    const bool range = !frameGiven && first != last;
     // {name}, {job}, {format} and {date} expand here, as the export queue expands them, so a file
     // is never written with a token in its name.
     const auto requested = expandedDestination(requestedText, *composition, mapping->builtIn,
@@ -603,13 +627,20 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
-    const auto last = frameGiven ? first : integer(member(arguments, "last"));
+    const auto liveSnapshot = call.session.snapshot();
+    const auto* liveComposition =
+        liveSnapshot.project().findComposition(document::CompositionId::fromRaw(id));
+    if (!liveComposition)
+        throw InvalidInput("Composition does not exist");
+    const auto span = frameSpan(arguments, frameGiven, *liveComposition);
+    const auto first = span.first;
+    const auto last = span.last;
     // A one-frame range is a still: one file named as given, not a sequence.
     const bool range = !frameGiven && first != last;
-    if (first > last || last - first >= core.dependencies.limits.renderFrames)
-        throw InvalidInput("Range must contain 1..10000 frames");
     const auto found = resolvePreset(core, call, presetName, compositionExport);
+    // A movie is not limited to the sequence cap: its frames are not files.
+    if (first > last || (found.still && last - first >= core.dependencies.limits.renderFrames))
+        throw InvalidInput("Range must contain 1..10000 frames");
     if (!compositionExport && !found.still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (found.still && (member(arguments, "profile") || member(arguments, "audio") ||

@@ -28,6 +28,11 @@ struct RenderRequest final {
     document::CompositionId composition;
     std::optional<std::uint64_t> frame;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> range;
+    // #766: with neither `frame` nor `range`, the render covers the composition's own range: from
+    // `rangeFirst` (default the first frame) to `rangeLast` (default the last frame). Giving one end
+    // takes the composition's range for the other.
+    std::optional<std::uint64_t> rangeFirst = std::nullopt;
+    std::optional<std::uint64_t> rangeLast = std::nullopt;
     output::OutputPresetV1 preset = output::OutputPresetV1::PngRgba8SrgbV1;
     std::filesystem::path destination;
     std::function<bool()> cancelled = {};

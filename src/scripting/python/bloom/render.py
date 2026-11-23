@@ -89,7 +89,10 @@ _BACKGROUNDS = ("transparent", "composition")
 
 def _render(first, last, is_range, out, composition, preset, replace, require_device,
             subtitles=None, background="transparent"):
-    if type(first) is not int or type(last) is not int or first < 0 or last < first:
+    # #766: a range may leave either end None; the render then takes the composition's own end.
+    if any(value is not None and (type(value) is not int or value < 0) for value in (first, last)) \
+            or (first is not None and last is not None and last < first) \
+            or (not is_range and first is None):
         raise ValueError("Frames must be nonnegative integers in ascending order")
     if composition is None:
         composition = context.composition
@@ -122,7 +125,7 @@ def frame(number: int, *, out, composition=None, preset="PngRgba8SrgbV1",
                    subtitles, background)
 
 
-def range(first: int, last: int, *, out, composition=None, preset="PngRgba8SrgbV1",
+def range(first: int | None = None, last: int | None = None, *, out, composition=None, preset="PngRgba8SrgbV1",
           replace=False, require_device=False, subtitles=None,
           background="transparent") -> RenderResult:
     return _render(first, last, True, out, composition, preset, replace, require_device,

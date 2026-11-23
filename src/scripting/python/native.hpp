@@ -48,8 +48,8 @@ class NativeHost final {
     // #645 bloom.viewer.set_level: the desktop Viewer's drill level (Session::setViewerLevel).
     [[nodiscard]] nb::dict setViewerLevel(std::vector<std::uint64_t> level,
                                           std::optional<std::uint64_t> points);
-    [[nodiscard]] nb::dict render(std::uint64_t composition, std::uint64_t first,
-                                  std::uint64_t last, bool range, const std::string& preset,
+    [[nodiscard]] nb::dict render(std::uint64_t composition, std::optional<std::uint64_t> first,
+                                  std::optional<std::uint64_t> last, bool range, const std::string& preset,
                                   const std::string& destination, std::uint64_t cancellationTask,
                                   bool replace, bool requireDevice, const nb::object& subtitles,
                                   const std::string& background);

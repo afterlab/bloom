@@ -72,8 +72,9 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
 
 } // namespace
 
-nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t first,
-                            const std::uint64_t last, const bool range, const std::string& preset,
+nb::dict NativeHost::render(const std::uint64_t composition,
+                            const std::optional<std::uint64_t> first,
+                            const std::optional<std::uint64_t> last, const bool range, const std::string& preset,
                             const std::string& destination, const std::uint64_t cancellationTask,
                             const bool replace, const bool requireDevice,
                             const nb::object& subtitles, const std::string& background) {
@@ -89,7 +90,9 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
     } else {
         throw nb::value_error("Unknown render preset");
     }
-    if (first > last || last - first >= 10000 || destination.empty()) {
+    // #766: a range may leave an end open; the render then takes the composition's own end.
+    if ((!range && !first) || (first && last && (*first > *last || *last - *first >= 10000)) ||
+        destination.empty()) {
         throw nb::value_error("Invalid frame range or destination");
     }
     const auto subtitleSettingsToRender = subtitleSettings(subtitles);
@@ -103,8 +106,10 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
         runtime::SnapshotCompiler compiler(document::builtInNodeDefinitions());
         RenderRequest request{
             .composition = document::CompositionId::fromRaw(composition),
-            .frame = range ? std::nullopt : std::optional(first),
-            .range = range ? std::optional(std::pair(first, last)) : std::nullopt,
+            .frame = range ? std::nullopt : first,
+            .range = range && first && last ? std::optional(std::pair(*first, *last)) : std::nullopt,
+            .rangeFirst = range && !(first && last) ? first : std::nullopt,
+            .rangeLast = range && !(first && last) ? last : std::nullopt,
             .preset = selected,
             .destination = destination,
             .cancelled =
@@ -133,9 +138,12 @@ nb::dict NativeHost::render(const std::uint64_t composition, const std::uint64_t
             Render::run(*session_, scheduler, compiler, std::move(request), {}, gpuExportProvider_);
         if (result.succeeded) {
             if (range) {
-                for (auto index = first; index <= last; ++index) {
+                // An open end was resolved by the render: the frames published say where it ended.
+                const auto firstFrame = first.value_or(0);
+                const auto lastFrame = last.value_or(firstFrame + result.publishedFrames - 1);
+                for (auto index = firstFrame; index <= lastFrame; ++index) {
                     const auto path =
-                        host::FrameRangeRunnerV1::sequenceFramePath(destination, index, last);
+                        host::FrameRangeRunnerV1::sequenceFramePath(destination, index, lastFrame);
                     files.emplace_back(path.string(), digestFile(path));
                 }
             } else {

@@ -894,12 +894,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = ">= 0"},
          {.name = "first",
           .type = "integer",
-          .summary = "First frame of an inclusive range.",
+          .summary = "First frame of an inclusive range. Without first (and without frame) the "
+                     "range starts at the composition's first frame.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "last",
           .type = "integer",
-          .summary = "Last frame of an inclusive range (at most 10000 frames per call).",
+          .summary = "Last frame of an inclusive range (at most 10000 frames per call). Without "
+                     "last the range ends at the composition's last frame, so giving neither "
+                     "first nor last renders the whole composition.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "preset",
@@ -997,12 +1000,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = ">= 0"},
          {.name = "first",
           .type = "integer",
-          .summary = "First frame of an inclusive range.",
+          .summary = "First frame of an inclusive range. Without first (and without frame) the "
+                     "range starts at the composition's first frame.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "last",
           .type = "integer",
-          .summary = "Last frame of an inclusive range.",
+          .summary = "Last frame of an inclusive range (an image sequence is limited to 10000 "
+                     "frames, a movie is not). Without last the range ends at the composition's last "
+                     "frame, so giving neither first nor last exports the whole composition.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "preset",

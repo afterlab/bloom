@@ -1,6 +1,7 @@
 #include <bloom/scripting/render.hpp>
 
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/project_color_choice.hpp>
@@ -226,9 +227,19 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (!source.colorSettings.has_value() || !captureRenderColorIntent(source, *composition))
         return failed("Project color settings are unavailable for render");
     if (!request.frame.has_value() && !request.range.has_value()) {
-        return failed("Render requires a frame or range");
+        const auto rate = composition->format().frameRate();
+        const auto mapping = core::FrameTimeMapping::create(composition->duration(),
+                                                            rate.numerator(), rate.denominator());
+        if (!mapping)
+            return failed("The composition has no frames to render");
+        request.range = std::pair{request.rangeFirst.value_or(0),
+                                  request.rangeLast.value_or(mapping.value()->maximumFrameIndex())};
     }
     const auto format = formatFor(request.preset);
+    if (format && document::isImageExportFormat(*format) && request.range &&
+        request.range->first <= request.range->second &&
+        request.range->second - request.range->first >= 10000)
+        return failed("Range must contain 1..10000 frames");
     auto* artifacts = session.artifactCoordinator();
     auto* publications = session.publicationCoordinator();
     if (!format || artifacts == nullptr || publications == nullptr)
