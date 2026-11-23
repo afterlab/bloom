@@ -6,6 +6,65 @@ All notable changes to Bloom are written here. The format follows
 
 ## [Unreleased]
 
+## [0.1.0-alpha.4] - 2026-11-24
+
+This alpha lets exports handle many audio and movie layers, keeps the true-peak limit in delivered
+AAC and Opus files, makes MCP exports work from a project file, and improves the Windows update.
+
+### Added
+
+- Export frame reuse. **Use cached frames** on an export output now reads frames that are already
+  rendered instead of rendering them again. A render request from a script or an agent still
+  evaluates fresh frames.
+- A render or export from Python, `bloom-cli` and MCP covers the composition's whole range when
+  you give no first and last frame.
+- For agents over MCP: a project-file session can export a movie, with progress, wait and stop on
+  that file's own export queue. When the file is the project open in Bloom, the call attaches to the
+  open project and says whether it differs from the file, so you can reload it.
+- When many movie layers wait for decoder capacity during an export, the log says what each is
+  waiting for.
+
+### Changed
+
+- Every release is now published as the newest release on the releases page.
+- The true-peak limit now holds in the delivered file. Bloom measures the AAC or Opus file it
+  wrote, lowers the limiter when the encoder pushes a peak over the limit, and refuses to publish a
+  file that is still over. The export log reports the true peak measured on the delivered file.
+- `bloom.export.add-job` takes outputs as objects. `bloom-cli` prints a failed export's class the
+  way `bloom-cli render` does.
+- A ranged image-sequence import is named after the sequence's base name and reports its frames.
+- When a source file changes or disappears while an export runs, the export stops and says so,
+  instead of saying it hit a bug in Bloom.
+- An export that is refused for lack of memory names the asset, the bytes it needed and the limit.
+- The Windows update window shows the release notes readably, in light or dark colors, and shows the
+  full version name of the release it installs. A progress window stays on screen from the moment
+  Bloom closes until the new version opens, Bloom reopens by itself, and the previous version is
+  kept beside the new one. If you start Bloom by hand during an update, it brings the update window to the front and ends at once instead of running the version being replaced. When an update cannot install, the version you had starts again with a notice that says why.
+
+### Fixed
+
+- An export of a composition with many audio layers no longer fails with "Audio backing admission
+  refused". Bloom opens only the sounds a range plays and releases the ones that are finished.
+- An export of a composition with many movie layers no longer runs out of video-snapshot quota.
+  Bloom reads movies a frame needs, releases a layer's movie when it leaves the range, and shares
+  one copy between captures of the same source.
+- MP3 voice-over files that carry an encoder delay, such as variable-bit-rate files with a tag,
+  export instead of failing with "its audio stream stopped decoding". A truncated sound file is
+  refused by name instead of playing silence for its missing part.
+- A movie whose audio starts after its video exports its audio.
+- The stdio MCP server exports a movie again when its true peak is over the limit.
+- Export job ids stay exact in JSON, so stopping or waiting for an export no longer reports an
+  unknown job.
+- An MCP export without first and last frames no longer fails with "Expected a nonnegative
+  integer".
+- `bloom.layer.add-from-assets` works on a composition whose Output is fed through effect nodes
+  after the Merge.
+- An MCP export on the export-queue route returns the same preservation report as a scripted
+  render.
+- The layer bounds of a rotated, trimmed path are the box of its ink, not a far larger box.
+- A project-file MCP session is no longer refused as already open while the window shows an older
+  copy of the file.
+
 ## [0.1.0-alpha.3] - 2026-11-23
 
 This alpha adds subtitles, styled and animated text, sharper scaling and Image Switch, and makes
@@ -152,7 +211,8 @@ This is the first alpha. Expect rough edges, and keep copies of projects that ma
   Windows installer, so `bloom-cli` works from a terminal.
 - A new application icon and new pictures for the macOS disk image and the Windows installer.
 
-[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.3...HEAD
+[Unreleased]: https://github.com/afterlab/bloom/compare/v0.1.0-alpha.4...HEAD
+[0.1.0-alpha.4]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.4
 [0.1.0-alpha.3]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.3
 [0.1.0-alpha.2]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.2
 [0.1.0-alpha.1]: https://github.com/afterlab/bloom/releases/tag/v0.1.0-alpha.1
