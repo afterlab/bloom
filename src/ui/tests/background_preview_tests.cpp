@@ -367,13 +367,41 @@ void testOutwardOrderBudgetAndRestart(Expectations& expectations) {
                             submissions() == filled,
                         "budget retains the nearest three frames without churn");
     fixture.controller.setResolutionPolicy(runtime::PreviewResolutionPolicy::Quarter);
+    // A quarter frame keeps a quarter of the pixels but all of the evaluated geometry, which is
+    // charged with it (frameByteCost), so how many of the seven fit the budget follows from the
+    // measured cost of a retained quarter frame, never from the pixel ratio alone. The restarted
+    // range fills nearest first at the new factor until the next frame would not fit.
+    const std::array nearestFirst{3, 4, 2, 5, 1, 6, 0};
+    std::size_t quarterFits = 0;
     expectations.expect(
-        awaitQtCondition("resolution change restarts the range at the new factor",
-                         [&] {
-                             const auto key = fixture.controller.cacheKeyForTime(time(0));
-                             return key.has_value() && fixture.frameCache->contains(*key);
-                         }),
+        awaitQtCondition(
+            "resolution change restarts the range at the new factor",
+            [&] {
+                const auto& frame = fixture.controller.state().frame;
+                const auto current = fixture.controller.cacheKeyForTime(time(3, 25));
+                if (!frame || !current || !fixture.frameCache->contains(*current))
+                    return false;
+                const auto quarterBytes = ui::PreviewFrameCache::frameByteCost(*frame);
+                if (quarterBytes == 0 || quarterBytes >= bytes)
+                    return false;
+                quarterFits =
+                    std::min(nearestFirst.size(), fixture.frameCache->byteBudget() / quarterBytes);
+                return background.inFlightCount() == 0 &&
+                       std::all_of(nearestFirst.begin(),
+                                   nearestFirst.begin() + static_cast<std::ptrdiff_t>(quarterFits),
+                                   [&](const int index) {
+                                       const auto key =
+                                           fixture.controller.cacheKeyForTime(time(index, 25));
+                                       return key.has_value() && fixture.frameCache->contains(*key);
+                                   });
+            }),
         "resolution change restarts the range at the new factor");
+    expectations.expect(
+        quarterFits > 3 && fixture.frameCache->size() == quarterFits,
+        "the quarter factor fits more frames than the full one, and the budget holds "
+        "exactly the nearest that fit (" +
+            std::to_string(quarterFits) + " of 7, " + std::to_string(fixture.frameCache->size()) +
+            " cached)");
     expectations.expect(fixture.session.addSolidLayer(QStringLiteral("Edit"), {1, 0, 0, 1}),
                         "revision changes");
     // The edit's second layer adds evaluated geometry to every retained frame, so the budget now
