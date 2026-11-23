@@ -21,7 +21,10 @@ bloom_build_version in cmake/BloomVersion.cmake), which those updaters rank belo
 sparkle:shortVersionString is V.
 
 The notes use a small part of Markdown: ### headings, list items (nested by indentation),
-paragraphs, `code`, **bold** and [links](https://...). Anything else is shown as text.
+paragraphs, `code`, **bold** and [links](https://...). Anything else is shown as text. The
+item's description is a whole HTML page that states its own colors (dark text on a light
+background) and a sans-serif system font, so the notes read the same in every updater window,
+whatever the system's theme (#787).
 
 This file never reads a private key. Only the Python standard library is used.
 """
@@ -119,6 +122,38 @@ def notes_to_html(notes: str) -> str:
     return re.sub(r"\n(</li>|</ul>)", r"\1", "\n".join(out))
 
 
+# The page the notes are shown in. Its colors and font are its own: WinSparkle's window and
+# Sparkle's would otherwise choose them, and in a dark theme they chose dark text on a dark
+# background (#787). Colors are stated for the page, the text, links and code together, so they
+# always contrast; the font is the system's sans-serif one on Windows and macOS.
+NOTES_FONT = ('"Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Helvetica, Arial, '
+              "sans-serif")
+NOTES_BACKGROUND = "#ffffff"
+NOTES_TEXT = "#1f1f1f"
+NOTES_STYLE = (
+    ":root { color-scheme: light; } "
+    f"html, body {{ background: {NOTES_BACKGROUND}; color: {NOTES_TEXT}; }} "
+    f"body {{ margin: 8px 12px; font-family: {NOTES_FONT}; font-size: 13px; line-height: 1.4; }} "
+    "h3 { font-size: 14px; margin: 12px 0 4px 0; } "
+    "ul { margin: 4px 0; padding-left: 20px; } "
+    "p { margin: 6px 0; } "
+    "a { color: #0b57d0; } "
+    "code { font-family: Consolas, Menlo, monospace; background: #f0f0f0; color: #1f1f1f; }")
+
+
+def notes_document(notes: str) -> str:
+    """The notes as the whole page the updater window shows: notes_to_html(notes) in a body
+    whose colors and font are stated, in the page's style and on the body itself (#787)."""
+    body_style = (f"background: {NOTES_BACKGROUND}; color: {NOTES_TEXT}; "
+                  f"font-family: {NOTES_FONT.replace(chr(34), chr(39))};")
+    return ("<!DOCTYPE html>\n"
+            '<html><head><meta charset="utf-8">'
+            '<meta http-equiv="X-UA-Compatible" content="IE=edge">'
+            '<meta name="color-scheme" content="light">'
+            f"<style>{NOTES_STYLE}</style></head>\n"
+            f'<body style="{body_style}">\n{notes_to_html(notes)}\n</body></html>')
+
+
 def read_signature(path: Path) -> str:
     text = path.read_text(encoding="ascii").strip()
     if len(base64.b64decode(text, validate=True)) != 64:
@@ -160,7 +195,7 @@ def appcast_text(platform: str, version: str, date: str, notes: str, size: int, 
     if minimum_system_version:
         item.append("      <sparkle:minimumSystemVersion>"
                     f"{html.escape(minimum_system_version)}</sparkle:minimumSystemVersion>")
-    item.append(f"      <description>{cdata(notes_to_html(notes))}</description>")
+    item.append(f"      <description>{cdata(notes_document(notes))}</description>")
     item.append("      <enclosure " + " ".join(enclosure) + "/>")
     return "\n".join([
         '<?xml version="1.0" encoding="utf-8"?>',

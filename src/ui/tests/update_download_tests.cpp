@@ -3,6 +3,7 @@
 // hand-over to the helper. The server is on this machine, inside the test.
 #include "update_test_support.hpp"
 
+#include <bloom/core/version.hpp>
 #include <bloom/ui/platform_update_driver.hpp>
 #include <bloom/update/apply.hpp>
 
@@ -299,11 +300,30 @@ void testWatch() {
            "watch: nothing is started for a copy Bloom updates itself");
 }
 
+// #787: the platform updater's window names the installed version by its label, and the version
+// it compares with the appcast's sparkle:version is the compact build version.
+void testUpdaterVersions() {
+    const auto versions = ui::platformUpdaterVersions();
+    expect(versions.displayed == core::version(),
+           "versions: the window shows the version's label, as the About window does");
+    expect(versions.compared == core::buildVersion() &&
+               versions.compared == core::buildVersionOf(versions.displayed),
+           "versions: the compact build version is the one compared");
+    if (versions.displayed.find("-alpha.") != std::string::npos) {
+        expect(versions.displayed != versions.compared &&
+                   versions.compared.find("-alpha.") == std::string::npos,
+               "versions: a pre-release is shown in full and compared in its compact form");
+    }
+    expect(core::buildVersionOf("0.1.0-alpha.2") == "0.1.0a2",
+           "versions: 0.1.0-alpha.2 is compared as 0.1.0a2");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     QCoreApplication app(argc, argv);
     testDownload();
     testWatch();
+    testUpdaterVersions();
     return failures + bloom::test_support::awaitFailureCount() == 0 ? 0 : 1;
 }

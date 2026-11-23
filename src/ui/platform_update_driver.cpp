@@ -1,9 +1,15 @@
 #include <bloom/ui/platform_update_driver.hpp>
 
+#include <bloom/core/version.hpp>
 #include <bloom/ui/update_service.hpp>
 #include <bloom/update/staging.hpp>
 
 namespace bloom::ui {
+
+PlatformUpdaterVersions platformUpdaterVersions() {
+    return {.displayed = std::string(core::version()),
+            .compared = std::string(core::buildVersion())};
+}
 
 bool startUpdateWatch(const UpdateEnvironment& environment, const std::string_view version) {
     if (environment.installedHelper.empty() || !environment.startHelper ||

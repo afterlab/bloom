@@ -231,6 +231,44 @@ class AppcastTests(unittest.TestCase):
         self.assertIn("&lt;script&gt;", appcast.notes_to_html("- <script>alert(1)</script>"))
         self.assertNotIn("<a ", appcast.notes_to_html("[x](javascript:alert(1))"))
 
+    def test_notes_document(self) -> None:
+        """#787: the notes' page states its colors and a sans-serif system font, on the page and
+        on its body, and its content is the notes unchanged."""
+        notes = changelog.section(GOOD, VERSION)
+        page = appcast.notes_document(notes)
+        self.assertTrue(page.startswith("<!DOCTYPE html>"))
+        style = re.search(r"<style>(.*)</style>", page).group(1)
+        self.assertIn("color-scheme: light", style)
+        self.assertIn("background: #ffffff", style)
+        self.assertIn("color: #1f1f1f", style)
+        for font in ('"Segoe UI"', "-apple-system", "sans-serif"):
+            self.assertIn(font, style)
+        self.assertRegex(style, r"font-family: [^;]*sans-serif;")
+        self.assertRegex(style, r"code \{[^}]*background: #f0f0f0; color: #1f1f1f;")
+        self.assertRegex(style, r"a \{ color: #[0-9a-f]{6}; \}")
+        body = re.search(r'<body style="([^"]*)">\n(.*)\n</body></html>$', page, re.S)
+        self.assertIsNotNone(body)
+        self.assertIn("background: #ffffff;", body.group(1))
+        self.assertIn("color: #1f1f1f;", body.group(1))
+        self.assertIn("'Segoe UI'", body.group(1))
+        self.assertIn("sans-serif", body.group(1))
+        # The notes themselves are what notes_to_html makes, unchanged.
+        self.assertEqual(body.group(2), appcast.notes_to_html(notes))
+        # Dark text on a light background: the contrast ratio of the stated pair is high.
+        def luminance(color: str) -> float:
+            channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+                      for c in channels]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        ratio = ((luminance(appcast.NOTES_BACKGROUND) + 0.05) /
+                 (luminance(appcast.NOTES_TEXT) + 0.05))
+        self.assertGreater(ratio, 7.0)
+        # The appcast's description is this page.
+        text = appcast.appcast_text("windows", VERSION, DATE, notes, 1, "x",
+                                    "https://example.invalid/a")
+        item = ET.fromstring(text).find("./channel/item")
+        self.assertEqual(item.findtext("description"), page)
+
     def test_date(self) -> None:
         self.assertEqual(appcast.rfc822("2026-11-17"), "Tue, 17 Nov 2026 00:00:00 +0000")
         self.assertEqual(appcast.rfc822("2026-01-05"), "Mon, 05 Jan 2026 00:00:00 +0000")
@@ -408,7 +446,8 @@ class ChainTests(unittest.TestCase):
             self.assertEqual(item.findtext("pubDate"), "Tue, 17 Nov 2026 00:00:00 +0000")
             self.assertEqual(item.findtext(SPARKLE + "version"), "0.1.0a1")
             self.assertEqual(item.findtext(SPARKLE + "shortVersionString"), VERSION)
-            self.assertEqual(item.findtext("description"), html_notes)
+            self.assertEqual(item.findtext("description"), appcast.notes_document(notes))
+            self.assertIn(html_notes, item.findtext("description"))
             enclosure = item.find("enclosure")
             self.assertEqual(enclosure.get("url"), self.base + name)
             self.assertEqual(enclosure.get("length"), str(len(data)))
