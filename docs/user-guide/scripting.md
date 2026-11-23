@@ -202,8 +202,8 @@ ends. Export runs on Linux, macOS and Windows.
 `bloom-cli render`, the Python render call and MCP render keep their request shapes but run as
 transient, unsaved export jobs on the same runner as the queue, so every rendered frame passes the
 same preservation policy, publication and verification; their range files are named
-`<base>.NNNN.<ext>` as before. An output's `useCachedFrames` setting (default `true`) lets an export
-reuse frames an earlier export in this session already evaluated for the same composition and frame
-settings (another output of the job, the same export run again), with the same delivered file as a
-fresh render; Viewer and RAM Preview frames are not used. Set it to `false` to evaluate every frame
-again.
+`<base>.NNNN.<ext>` as before. A render request always evaluates every frame. A queue output's
+`useCachedFrames` setting (default `true`) lets its export reuse frames an earlier export in this
+session already evaluated for the same composition and frame settings (another output of the job,
+the same export run again), with the same delivered file as a fresh render; Viewer and RAM Preview
+frames are not used. Set it to `false` to evaluate every frame again.
