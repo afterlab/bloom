@@ -1402,12 +1402,7 @@ class ImageDriver final : public DriverBase {
                     evaluation &&
                     *evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
                     diagnosticCode = "export.media.unavailable";
-                    reason = "Bloom couldn't read " +
-                             (attemptFailure->subject().empty()
-                                  ? std::string("a source file")
-                                  : "\"" + attemptFailure->subject() + "\"") +
-                             ", which may have changed or moved since it was imported; reload or "
-                             "relink it in Assets, then render again.";
+                    reason = exportSourceUnavailableSentenceV1(attemptFailure->subject());
                 }
             if (attemptFailure &&
                 attemptFailure->stage() == OutputAnalysisAttemptStageV1::Resolving)
@@ -2363,6 +2358,12 @@ class MediaDriver final : public DriverBase {
                                         detail + ") after " + std::to_string(truePeakRenders_ + 1) +
                                         " renders with the limiter lowered each time, so it was "
                                         "not published and nothing was replaced."));
+            case SequenceExportFailureStageV1::SourceUnavailable:
+                // #790: the same classification and sentence a still export reports.
+                log(runtime::DiagnosticSeverity::Error, "export.media.detail",
+                    result.diagnostic.empty() ? detail : result.diagnostic);
+                return fail(failure(ExportFailureCode::EvaluationFailed,
+                                    "export.media.unavailable", detail));
             case SequenceExportFailureStageV1::PlatformEncoderFailed:
             case SequenceExportFailureStageV1::Unclassified:
                 break;

@@ -103,6 +103,11 @@ fails with `error[bloom-cli.render.device-required]` and a non-zero exit status 
 device is available it fails before evaluating anything, and a frame the CPU evaluated anyway is
 refused before it is written. `--require-device` covers the PNG and OpenEXR presets.
 
+A render stopped because a source file changed, moved or was deleted names the file and says to
+restore it or relink it in Assets; the command prints it as
+`error[bloom-cli.render.media-source-unavailable]`, and Python's `bloom.render` result carries
+`diagnostic_code` `"media-source-unavailable"`.
+
 Example scripts live in [`examples/scripting`](../../examples/scripting/).
 
 Python scripts and the interactive interpreter are described in [Scripting Bloom with Python](python.md).

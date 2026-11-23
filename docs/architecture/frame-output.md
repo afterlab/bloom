@@ -372,7 +372,9 @@ approve anything, its dependent worker stages perform, in order:
    `requireVerifiedMediaSources`, rejecting changed/unavailable media before memoized pixels can be
    accepted. A changed or missing source read by an image, sequence, video, Shuffle or
    Cryptomatte source fails with `MediaSourceUnavailable` carrying the asset's name, so the export
-   says which asset to reload or relink in one sentence and logs the technical detail; Shuffle and
+   says which asset to restore or relink in one sentence and logs the technical detail (#790: a
+   movie, an image and a render request give the same sentence and the diagnostic code
+   `export.media.unavailable`; "This is a bug in Bloom" is kept for internal faults only); Shuffle and
    Cryptomatte, which read several sources through channel expressions, name the first source that
    failed. A preview `Retained` request never carries source availability authority into final
    output. Any future exact `ProcessFrame` reuse must first revalidate every media dependency from

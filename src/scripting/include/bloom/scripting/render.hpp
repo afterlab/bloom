@@ -63,7 +63,15 @@ struct RenderRequest final {
 // `Cancelled`: the request's cancellation fired before or during the render; nothing it had not
 // already published remains. `DeviceRequired`: the request required a GPU device and none was
 // available, or a frame was evaluated on the CPU reference path; that frame was not published.
-enum class RenderDiagnosticCode { None, MissingProcessingRoot, Cancelled, DeviceRequired };
+// `MediaSourceUnavailable` (#790): a source file changed, moved or disappeared; the diagnostic
+// names it and says to restore or relink it.
+enum class RenderDiagnosticCode {
+    None,
+    MissingProcessingRoot,
+    Cancelled,
+    DeviceRequired,
+    MediaSourceUnavailable
+};
 
 struct RenderResult final {
     bool succeeded = false;

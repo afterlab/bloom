@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace bloom::platform {
@@ -179,7 +180,15 @@ enum class SequenceExportFailureStageV1 : std::uint8_t {
     // holds the measurement; the same export with AudioLoudnessTargetV1::encoderHeadroomDb raised
     // by the overshoot keeps the limit (the export queue does that by itself).
     TruePeakExceeded,
+    // #790: a source file changed, moved or disappeared (the evaluator's media-source-unavailable
+    // diagnostic). The result's detail is the plain sentence naming the file and the remedy
+    // (exportSourceUnavailableSentenceV1); it is not an internal fault.
+    SourceUnavailable,
 };
+// The sentence for an export stopped because a source file changed, moved or disappeared: names
+// the asset (empty: "a source file") and says to restore the file or relink it. Every surface
+// shows this sentence (#790).
+[[nodiscard]] std::string exportSourceUnavailableSentenceV1(std::string_view asset);
 struct SequenceExportResultV1 {
     platform::StagedArtifactPublicationResult publication;
     std::optional<media::provider::Unavailable> failure;

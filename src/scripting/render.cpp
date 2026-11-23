@@ -490,6 +490,8 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
             // asset; the technical detail stays in the export log.
             const bool plainReason =
                 failure && failure->diagnosticCode == "export.media.unavailable";
+            if (!runner.stopped() && plainReason)
+                result.diagnosticCode = RenderDiagnosticCode::MediaSourceUnavailable;
             if (!details.empty() && !plainReason)
                 result.diagnostic += " Details: " + details;
         }

@@ -1606,6 +1606,58 @@ std::string fileBytes(const std::filesystem::path& path) {
     return {std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>()};
 }
 
+// #790: a source file that changes or disappears is named, and the export is not called a bug.
+void testChangedSourceIsNamed() {
+    for (const bool remove : {false, true}) {
+        const std::string name = remove ? "source removed" : "source changed";
+        Fixture f(remove ? "source-removed" : "source-changed", WavEncoding::Pcm16);
+        const auto plate = f.folder / "plate.png";
+        writePng(plate, 32, 16, 40);
+        {
+            commands::Transaction import("Import");
+            import.emplace<commands::ImportAssets>(std::vector<std::filesystem::path>{plate}, f.folder);
+            expect(f.session.execute(std::move(import)).changed(), name + ": the picture imports");
+            const auto picture = currentSnapshot(f.session).project().assets().back().id;
+            commands::Transaction layer("Add picture layer");
+            layer.emplace<commands::AddDroppedLayers>(f.composition(),
+                                                      std::vector<commands::LayerDropItem>{picture},
+                                                      commands::LayerDropPlacement{});
+            expect(f.session.execute(std::move(layer)).changed(), name + ": the layer is added");
+        }
+        document::ExportOutputSettings settings;
+        settings.format = ExportFormat::ProResMov;
+        settings.codecProfile = "hq";
+        settings.includeAudio = false;
+        const auto job = f.addJob(settings, "Exports/changed.mov");
+        // The picture changes after the job is queued and before its frames are read.
+        if (remove)
+            std::filesystem::remove(plate);
+        else
+            writePng(plate, 32, 16, 200);
+        const auto finished = f.run(job, name);
+        expect(finished && finished->state == ExportJobState::Failed && finished->failure,
+               name + ": the export fails");
+        if (!finished || !finished->failure)
+            continue;
+        const auto& failure = *finished->failure;
+        expect(failure.diagnosticCode == "export.media.unavailable" &&
+                   failure.code == host::ExportFailureCode::EvaluationFailed,
+               name + ": classified as an unavailable media source (" + failure.diagnosticCode + ")");
+        expect(failure.reason.find("\"plate\"") != std::string::npos &&
+                   failure.reason.find("relink") != std::string::npos &&
+                   failure.reason.find("Restore") != std::string::npos &&
+                   failure.reason.find("bug in Bloom") == std::string::npos,
+               name + ": the sentence names the file and says to restore or relink it (" +
+                   failure.reason + ")");
+        bool logged = false;
+        for (const auto& entry : f.service->log(job, 0).entries)
+            logged = logged || (entry.code == "export.media.unavailable" &&
+                                entry.message.find("bug in Bloom") == std::string::npos);
+        expect(logged, name + ": the export log carries the same classification");
+        expect(!std::filesystem::exists(f.folder / "Exports/changed.mov"), name + ": nothing published");
+    }
+}
+
 void testCachedFramesAreReused() {
     Fixture f("frame-reuse", WavEncoding::Pcm16);
     const auto plate = f.folder / "plate.png";
@@ -1865,6 +1917,18 @@ int main(const int argc, char** argv) {
         }
         if (failures == 0)
             std::cout << "export background video: ok\n";
+        return failures == 0 ? 0 : 1;
+    }
+    // #790: a changed or removed source file is named (bloom.host.export-changed-source).
+    if (argc > 1 && std::string_view(argv[1]) == "--changed-source") {
+        try {
+            testChangedSourceIsNamed();
+        } catch (const std::exception& error) {
+            std::cerr << "FAIL: " << error.what() << '\n';
+            return 1;
+        }
+        if (failures == 0)
+            std::cout << "export changed source: ok\n";
         return failures == 0 ? 0 : 1;
     }
     // #785: frames reused from the export frame cache (bloom.host.export-frame-reuse).

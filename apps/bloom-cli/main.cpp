@@ -720,6 +720,9 @@ struct OpenFrameRange final {
     if (!result.succeeded) {
         std::cerr << (result.diagnosticCode == scripting::RenderDiagnosticCode::DeviceRequired
                           ? "error[bloom-cli.render.device-required]: "
+                      : result.diagnosticCode ==
+                              scripting::RenderDiagnosticCode::MediaSourceUnavailable
+                          ? "error[bloom-cli.render.media-source-unavailable]: "
                           : "error[bloom-cli.render]: ")
                   << result.diagnostic << '\n';
         return 5;

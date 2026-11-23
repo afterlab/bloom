@@ -1193,6 +1193,23 @@ struct SequenceExportRunnerV1::State {
                      std::move(refused));
                 return false;
             }
+        if (const auto* failure = result.failure();
+            failure && failure->stage() == OutputAnalysisAttemptStageV1::Evaluating)
+            if (const auto* evaluation = failure->payloadAs<runtime::EvaluationDiagnosticCode>();
+                evaluation && *evaluation == runtime::EvaluationDiagnosticCode::MediaSourceUnavailable) {
+                // #790: a changed, moved or deleted source file is the artist's to fix, not a
+                // fault in Bloom: name the file; the stage, codes and reason go to the log.
+                const auto index = work->request.range.firstFrame + frame.offset;
+                std::string detail = "frame " + std::to_string(index) + " source unavailable; " +
+                                     describeOutputAnalysisAttemptV1(result);
+                std::cerr << "Bloom export: " << detail << '\n';
+                diagnostic = std::move(detail);
+                SequenceExportResultV1 unavailable;
+                unavailable.failureStage = SequenceExportFailureStageV1::SourceUnavailable;
+                fail({Error::Unavailable, exportSourceUnavailableSentenceV1(failure->subject())},
+                     std::move(unavailable));
+                return false;
+            }
         if (!result || !result.attempt() || !result.attempt()->approvable()) {
             // The artist reads a sentence; the stage, codes and facets go to the diagnostic log.
             const auto index = work->request.range.firstFrame + frame.offset;
@@ -1503,6 +1520,12 @@ void SequenceExportRunnerV1::poll() {
     if (!s.resolveStall())
         return;
     s.updateStage();
+}
+std::string exportSourceUnavailableSentenceV1(const std::string_view asset) {
+    return "Bloom couldn't read " +
+           (asset.empty() ? std::string("a source file") : "\"" + std::string(asset) + "\"") +
+           ", which changed, moved or was deleted since it was imported, so the export stopped. "
+           "Restore the file, or relink it in Assets, then export again.";
 }
 SequenceExportStageV1 SequenceExportRunnerV1::stage() const { return state_->stage; }
 const output::MediaOutputAnalysisV1* SequenceExportRunnerV1::analysis() const {

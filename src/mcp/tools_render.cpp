@@ -620,6 +620,13 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                                            ? " (" + runner.result()->failure->detail + ")"
                                            : std::string()) +
                                       ". Pass encoder=software to use Bloom's FFmpeg encoder.");
+            // #790: a changed, moved or deleted source file is the artist's to fix; the same
+            // classification the export queue reports.
+            if (runner.result()->failureStage ==
+                    host::SequenceExportFailureStageV1::SourceUnavailable &&
+                runner.result()->failure)
+                throw ToolFailure(McpToolErrorCode::ExportFailed, runner.result()->failure->detail,
+                                  "export.media.unavailable");
             throw std::runtime_error(runner.result()->failure ? runner.result()->failure->detail
                                                               : "Export was not published");
         }

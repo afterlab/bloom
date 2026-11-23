@@ -66,6 +66,8 @@ const char* diagnosticCode(const RenderDiagnosticCode code) {
         return "cancelled";
     case RenderDiagnosticCode::DeviceRequired:
         return "device-required";
+    case RenderDiagnosticCode::MediaSourceUnavailable:
+        return "media-source-unavailable";
     }
     return "";
 }

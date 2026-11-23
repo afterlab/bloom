@@ -475,6 +475,11 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_audio_formats_test --frame-reuse
                        LABELS unit host media output TIMEOUT 600)
 
+        # #790: an export stopped by a changed or removed source names the file.
+        bloom_add_test(NAME bloom.host.export-changed-source
+                       COMMAND bloom_host_export_audio_formats_test --changed-source
+                       LABELS unit host media output TIMEOUT 300)
+
         # #772: an export of a composition with sixteen generated movie layers completes.
         add_executable(bloom_host_export_movie_layers_test
                        "${PROJECT_SOURCE_DIR}/tests/integration/movie_layers_export_tests.cpp")
