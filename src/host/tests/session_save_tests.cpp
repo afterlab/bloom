@@ -1349,6 +1349,37 @@ void testSaveRecordsVerifiedDigests(Expectations& expectations) {
                         "the unproven ones as they were");
 }
 
+// #775: the content digest of a project's canonical document. The same document gives the same
+// digest, and so does an equal document built separately; an edit changes it, and undoing the
+// edit restores it.
+void testProjectContentDigest(Expectations& expectations) {
+    ProjectSessionIdentitySource identitySource;
+    auto first = makeDecodedSession(expectations, identitySource, "Digest");
+    auto second = makeDecodedSession(expectations, identitySource, "Digest");
+    const auto colorSettings = neutralColorSettings();
+    const auto digestOf = [&](const ProjectSession& session) {
+        const auto decoded = session.decodedSnapshot();
+        return bloom::host::projectContentDigest(decoded.snapshot(), colorSettings);
+    };
+    const auto original = digestOf(first);
+    expectations.expect(original.has_value(), "content digest: a document has one");
+    expectations.expect(digestOf(first) == original,
+                        "content digest: the same document gives the same digest");
+    expectations.expect(digestOf(second) == original,
+                        "content digest: an equal document gives the same digest");
+    expectations.expect(first.execute(rename("Edited", first)).changed(),
+                        "content digest: the edit commits");
+    const auto edited = digestOf(first);
+    expectations.expect(edited.has_value() && edited != original,
+                        "content digest: an edit changes the digest");
+    expectations.expect(digestOf(second) == original,
+                        "content digest: the other copy keeps its digest");
+    expectations.expect(first.execute(rename("Digest", first)).changed(),
+                        "content digest: the name is set back");
+    expectations.expect(digestOf(first) == original,
+                        "content digest: the same content gives the same digest again");
+}
+
 int main() {
     Expectations expectations;
     try {
@@ -1363,6 +1394,7 @@ int main() {
         testDeterminism(expectations);
         testRecordVerifiedSequenceDigests(expectations);
         testSaveRecordsVerifiedDigests(expectations);
+        testProjectContentDigest(expectations);
     } catch (const std::exception& error) {
         std::cerr << "FAILED: unexpected fixture exception: " << error.what() << '\n';
         return EXIT_FAILURE;

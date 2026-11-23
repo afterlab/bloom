@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/core/sha256.hpp>
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/save_publication.hpp>
@@ -250,5 +251,18 @@ saveProjectSession(ProjectSession& session, PublicationCoordinator& coordinator,
                    platform::StagedArtifactCoordinator& artifacts,
                    const SessionSaveRequest& request,
                    project::ProjectIoOperationMemory operation) noexcept;
+
+// #775: the SHA-256 of the canonical project document a save of `snapshot` with `colorSettings`
+// would write (no round-trip overlay, the current schema), so two copies of a project compare by
+// content: the project an application window shows and the file on disk have the same digest
+// exactly when they hold the same project. `projectPath` is the project file the snapshot belongs
+// to: like a save, the digest records the image-sequence member digests already proved for it
+// (sequence_digest_recording.hpp), so a document and the file saved from it agree. Nullopt when the
+// document cannot be written (a document a save would refuse). Pure apart from that memo lookup; a
+// client thread may call it.
+[[nodiscard]] std::optional<core::Sha256Digest>
+projectContentDigest(const document::Snapshot& snapshot,
+                     const document::ColorSettings& colorSettings,
+                     const std::optional<std::filesystem::path>& projectPath = std::nullopt);
 
 } // namespace bloom::host

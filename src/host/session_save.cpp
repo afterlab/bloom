@@ -176,4 +176,36 @@ SessionSaveResult saveProjectSession(ProjectSession& session, PublicationCoordin
                                         capturedRevision, owning->targetPath);
 }
 
+std::optional<core::Sha256Digest>
+projectContentDigest(const document::Snapshot& snapshot,
+                     const document::ColorSettings& colorSettings,
+                     const std::optional<std::filesystem::path>& projectPath) {
+    // As executeSessionSaveMiddle() writes it: the proved sequence member digests recorded.
+    std::optional<document::Snapshot> verified;
+    try {
+        verified = snapshotWithVerifiedSequenceDigests(snapshot, assetBaseDirectory(projectPath));
+    } catch (...) {
+        verified.reset();
+    }
+    const auto& written = verified ? *verified : snapshot;
+    const auto needs = project::canonicalDocumentScratchRequirements(written);
+    if (needs.overflow)
+        return std::nullopt;
+    std::vector<char> payload(needs.payloadBytes);
+    std::vector<std::size_t> sort(needs.sortEntries);
+    const project::CanonicalDocumentV1 input{.snapshot = &written,
+                                             .colorSettings = &colorSettings,
+                                             .payloadScratch = payload,
+                                             .sortScratch = sort};
+    const auto size = project::canonicalDocumentSize(input);
+    if (!size || size.value() == nullptr)
+        return std::nullopt;
+    std::vector<char> bytes(*size.value());
+    const auto encoded = project::encodeCanonicalDocument(input, bytes);
+    if (!encoded)
+        return std::nullopt;
+    return core::Sha256Hasher::hash(
+        std::as_bytes(std::span<const char>(bytes.data(), encoded.bytesWritten())));
+}
+
 } // namespace bloom::host
