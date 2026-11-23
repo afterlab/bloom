@@ -2664,8 +2664,20 @@ read-ahead and RAM-fill frames then decode in parallel workers instead of queuei
 sessions of one source share its verified snapshot. The evaluator admits retained sessions by
 memory: each is charged a conservative worker estimate (64 MiB plus 24 frames of 16-bit 4:4:4
 planes, capped at the stream's worker address space) against a session budget of usable memory,
-keeping at least two sources so two can alternate and at most the eight sources the
-source-snapshot quota can retain. Least-recently-used sessions beyond that are retired. `DecodedVideoCache` has a
+keeping at least two sources so two can alternate and, while idle, at most eight sources
+(`VideoSourceContext::kSnapshotFiles`). Least-recently-used sessions beyond that are retired. A linear
+pass (an export: `EvaluationRequest::linearPass`) is admitted against the frames its range needs
+(#772): every source its frames read is kept beside the idle ones, and the context's source-snapshot
+file quota is the idle eight plus those sources, so a frame of sixteen movie layers holds sixteen
+snapshots (the byte quota from free space still bounds them). Each source is stamped with the
+composition time of the pass's frame that last read it (`EvaluationRequest::linearPassFrame`);
+when a frame finishes (`LinearPassRetention::frameEvaluated`) a source last read for an earlier
+frame has left the range, and its session and snapshot are released at once. When the pass ends the
+context keeps its idle eight. A released snapshot closes on its retirement lane a moment later; a
+capture its quota refuses meanwhile waits for that close (`FileSnapshotQuota::expectRelease`,
+cancellable), counts the wait in its source work, and the pass notes it for the export log
+(`LinearPassRetention::takeVideoSnapshotWaits`). With nothing closing, a full quota fails at once and
+names its files and bytes. `DecodedVideoCache` has a
 separate LRU byte budget and keys frames by content digest, stream, frame index,
 interpretation, color identity and decode route. Its target is the `playback/decoded-video-cache-bytes`
 setting, or automatically usable memory, the ceiling every automatic reusable pool has (ADR 0037:

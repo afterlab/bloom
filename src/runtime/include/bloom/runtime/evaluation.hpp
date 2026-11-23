@@ -123,6 +123,11 @@ struct EvaluationRequest final {
     // memory. Null for viewer, RAM Preview and other interactive requests. Never affects pixels or
     // cache identity.
     std::shared_ptr<LinearPassRetention> linearPass = nullptr;
+    // #772: with `linearPass`, the composition time of the pass's frame this evaluation belongs to.
+    // Nested evaluations keep it while `time` changes; the pass's video sources are stamped with
+    // it, and LinearPassRetention::frameEvaluated releases those an evaluated frame no longer
+    // reads. Never affects pixels or cache identity.
+    std::optional<core::RationalTime> linearPassFrame = std::nullopt;
     // Optional final-output ownership for a CPU export. Intermediate reference images keep their
     // normal allocation path; only the completed process image is copied into this rooted phase
     // before publication. It affects storage ownership, never pixel or cache identity.

@@ -22,9 +22,15 @@ namespace {
 struct SessionRetirement final : render::detail::PackedHostRetirementNode {
     std::unique_ptr<media::video::VideoDecodeSession> session;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    // #772: set while the session waits on the retirement lane holding its source snapshot, so a
+    // capture its quota refuses meanwhile waits for the close (its snapshot, when rooted, takes
+    // the expectation over before this one ends).
+    std::shared_ptr<platform::FileSnapshotQuota> expected;
     bool registered = false;
     ~SessionRetirement() {
         session.reset();
+        if (expected)
+            expected->releaseExpected();
         if (registered)
             render::detail::releasePackedHostRegistration(retirement);
     }
@@ -51,10 +57,14 @@ makeSession(const std::filesystem::path& path,
     };
     auto* entry = owner.release();
     return std::shared_ptr<media::video::VideoDecodeSession>(
-        entry->session.get(), [entry](media::video::VideoDecodeSession*) noexcept {
-            if (entry->registered)
+        entry->session.get(), [entry, quota](media::video::VideoDecodeSession*) noexcept {
+            if (entry->registered) {
+                if (quota) {
+                    quota->expectRelease();
+                    entry->expected = quota;
+                }
                 render::detail::enqueuePackedHostRetirement(entry->retirement, entry);
-            else
+            } else
                 delete entry;
         });
 }
@@ -76,23 +86,52 @@ void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
     // Distinct sources kept, most recent first: the parallel sessions of one intra-only source
     // share its snapshot, so the file quota and the two-source minimum count sources.
     std::vector<const std::string*> sources;
+    // #772: idle sources are kept up to kSnapshotFiles; a source a running linear pass reads is
+    // needed by the range's frames and is admitted beside them (memory still bounds both).
+    std::size_t idle = 0;
     for (auto it = sessions_.begin(); it != sessions_.end();) {
         total += it->workerBytes;
         const bool known =
             std::ranges::any_of(sources, [&](const std::string* key) { return *key == it->key; });
+        const bool needed = !it->pass.expired();
         const bool admitted =
             known ? total <= sessionByteBudget_
-                  : sources.size() < kSnapshotFiles &&
+                  : (needed || idle < kSnapshotFiles) &&
                         (sources.size() < kMinimumRetainedSessions || total <= sessionByteBudget_);
         if (admitted) {
-            if (!known)
+            if (!known) {
                 sources.push_back(&it->key);
+                if (!needed)
+                    ++idle;
+            }
             ++it;
         } else {
             total -= it->workerBytes;
             detached.splice(detached.end(), sessions_, it++);
         }
     }
+    // The snapshot files: the idle retention plus every source the running passes need. A
+    // snapshot released above still counts until it closes; a capture waits for that.
+    quota_->setFileLimit(kSnapshotFiles + (sources.size() - idle));
+}
+void VideoSourceContext::releaseSourcesLeftBefore(const LinearPassRetention& pass,
+                                                  const core::RationalTime frame) {
+    std::list<SessionEntry> detached;
+    const std::lock_guard lock(mutex_);
+    for (auto it = sessions_.begin(); it != sessions_.end();) {
+        const auto holder = it->pass.lock();
+        if (holder.get() == &pass && it->passFrame && *it->passFrame < frame &&
+            it->users->load() == 0)
+            detached.splice(detached.end(), sessions_, it++);
+        else
+            ++it;
+    }
+    admitLocked(detached);
+}
+void VideoSourceContext::passEnded() {
+    std::list<SessionEntry> detached;
+    const std::lock_guard lock(mutex_);
+    admitLocked(detached);
 }
 bool videoFramesDecodeIndependently(const std::string_view codec) noexcept {
     return codec == "prores" || codec == "dnxhd" || codec == "mjpeg" || codec == "tiff";
@@ -188,6 +227,15 @@ VideoSourceContext::handOutLocked(const std::list<SessionEntry>::iterator entry,
                                   const VideoSessionUse& use) {
     sessions_.splice(sessions_.begin(), sessions_, entry);
     auto& front = sessions_.front();
+    if (use.pass) {
+        // #772: the pass reads this source now; a later frame keeps the latest stamp.
+        if (front.pass.lock() != use.pass) {
+            front.pass = use.pass;
+            front.passFrame = use.passFrame;
+        } else if (use.passFrame && (!front.passFrame || *front.passFrame < *use.passFrame))
+            front.passFrame = use.passFrame;
+        use.pass->addVideoSources(weak_from_this());
+    }
     if (!use.independentFrames)
         return front.session;
     // The returned handle counts as a user of the entry until the caller releases it.
@@ -252,7 +300,9 @@ VideoSourceContext::session(const std::string& key, const std::filesystem::path&
                               .session = session,
                               .workerBytes = workerBytes,
                               .users = std::make_shared<std::atomic<std::size_t>>(0),
-                              .leasedFrame = std::nullopt});
+                              .leasedFrame = std::nullopt,
+                              .pass = use.pass,
+                              .passFrame = use.passFrame});
         admitLocked(detached);
         if (!sessions_.empty() && sessions_.front().session == session)
             return handOutLocked(sessions_.begin(), use);
@@ -339,7 +389,9 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
                                        const EvaluationColorIntent& colorIntent,
                                        const MediaSourceRevisionPolicy revisionPolicy,
                                        const bool allowInsertion,
-                                       const std::size_t hostByteBudget, const bool storeDecoded) {
+                                       const std::size_t hostByteBudget, const bool storeDecoded,
+                                       const std::shared_ptr<LinearPassRetention>& linearPass,
+                                       const std::optional<core::RationalTime> linearPassFrame) {
     VideoSourceSelection selection;
     if (!source.asset || source.asset->kind != document::AssetKind::Video) {
         selection.warning = "Video asset is missing; choose an asset or relink in Assets";
@@ -419,7 +471,9 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
     // #474: an intra-only stream decodes concurrent frames on parallel sessions.
     const VideoSessionUse use{.independentFrames = videoFramesDecodeIndependently(stream->codec),
                               .stream = stream->id,
-                              .frame = index};
+                              .frame = index,
+                              .pass = linearPass,
+                              .passFrame = linearPass ? linearPassFrame : std::nullopt};
     auto session = revisionPolicy == MediaSourceRevisionPolicy::Retained
                        ? context.retainedSession(revisionKey, use)
                        : nullptr;
@@ -474,6 +528,12 @@ VideoSourceSelection selectVideoSource(const CompiledVideoSource& source, core::
             context.discardFailedSession(revisionKey, session);
     } else
         selection.frame = std::get<std::shared_ptr<const media::provider::FrameProduct>>(product);
+    // #772: the capture waited for released snapshots to close; the pass's owner reports it.
+    if (linearPass && selection.sourceWork.quotaWaits != 0)
+        linearPass->noteVideoSnapshotWait({.frame = linearPassFrame,
+                                           .source = asset.name,
+                                           .waits = selection.sourceWork.quotaWaits,
+                                           .nanoseconds = selection.sourceWork.quotaWaitNanoseconds});
     OperationKey key;
     const auto digest = asset.contentDigest.toLowercaseHex();
     key.add(std::string(digest.begin(), digest.end()));
