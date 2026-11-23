@@ -7,6 +7,7 @@
 #include <bloom/commands/export_queue_operations.hpp>
 #include <bloom/commands/operations.hpp>
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/core/sha256.hpp>
 #include <bloom/document/node_definition_registry.hpp>
 #include <bloom/host/export_job_runner.hpp>
@@ -701,6 +702,43 @@ void testParity() {
                std::string(ten ? "dpx 10-bit" : "dpx 16-bit") +
                    " range: Render::run publishes one verified file per frame: " +
                    dpx.preservationReport);
+    }
+    // #766: neither a frame nor a range renders the composition's whole range; one open end takes
+    // the composition's own end.
+    {
+        const auto* target = session->snapshot().project().findComposition(composition);
+        const auto rate = target->format().frameRate();
+        const auto mapping = core::FrameTimeMapping::create(target->duration(), rate.numerator(),
+                                                            rate.denominator());
+        const auto frames = mapping ? mapping.value()->maximumFrameIndex() + 1 : 0;
+        const auto publishedIn = [&](const std::string& name, const std::optional<std::uint64_t> first,
+                                     const std::optional<std::uint64_t> last) {
+            const auto folder = root / name;
+            std::filesystem::create_directories(folder);
+            const auto result = Render::run(*session, scheduler, compiler,
+                                            RenderRequest{.composition = composition,
+                                                          .frame = std::nullopt,
+                                                          .range = std::nullopt,
+                                                          .rangeFirst = first,
+                                                          .rangeLast = last,
+                                                          .preset = output::OutputPresetV1::PngRgba8SrgbV1,
+                                                          .destination = folder / "shot.png"},
+                                            root / ("scratch-" + name), provider);
+            std::uint64_t files = 0;
+            for (const auto& entry : std::filesystem::directory_iterator(folder))
+                files += entry.path().extension() == ".png" ? 1U : 0U;
+            return std::pair{result.succeeded ? result.publishedFrames : 0, files};
+        };
+        expect(frames >= 3, "the fixture composition has at least three frames");
+        expect(publishedIn("open-all", std::nullopt, std::nullopt) ==
+                   std::pair<std::uint64_t, std::uint64_t>{frames, frames},
+               "no frame and no range renders every frame of the composition");
+        expect(publishedIn("open-tail", 2, std::nullopt) ==
+                   std::pair<std::uint64_t, std::uint64_t>{frames - 2, frames - 2},
+               "a first frame alone renders to the composition's last frame");
+        expect(publishedIn("open-head", std::nullopt, 1) ==
+                   std::pair<std::uint64_t, std::uint64_t>{2, 2},
+               "a last frame alone renders from the composition's first frame");
     }
     // A cancelled request never starts work; a missing provider is a typed refusal.
     const auto cancelled =

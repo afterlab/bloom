@@ -949,7 +949,8 @@ prepareVideoUpload(const CompiledVideoSource& source, const EvaluationRequest& r
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        !explicitBypass, byteBudget(pixelBudget), !planBypass);
+        !explicitBypass, byteBudget(pixelBudget), !planBypass, request.linearPass,
+        request.linearPassFrame);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;
@@ -1484,7 +1485,8 @@ prepareVideoColorLeaf(const CompiledVideoSource& source, const EvaluationRequest
         (explicitBypass || request.requireVerifiedMediaSources)
             ? MediaSourceRevisionPolicy::Revalidate
             : request.mediaSourceRevisionPolicy,
-        !explicitBypass, byteBudget(pixelBudget), !planBypass);
+        !explicitBypass, byteBudget(pixelBudget), !planBypass, request.linearPass,
+        request.linearPassFrame);
     recordSourceRevisionWork(selection, statistics);
     if (selection.cancelled) {
         outcome.cancelled = true;

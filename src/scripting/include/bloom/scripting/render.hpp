@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bloom/document/export_queue.hpp>
 #include <bloom/host/export_verification.hpp>
 #include <bloom/host/export_worker_limits.hpp>
 #include <bloom/host/frame_range_runner.hpp>
@@ -28,6 +29,11 @@ struct RenderRequest final {
     document::CompositionId composition;
     std::optional<std::uint64_t> frame;
     std::optional<std::pair<std::uint64_t, std::uint64_t>> range;
+    // #766: with neither `frame` nor `range`, the render covers the composition's own range: from
+    // `rangeFirst` (default the first frame) to `rangeLast` (default the last frame). Giving one end
+    // takes the composition's range for the other.
+    std::optional<std::uint64_t> rangeFirst = std::nullopt;
+    std::optional<std::uint64_t> rangeLast = std::nullopt;
     output::OutputPresetV1 preset = output::OutputPresetV1::PngRgba8SrgbV1;
     std::filesystem::path destination;
     std::function<bool()> cancelled = {};
@@ -137,5 +143,15 @@ class Render final {
         std::filesystem::path scratchDirectory = {},
         std::shared_ptr<host::GpuExportProvider> gpuProvider = {});
 };
+
+// #784: the preservation report of one verified export output, in the words Render::run (and so
+// bloom-cli render and Python's bloom.render) reports it: "preset=<id>; exact-facets=<n>/<m>;
+// approvable=<true|false>", and "; background=composition (opaque over composition background)"
+// when the frames were composited over the composition background. The export queue's transient
+// route (MCP render and export) builds its report with it, so both routes say the same for the
+// same output settings. `approvable` is whether the output was published without a failure.
+[[nodiscard]] std::string
+exportPreservationReport(const document::ExportOutputSettings& settings,
+                         const host::ExportOutputVerification& verification, bool approvable);
 
 } // namespace bloom::scripting

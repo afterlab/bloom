@@ -302,6 +302,50 @@ std::optional<OperationCacheValue> OperationCache::find(const std::string& conte
     accounting_->counters[Accounting::index(entry.kind)].hit();
     return entry.value;
 }
+LinearPassRetention::~LinearPassRetention() {
+    // The pass's weak references are expired by now: each context trims what it kept for it to
+    // its ordinary retention.
+    for (auto& weak : videoSources_)
+        if (const auto sources = weak.lock())
+            sources->passEnded();
+}
+std::vector<std::shared_ptr<detail::VideoSourceContext>> LinearPassRetention::videoSources() {
+    const std::lock_guard lock(mutex_);
+    std::vector<std::shared_ptr<detail::VideoSourceContext>> live;
+    for (const auto& weak : videoSources_)
+        if (auto sources = weak.lock())
+            live.push_back(std::move(sources));
+    return live;
+}
+void LinearPassRetention::frameEvaluated(const core::RationalTime frame) {
+    // Outside the pass's mutex: a context takes its own lock and destroys what it released.
+    for (const auto& sources : videoSources())
+        sources->releaseSourcesLeftBefore(*this, frame);
+}
+void LinearPassRetention::addVideoSources(
+    const std::weak_ptr<detail::VideoSourceContext>& sources) {
+    if (sources.expired())
+        return;
+    const std::lock_guard lock(mutex_);
+    std::erase_if(videoSources_, [](const auto& weak) { return weak.expired(); });
+    const bool known = std::ranges::any_of(videoSources_, [&](const auto& weak) {
+        return !weak.owner_before(sources) && !sources.owner_before(weak);
+    });
+    if (!known)
+        videoSources_.push_back(sources);
+}
+void LinearPassRetention::noteVideoSnapshotWait(VideoSnapshotWait wait) {
+    const std::lock_guard lock(mutex_);
+    try {
+        videoSnapshotWaits_.push_back(std::move(wait));
+    } catch (const std::bad_alloc&) {
+        // Reporting is best effort; the frame itself is unaffected.
+    }
+}
+std::vector<LinearPassRetention::VideoSnapshotWait> LinearPassRetention::takeVideoSnapshotWaits() {
+    const std::lock_guard lock(mutex_);
+    return std::exchange(videoSnapshotWaits_, {});
+}
 bool LinearPassRetention::offer(const std::string_view key) {
     const auto hash = std::hash<std::string_view>{}(key);
     const std::lock_guard lock(mutex_);

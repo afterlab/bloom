@@ -12,13 +12,18 @@
 #include <bloom/media/video/session.hpp>
 #include <bloom/platform/cache_directory.hpp>
 #include <cctype>
+#include <chrono>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <deque>
 #include <fstream>
 #include <iostream>
 #include <new>
 #include <optional>
+#include <string>
+#include <system_error>
 #include <thread>
 #include <tuple>
 #include <type_traits>
@@ -465,9 +470,14 @@ namespace {
 struct SnapshotRetirement final : render::detail::PackedHostRetirementNode {
     std::unique_ptr<platform::ReadOnlyFileSnapshot> snapshot;
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement;
+    // #772: set while the close waits on the retirement lane, so a capture refused by the same
+    // quota meanwhile waits for it.
+    std::shared_ptr<platform::FileSnapshotQuota> expected;
     bool registered = false;
     ~SnapshotRetirement() {
         snapshot.reset(); // Closing the last disk handle returns quota only after backing release.
+        if (expected)
+            expected->releaseExpected();
         if (registered)
             render::detail::releasePackedHostRegistration(retirement);
     }
@@ -719,13 +729,58 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
             return shared;
         }
     auto captured = capture();
-    if (const auto* refused = std::get_if<platform::ProcessFailure>(&captured);
-        refused && refused->code == platform::ProcessError::ResourceLimit &&
-        releaseRetainedForCapture())
+    const auto quotaFull = [&captured] {
+        const auto* refused = std::get_if<platform::ProcessFailure>(&captured);
+        return refused && refused->code == platform::ProcessError::ResourceLimit;
+    };
+    if (quotaFull() && releaseRetainedForCapture())
         captured = capture();
+    // #772: the quota is full while snapshots this quota's holders released are still closing on
+    // their retirement lane (a layer that left the range, a session given up for memory). The
+    // capture waits for them, cancellably, and the wait is counted in the source work so the
+    // caller can report it. With nothing closing, waiting cannot help: the capture fails below.
+    std::uint32_t waits = 0;
+    const auto waitStarted = std::chrono::steady_clock::now();
+    while (quotaFull() && state_->quota && !(cancel && cancel()) &&
+           state_->quota->waitForRelease(std::chrono::milliseconds(20))) {
+        ++waits;
+        captured = capture();
+    }
+    const auto waited = waits == 0 ? std::chrono::nanoseconds{0}
+                                   : std::chrono::steady_clock::now() - waitStarted;
+    const auto noteWait = [&] {
+        if (access.work) {
+            access.work->quotaWaits = waits;
+            access.work->quotaWaitNanoseconds = static_cast<std::uint64_t>(waited.count());
+        }
+    };
     auto* snapshot = std::get_if<std::unique_ptr<platform::ReadOnlyFileSnapshot>>(&captured);
     if (!snapshot) {
+        noteWait();
         const auto& error = std::get<platform::ProcessFailure>(captured);
+        if (waits != 0 && cancel && cancel())
+            return Unavailable{Error::Cancelled,
+                               "Video source capture cancelled while it waited for released "
+                               "source snapshots to close"};
+        if (error.code == platform::ProcessError::ResourceLimit && state_->quota) {
+            const auto gib = [](const std::uint64_t bytes) {
+                char text[32];
+                std::snprintf(text, sizeof text, "%.1f GiB",
+                              static_cast<double>(bytes) / static_cast<double>(1ULL << 30U));
+                return std::string(text);
+            };
+            std::error_code unsized;
+            const auto bytes = std::filesystem::file_size(state_->path, unsized);
+            const auto size = unsized ? std::string("unknown") : std::to_string(bytes);
+            return Unavailable{Error::Oversized,
+                               "Video source snapshot quota is full: " +
+                                   std::to_string(state_->quota->residentFiles()) + " of " +
+                                   std::to_string(state_->quota->fileLimit()) + " files and " +
+                                   gib(state_->quota->residentBytes()) + " of " +
+                                   gib(state_->quota->ceilingBytes()) +
+                                   " are held, and this source needs one more file of " + size +
+                                   " bytes"};
+        }
         return Unavailable{error.code == platform::ProcessError::Cancelled       ? Error::Cancelled
                            : error.code == platform::ProcessError::ResourceLimit ? Error::Oversized
                            : error.code == platform::ProcessError::Unavailable ? Error::Unavailable
@@ -734,6 +789,7 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     }
     if (access.work)
         *access.work = (*snapshot)->statistics();
+    noteWait();
     if (expected && (*snapshot)->digest() != *expected)
         return sourceChanged();
     // A revalidating request takes a range-filled source only once it is proved, unless the
@@ -760,10 +816,15 @@ VideoDecodeSession::sourceRevision(const std::optional<Digest> expected, const C
     };
     auto* entry = owner.release();
     std::shared_ptr<const platform::ReadOnlyFileSnapshot> result(
-        entry->snapshot.get(), [entry](const platform::ReadOnlyFileSnapshot*) noexcept {
-            if (entry->registered)
+        entry->snapshot.get(),
+        [entry, quota = state_->quota](const platform::ReadOnlyFileSnapshot*) noexcept {
+            if (entry->registered) {
+                if (quota) {
+                    quota->expectRelease();
+                    entry->expected = quota;
+                }
                 render::detail::enqueuePackedHostRetirement(entry->retirement, entry);
-            else
+            } else
                 delete entry;
         });
     if (access.allowRetention) {

@@ -1,6 +1,7 @@
 #include <bloom/scripting/render.hpp>
 
 #include <bloom/core/file_uri.hpp>
+#include <bloom/core/frame_time_mapping.hpp>
 #include <bloom/host/export_job_runner.hpp>
 #include <bloom/host/export_presets.hpp>
 #include <bloom/host/project_color_choice.hpp>
@@ -112,7 +113,55 @@ destinationContext(const std::filesystem::path& projectFolder, const std::string
     return context;
 }
 
+// The output preset an export output's settings run as: formatFor() read backwards, with DPX's
+// depth from its codec profile as the export queue chooses it.
+[[nodiscard]] std::optional<output::OutputPresetV1>
+presetFor(const document::ExportOutputSettings& settings) {
+    using P = output::OutputPresetV1;
+    using F = document::ExportFormat;
+    switch (settings.format) {
+    case F::Png:
+        return P::PngRgba8SrgbV1;
+    case F::OpenExr:
+        return P::FlatExrRgba32fLinRec709SceneV1;
+    case F::Tiff:
+        return P::TiffRgba16SrgbV1;
+    case F::Dpx:
+        return settings.codecProfile == "16bit" ? P::DpxRgb16V1 : P::DpxRgb10V1;
+    case F::ProResMov:
+        return P::ProResMovV1;
+    case F::DnxhrMxf:
+        return P::DnxhrMxfV1;
+    case F::H264Mov:
+        return P::H264MovV1;
+    case F::H264Mp4:
+        return P::H264Mp4V1;
+    case F::HevcMov:
+        return P::HevcMovV1;
+    case F::HevcMp4:
+        return P::HevcMp4V1;
+    case F::Wav:
+        return P::PcmWavV1;
+    case F::Vp9Webm:
+        return P::Vp9WebmV1;
+    case F::Av1Webm:
+        return P::Av1WebmV1;
+    case F::Av1Mp4:
+        return P::Av1Mp4V1;
+    }
+    return std::nullopt;
+}
+
 } // namespace
+
+std::string exportPreservationReport(const document::ExportOutputSettings& settings,
+                                     const host::ExportOutputVerification& verification,
+                                     const bool approvable) {
+    const auto preset = presetFor(settings);
+    if (!preset)
+        return {};
+    return reportText(*preset, verification, approvable, settings.background);
+}
 
 std::optional<runtime::EvaluationColorIntent>
 captureRenderColorIntent(const SessionRenderSourceSnapshot& source,
@@ -226,9 +275,19 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     if (!source.colorSettings.has_value() || !captureRenderColorIntent(source, *composition))
         return failed("Project color settings are unavailable for render");
     if (!request.frame.has_value() && !request.range.has_value()) {
-        return failed("Render requires a frame or range");
+        const auto rate = composition->format().frameRate();
+        const auto mapping = core::FrameTimeMapping::create(composition->duration(),
+                                                            rate.numerator(), rate.denominator());
+        if (!mapping)
+            return failed("The composition has no frames to render");
+        request.range = std::pair{request.rangeFirst.value_or(0),
+                                  request.rangeLast.value_or(mapping.value()->maximumFrameIndex())};
     }
     const auto format = formatFor(request.preset);
+    if (format && document::isImageExportFormat(*format) && request.range &&
+        request.range->first <= request.range->second &&
+        request.range->second - request.range->first >= 10000)
+        return failed("Range must contain 1..10000 frames");
     auto* artifacts = session.artifactCoordinator();
     auto* publications = session.publicationCoordinator();
     if (!format || artifacts == nullptr || publications == nullptr)

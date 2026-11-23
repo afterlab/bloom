@@ -389,7 +389,8 @@ void runJob(McpServerCore::State& core, const std::shared_ptr<McpTransactJob>& j
                      .compact = {},
                      .client = job->client,
                      .envelope = nullptr,
-                     .committed = false};
+                     .committed = false,
+                     .fileExports = nullptr};
         value = runTransact(core, out, call, job->arguments);
         committed = call.committed;
         compact = std::move(call.compact);

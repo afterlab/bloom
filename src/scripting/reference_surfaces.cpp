@@ -894,12 +894,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = ">= 0"},
          {.name = "first",
           .type = "integer",
-          .summary = "First frame of an inclusive range.",
+          .summary = "First frame of an inclusive range. Without first (and without frame) the "
+                     "range starts at the composition's first frame.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "last",
           .type = "integer",
-          .summary = "Last frame of an inclusive range (at most 10000 frames per call).",
+          .summary = "Last frame of an inclusive range (at most 10000 frames per call). Without "
+                     "last the range ends at the composition's last frame, so giving neither "
+                     "first nor last renders the whole composition.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "preset",
@@ -943,7 +946,9 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .choices = {{"transparent", "Keep alpha"},
                       {"composition", "Opaque over the composition's Background Color"}}}});
     render.result =
-        "{publishedFrames, preservationReport, gpuFrames|null, "
+        "{publishedFrames, preservationReport (\"preset=<id>; exact-facets=<n>/<m>; "
+        "approvable=<true|false>\", the same on the export queue and the scripted route), "
+        "gpuFrames|null, "
         "cpuReferenceFrames|null, provenance (gpu|cpu-reference)|null, routeNote?, "
         "files:[{path, digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
         "language, title, format:\"srt\"|\"vtt\"|\"ttml\", path, cues, bytes, sha256}] "
@@ -997,12 +1002,15 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .range = ">= 0"},
          {.name = "first",
           .type = "integer",
-          .summary = "First frame of an inclusive range.",
+          .summary = "First frame of an inclusive range. Without first (and without frame) the "
+                     "range starts at the composition's first frame.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "last",
           .type = "integer",
-          .summary = "Last frame of an inclusive range.",
+          .summary = "Last frame of an inclusive range (an image sequence is limited to 10000 "
+                     "frames, a movie is not). Without last the range ends at the composition's last "
+                     "frame, so giving neither first nor last exports the whole composition.",
           .unit = "composition frame index",
           .range = ">= 0"},
          {.name = "preset",
@@ -1110,20 +1118,22 @@ void addTools(std::vector<ReferenceEntry>& out) {
           .defaultValue = "transparent",
           .choices = {{"transparent", "Keep alpha"},
                       {"composition", "Opaque over the composition's Background Color"}}}});
-    exportTool.result = "{publishedFrames, preservationReport, workerMemory:{measured, peakBytes, "
-                        "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
-                        "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
-                        "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
-                        "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
-                        "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
-                        "null when none was recorded), files:[{path, "
-                        "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
-                        "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
-                        "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
-                        "sidecar), streams?:[{kind:\"video\"|\"audio\", codec, profile, width, "
-                        "height, frameRate:[n, d] (video), channels, sampleRate (audio), "
-                        "bitrate (bits per second)}] (a movie or WAV, read back from the "
-                        "file)}";
+    exportTool.result =
+        "{publishedFrames, preservationReport (\"preset=<id>; exact-facets=<n>/<m>; "
+        "approvable=<true|false>\", the same on every route), workerMemory:{measured, peakBytes, "
+        "capBytes, waits, waitedMs} (a movie or WAV), loudness:{targetLufs, "
+        "truePeakLimitDbtp, measured, measuredLufs, measuredTruePeakDbtp, gainDb, "
+        "finalMeasured, finalLufs, finalTruePeakDbtp, limiterReductionDb} (with "
+        "loudnessLufs), gpuFrames|null, cpuReferenceFrames|null, provenance "
+        "(gpu|cpu-reference)|null, routeNote? (which route evaluated the frames; "
+        "null when none was recorded), files:[{path, "
+        "digest:\"sha256:<hex>\"}] (with the sidecars), subtitles?:[{node, "
+        "language, title, format:\"srt\"|\"vtt\"|\"ttml\"|\"embedded\", path, "
+        "cues, bytes, sha256}] (with subtitles; bytes and sha256 describe a "
+        "sidecar), streams?:[{kind:\"video\"|\"audio\", codec, profile, width, "
+        "height, frameRate:[n, d] (video), channels, sampleRate (audio), "
+        "bitrate (bits per second)}] (a movie or WAV, read back from the "
+        "file)}";
     exportTool.errors = renderErrors;
     addExamples(
         exportTool,
@@ -1230,7 +1240,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
          false},
         {"export.status",
          "The export queue snapshot: jobs, outputs, states, progress, failures and "
-         "verification.",
+         "verification. Job and output ids (and activeJob) are decimal strings below 2^53, "
+         "never numbers a JSON client could round: pass an id back exactly as returned.",
          true},
         {"export.events", "Terminal export events (done, failed, stopped) after a sequence.", true},
         {"export.log", "An export job's run log after a sequence.", true},
@@ -1299,7 +1310,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
                                   .type = "integer",
                                   .required = true,
                                   .summary = "The job.",
-                                  .unit = "export job id (export.status)",
+                                  .unit = "export job id (export.status): the decimal string exactly as "
+                                          "returned, or the integer",
                                   .range = ">= 1"}});
         if (name == "export.confirm-replace")
             addArguments(value,
@@ -1326,7 +1338,8 @@ void addTools(std::vector<ReferenceEntry>& out) {
             addArguments(value, {{.name = "job",
                                   .type = "integer",
                                   .summary = "The job to wait for.",
-                                  .unit = "export job id",
+                                  .unit = "export job id: the decimal string exactly as export.status "
+                                          "returned it, or the integer",
                                   .range = ">= 1",
                                   .defaultValue = "every active job"},
                                  {.name = "timeoutMs",

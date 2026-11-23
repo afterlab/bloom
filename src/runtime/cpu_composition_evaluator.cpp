@@ -3759,7 +3759,8 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                     (explicitBypass || request.requireVerifiedMediaSources)
                         ? MediaSourceRevisionPolicy::Revalidate
                         : request.mediaSourceRevisionPolicy,
-                    !explicitBypass, remainingPixelBudget(), !planBypass);
+                    !explicitBypass, remainingPixelBudget(), !planBypass, request.linearPass,
+                    request.linearPassFrame);
                 if (selectedVideo->cancelled)
                     return EvaluationResult::cancelled();
                 if (request.requireVerifiedMediaSources && !selectedVideo->frame)

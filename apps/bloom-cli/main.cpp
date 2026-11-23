@@ -82,7 +82,7 @@ class ExportProviderTeardown final {
 void printUsage() {
     std::cerr << "usage: bloom-cli --version | new <file> | open <file> | "
                  "run <script.json|script.py> | "
-                 "python | render [--project <file>] (--frame N | --range A-B) --preset <id> --out "
+                 "python | render [--project <file>] [--frame N | --range A-B] --preset <id> --out "
                  "<dir> [--replace] [--require-device] [--subtitles srt,vtt,ttml] "
                  "[--subtitle-nodes <id>,...] [--background transparent|composition] | export "
                  "--project <file> (--all | --job "
@@ -223,18 +223,29 @@ subtitleSetting(const SubtitleOptions& options, std::optional<document::ExportSu
     return std::nullopt;
 }
 
-[[nodiscard]] std::optional<std::pair<std::uint64_t, std::uint64_t>>
-frameRange(std::string_view value) {
+// #766: "A-B", "A-" (to the composition's last frame), "-B" (from its first) or "-" (all of it).
+struct OpenFrameRange final {
+    std::optional<std::uint64_t> first;
+    std::optional<std::uint64_t> last;
+};
+
+[[nodiscard]] std::optional<OpenFrameRange> frameRange(std::string_view value) {
     const auto separator = value.find('-');
     if (separator == std::string_view::npos) {
         return std::nullopt;
     }
-    const auto first = unsignedInteger(value.substr(0, separator));
-    const auto last = unsignedInteger(value.substr(separator + 1));
-    if (!first.has_value() || !last.has_value()) {
-        return std::nullopt;
+    OpenFrameRange range;
+    if (separator > 0) {
+        range.first = unsignedInteger(value.substr(0, separator));
+        if (!range.first.has_value())
+            return std::nullopt;
     }
-    return std::pair{*first, *last};
+    if (separator + 1 < value.size()) {
+        range.last = unsignedInteger(value.substr(separator + 1));
+        if (!range.last.has_value())
+            return std::nullopt;
+    }
+    return range;
 }
 
 [[nodiscard]] int commandNew(const std::filesystem::path& path) {
@@ -528,7 +539,7 @@ frameRange(std::string_view value) {
 [[nodiscard]] int commandRender(int argc, char** argv) {
     std::optional<std::filesystem::path> project;
     std::optional<std::uint64_t> frame;
-    std::optional<std::pair<std::uint64_t, std::uint64_t>> range;
+    std::optional<OpenFrameRange> range;
     std::optional<output::OutputPresetV1> selectedPreset;
     std::filesystem::path outputDirectory;
     bool replace = false;
@@ -600,7 +611,10 @@ frameRange(std::string_view value) {
             return 2;
         }
     }
-    if ((frame.has_value() == range.has_value()) || !selectedPreset.has_value() ||
+    // #766: without --frame or --range the render covers the composition's whole range.
+    if (!frame.has_value() && !range.has_value())
+        range = OpenFrameRange{};
+    if ((frame.has_value() && range.has_value()) || !selectedPreset.has_value() ||
         outputDirectory.empty()) {
         printUsage();
         return 2;
@@ -676,7 +690,15 @@ frameRange(std::string_view value) {
         scripting::Render::run(*session, scheduler, compiler,
                                {.composition = composition,
                                 .frame = frame,
-                                .range = range,
+                                .range = range && range->first && range->last
+                                             ? std::optional(std::pair(*range->first, *range->last))
+                                             : std::nullopt,
+                                .rangeFirst = range && !(range->first && range->last)
+                                                  ? range->first
+                                                  : std::nullopt,
+                                .rangeLast = range && !(range->first && range->last)
+                                                 ? range->last
+                                                 : std::nullopt,
                                 .preset = *selectedPreset,
                                 .destination = destination,
                                 .replaceExisting = replace,

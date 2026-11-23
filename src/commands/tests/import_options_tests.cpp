@@ -138,6 +138,13 @@ void testImportOptions(TestContext& test) {
                     "a frame range imports frames 2 and 4 and keeps the range");
         test.expect(!asset.interpretation.frameRate,
                     "without a preference rate the sequence matches the composition");
+        // #773: the asset is named after the sequence, not its first file, and counts and
+        // starts at the frames the range kept.
+        test.expect(asset.name == "shot", "a ranged sequence is named after its base name");
+        test.expect(document::footageFrameCount(asset) == 3 &&
+                        document::footageSequenceFrame(asset, 0).member->frame == 2 &&
+                        document::footageSequenceFrame(asset, 2).member->frame == 4,
+                    "a ranged sequence counts frames 2 to 4 and starts at frame 2");
 
         // Frame 3 appears and 6 is rendered: Reload reads the range again, so 3 joins and 6 does
         // not, with or without the relink options (an agent's relink has none).

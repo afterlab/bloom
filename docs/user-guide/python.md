@@ -370,6 +370,8 @@ result = bloom.render.frame(12, composition=composition, out="frame-12.png")
 print(result.files[0].path, result.files[0].digest)
 
 sequence = bloom.render.range(0, 23, out="frame.png")
+whole = bloom.render.range(out="frame.png")        # the composition's whole range
+tail = bloom.render.range(first=24, out="frame.png")  # frame 24 to the composition's last frame
 again = bloom.render.frame(12, composition=composition, out="frame-12.png", replace=True)
 ```
 

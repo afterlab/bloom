@@ -480,6 +480,15 @@ bloom_enable_warnings(bloom_runtime_operation_cache_linear_pass_test)
 bloom_add_test(NAME bloom.runtime.operation_cache_linear_pass
               COMMAND bloom_runtime_operation_cache_linear_pass_test LABELS unit runtime TIMEOUT 30)
 
+# #772: a linear pass admits every video source its frames read and releases a source an evaluated
+# frame no longer reads.
+add_executable(bloom_runtime_video_source_pass_test video_source_pass_tests.cpp)
+target_include_directories(bloom_runtime_video_source_pass_test PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime)
+target_link_libraries(bloom_runtime_video_source_pass_test PRIVATE bloom_runtime_evaluator)
+bloom_enable_warnings(bloom_runtime_video_source_pass_test)
+bloom_add_test(NAME bloom.runtime.video_source_pass
+              COMMAND bloom_runtime_video_source_pass_test LABELS unit runtime TIMEOUT 30)
+
 add_executable(bloom_runtime_operation_cache_accounting_test operation_cache_accounting_tests.cpp)
 target_include_directories(bloom_runtime_operation_cache_accounting_test PRIVATE
     ${PROJECT_SOURCE_DIR}/src/render)

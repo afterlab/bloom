@@ -19,6 +19,7 @@
 #include <bloom/scripting/session.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cmath>
@@ -860,8 +861,8 @@ void retiredTransientJobs() {
     const auto wait = server.call("export.wait", R"({"job":)" + id + R"(,"timeoutMs":1000})");
     expect(contains(wait, R"("finished":true)"), "export.wait finds the retired job: " + wait);
 
-    // Ids round-trip exactly through JSON (#584): transient ids sit above 2^53, so they are reported
-    // as strings, and a double-based client still tells two jobs apart and targets each one.
+    // Ids round-trip exactly through JSON (#584, #767): transient ids stay at most 2^53 - 1 and are
+    // reported as strings, so a double-based client tells two jobs apart and targets each one.
     fake->push({.outcome = host::testing::FakeExportScript::Outcome::FailRendering});
     const auto secondFailed = server.call("render", R"({"composition":1,"frame":0,)"
                                                     R"("preset":"PngRgba8SrgbV1","destination":")" +
@@ -874,9 +875,19 @@ void retiredTransientJobs() {
         std::snprintf(buffer, sizeof buffer, "%.0f", std::stod(text));
         return std::string(buffer);
     };
-    expect(asDouble(id) == asDouble(secondId),
-           "the fixture ids really collide when parsed as doubles");
-    expect(std::stoull(id) > (1ULL << 53U), "transient ids exceed 2^53");
+    expect(asDouble(id) != asDouble(secondId),
+           "two transient ids stay distinct when parsed as doubles");
+    expect(std::stoull(id) <= (1ULL << 53U) - 1 && std::stoull(secondId) <= (1ULL << 53U) - 1,
+           "transient ids are at most 2^53 - 1: " + id + " " + secondId);
+    // #767: a double-parsed id still reaches status, wait and stop (the three tools that
+    // reported UnknownJob when the id was rounded).
+    const auto rounded = std::to_string(static_cast<std::uint64_t>(std::stod(id)));
+    expect(rounded == id, "an id survives a trip through a double unchanged");
+    const auto roundTripWait =
+        server.call("export.wait", R"({"job":)" + rounded + R"(,"timeoutMs":1000})");
+    expect(contains(roundTripWait, R"("finished":true)") &&
+               !contains(roundTripWait, "UnknownJob"),
+           "export.wait takes the id as returned: " + roundTripWait);
     expect(contains(status, R"("id":")" + id + '"') &&
                contains(server.call("export.status", "{}"), R"("id":")" + secondId + '"'),
            "export.status reports both ids as exact strings");
@@ -892,6 +903,67 @@ void retiredTransientJobs() {
     const auto malformed = server.call("export.log", R"({"job":"abc"})");
     expect(!contains(stopped, "Expected an id") && contains(malformed, "Expected an id"),
            "export.stop accepts a string id; a malformed id is refused: " + stopped + malformed);
+
+    // #767: an active job's id, as export.status returns it, reaches wait and stop unchanged.
+    fake->setDestinationCheckDelay(std::chrono::minutes(10));
+    auto held = std::async(std::launch::async, [&] {
+        return server.call("render", R"({"composition":1,"frame":0,"preset":"PngRgba8SrgbV1",)"
+                                     R"("destination":")" +
+                                         (captures / "held.png").generic_string() + R"("})");
+    });
+    std::string activeId;
+    for (int turn = 0; turn < 3000 && activeId.empty(); ++turn) {
+        std::smatch found;
+        const auto running = server.call("export.status", "{}");
+        if (std::regex_search(running, found, std::regex(R"re("activeJob":"([0-9]+)")re")))
+            activeId = found[1].str();
+        else
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    expect(!activeId.empty() && std::stoull(activeId) <= (1ULL << 53U) - 1,
+           "export.status reports the active job's id as a string below 2^53: " + activeId);
+    if (!activeId.empty()) {
+        const auto waiting = server.call("export.wait", R"({"job":")" + activeId + R"(","timeoutMs":50})");
+        expect(!contains(waiting, "UnknownJob"), "export.wait takes the reported id: " + waiting);
+        const auto stoppedActive = server.call("export.stop", R"({"job":")" + activeId + R"("})");
+        expect(contains(stoppedActive, R"("accepted":true)") && !contains(stoppedActive, "UnknownJob"),
+               "export.stop takes the reported id: " + stoppedActive);
+    }
+    fake->setDestinationCheckDelay(std::chrono::milliseconds(0));
+    expect(held.wait_for(std::chrono::seconds(60)) == std::future_status::ready,
+           "the stopped render ends");
+    if (held.valid() && held.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+        static_cast<void>(held.get());
+
+    // #766: the live route renders the composition's whole range when first and last are left
+    // out, and one given end takes the composition's own for the other.
+    {
+        const auto compositions = server.call("query", R"({"kind":"compositions"})");
+        std::smatch frames;
+        const bool known = std::regex_search(
+            compositions, frames, std::regex(R"re("duration":\{"frames":([0-9]+))re"));
+        const auto count = known ? std::stoull(frames[1].str()) : 0ULL;
+        expect(count > 3, "the fixture composition has more than three frames: " + compositions);
+        const auto rangeOf = [&](const std::string& extra) {
+            const auto answer =
+                server.call("render", R"({"composition":1,"preset":"PngRgba8SrgbV1","destination":")" +
+                                          (captures / "span.png").generic_string() + '"' + extra +
+                                          "}");
+            const auto spanJob = std::to_string(jobOf(answer));
+            return std::pair{contains(answer, R"("isError":false)") && spanJob != "0",
+                             server.call("export.status", "{}")};
+        };
+        const auto last = std::to_string(count - 1);
+        const auto whole = rangeOf("");
+        expect(whole.first && contains(whole.second, R"("range":{"first":0,"last":)" + last + "}"),
+               "render without first and last covers the whole composition: " + whole.second);
+        const auto tail = rangeOf(R"(,"first":2)");
+        expect(tail.first && contains(tail.second, R"("range":{"first":2,"last":)" + last + "}"),
+               "render with only first runs to the composition's last frame: " + tail.second);
+        const auto head = rangeOf(R"(,"last":1)");
+        expect(head.first && contains(head.second, R"("range":{"first":0,"last":1})"),
+               "render with only last starts at the composition's first frame: " + head.second);
+    }
 
     fake->push({.writeDestinations = true});
     const auto capture = server.call("capture", R"({"composition":1,"frame":0})");
@@ -1546,6 +1618,64 @@ double roleNumber(yyjson_val* entry, const char* group, const char* role) {
 std::string text(yyjson_val* value, const char* key) {
     const auto* found = yyjson_get_str(yyjson_obj_get(value, key));
     return found ? std::string(found) : std::string{};
+}
+
+// #773: a ranged image-sequence import is named after the sequence and reports the frames the range
+// kept, with its numbered span; a layer made from it is as long as those frames.
+void rangedSequenceImportQuery() {
+    Headless server;
+    const auto directory = bloom::test_support::processTempDirectory() / "bloom-mcp-ranged-sequence";
+    std::filesystem::remove_all(directory);
+    std::filesystem::create_directories(directory);
+    // A 1x1 RGBA PNG; every frame has these bytes.
+    constexpr std::array<unsigned char, 70> pixel{
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48,
+        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00,
+        0x00, 0x1f, 0x15, 0xc4, 0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x78,
+        0xda, 0x63, 0x64, 0x60, 0xf8, 0x5f, 0x0f, 0x00, 0x02, 0x87, 0x01, 0x80, 0xeb, 0x47,
+        0xba, 0x92, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82};
+    for (int frame = 1; frame <= 6; ++frame) {
+        std::ofstream out(directory / ("plate." + std::to_string(1000 + frame).substr(1) + ".png"),
+                          std::ios::binary);
+        out.write(reinterpret_cast<const char*>(pixel.data()), pixel.size());
+    }
+    const auto transact = [&](const std::string& operations) {
+        return server.call("transact", R"({"expectedRevision":)" + revisionOf(server) +
+                                           R"(,"operations":[)" + operations + "]}");
+    };
+    auto result = transact(R"({"op":"bloom.asset.import","args":{"paths":[")" +
+                           (directory / "plate.001.png").generic_string() +
+                           R"("],"firstFrame":2,"lastFrame":5}})");
+    const auto asset = outputId(result, "asset");
+    expect(asset != 0, "the ranged sequence imports: " + result);
+    const JsonResponse read(server.call("query", R"({"kind":"assets"})"));
+    yyjson_val* record = nullptr;
+    yyjson_arr_iter iter = yyjson_arr_iter_with(yyjson_obj_get(read.content(), "records"));
+    while (auto* candidate = yyjson_arr_iter_next(&iter))
+        if (yyjson_get_uint(yyjson_obj_get(candidate, "id")) == asset)
+            record = candidate;
+    expect(record != nullptr, "the imported asset is listed");
+    if (record == nullptr)
+        return;
+    expect(text(record, "name") == "plate", "a ranged sequence is named after its base name: " +
+                                                text(record, "name"));
+    expect(text(record, "kind") == "sequence", "the asset is a sequence");
+    expect(yyjson_get_uint(yyjson_obj_get(record, "frames")) == 4,
+           "the asset reports the 4 frames its range kept");
+    expect(yyjson_get_sint(yyjson_obj_get(record, "firstFrame")) == 2 &&
+               yyjson_get_sint(yyjson_obj_get(record, "lastFrame")) == 5,
+           "the asset reports its first and last numbered frame");
+    // A layer made from it is as long as the frames the range kept (4), not the composition.
+    result = transact(R"({"op":"bloom.layer.add-from-assets","args":{"assets":[)" +
+                      std::to_string(asset) + R"(],"composition":1,"time":0}})");
+    const auto layer = outputId(result, "layer");
+    expect(layer != 0, "a layer is made from the ranged sequence: " + result);
+    const JsonResponse layers(server.call("query", R"({"kind":"layers","composition":1})"));
+    auto* row = layerRecord(layers.content(), layer);
+    auto* end = row == nullptr ? nullptr : yyjson_obj_get(row, "end");
+    expect(end != nullptr && yyjson_get_sint(yyjson_obj_get(end, "frames")) == 4,
+           "the layer is 4 frames long: " + (end ? std::string(yyjson_val_write(end, 0, nullptr)) : "none"));
+    std::filesystem::remove_all(directory);
 }
 
 // #646: a project that already holds an image layer made from an SVG asset (before an SVG asset could
@@ -3219,10 +3349,14 @@ void secondProjectFile() {
                    "the saved file holds the new layer");
         }
 
-        // The file the server itself has open is refused.
-        const auto ownFile = server.call(
-            "query", R"({"kind":"project","projectFile":")" + own.generic_string() + R"("})");
-        expect(contains(ownFile, "already open"), "a file open as the project is refused: " + ownFile);
+        // #775: the file the server itself has open is that project: the call attaches to it.
+        const auto ownFile = server.call("query", R"({"kind":"project","projectFile":")" +
+                                                      own.generic_string() + R"("})");
+        expect(contains(ownFile, R"("isError":false)") &&
+                   contains(ownFile, R"("attachedToOpenProject":true)") &&
+                   contains(ownFile, R"("fileDiffers":false)") &&
+                   !contains(ownFile, "already open"),
+               "a file open as the project attaches to it: " + ownFile);
         const auto relative = server.call("query", R"({"kind":"project","projectFile":"a.bloom"})");
         expect(contains(relative, "absolute path"), "a relative path is refused: " + relative);
     }
@@ -3231,9 +3365,11 @@ void secondProjectFile() {
 }
 
 // Another project file edited and exported through the desktop host path while the application's
-// own project stays live: the file is refused when Bloom has it open (at first use, after it
-// became live, and when Bloom cannot be asked), project.open and project.save-as refuse a file a
-// session holds, and a render with no GPU device says it ran on the CPU reference path.
+// own project stays live. A file Bloom has open attaches to the live project (#775) and says when
+// the window's copy differs; a session that held the file before Bloom opened it is refused with
+// what to do while it has unsaved changes; nothing is decided when Bloom cannot be asked.
+// project.open and project.save-as refuse a file a session holds, and a render with no GPU device
+// says it ran on the CPU reference path.
 void fileSessionsBesideALiveProject() {
     const auto folder =
         bloom::test_support::processTempDirectory() /
@@ -3293,26 +3429,38 @@ void fileSessionsBesideALiveProject() {
         expect(contains(own, "bloom.mcp.export-unavailable") && !std::filesystem::exists(folder / "own.png"),
                "the live project still renders only through the export queue: " + own);
 
-        // A file Bloom has open is refused at first use.
+        // #775: a file Bloom has open attaches to the live project at first use. The window here
+        // shows a copy that is not the file's (a stale window), so the answer says so and offers
+        // the reload; no second copy of the file is opened.
         server.bindProject(third);
         const auto first = server.call("query", file(third, R"(,"kind":"project")"));
-        expect(contains(first, "already open in Bloom"),
-               "a file open in Bloom is refused at first use: " + first);
+        expect(contains(first, R"("isError":false)") &&
+                   contains(first, R"("attachedToOpenProject":true)") &&
+                   contains(first, R"("fileDiffers":true)") &&
+                   contains(first, R"("reload":{"tool":"project.open")") &&
+                   !contains(first, "already open"),
+               "a file open in Bloom attaches and reports that the window's copy differs: " +
+                   first);
 
-        // A file that becomes live after its session opened is refused from then on.
+        // A file that became live after its session opened, while that session has unsaved
+        // changes: two copies differ, so the call says what to do instead of picking one.
         server.bindProject(second);
         const auto later = server.call("query", file(second, R"(,"kind":"project")"));
-        expect(contains(later, "already open in Bloom"),
-               "a file opened in Bloom after its session opened is refused: " + later);
+        expect(contains(later, "has unsaved changes, so the two copies differ") &&
+                   contains(later, "discardChanges:true"),
+               "a file opened in Bloom after its session opened, with unsaved changes, says what "
+               "to do: " +
+                   later);
         const auto laterSave = server.call("project.save", file(second, ""));
-        expect(contains(laterSave, "already open in Bloom") && !contains(laterSave, R"("saved":true)"),
-               "project.save on it is refused too: " + laterSave);
+        expect(contains(laterSave, "already open in Bloom") &&
+                   !contains(laterSave, R"("saved":true)"),
+               "project.save of that session would overwrite Bloom's file and is refused: " +
+                   laterSave);
         const auto laterEdit = server.call(
             "transact", file(second, R"(,"expectedRevision":0,"operations":[{"op":)"
                                      R"("bloom.layer.add-solid","args":{"composition":1,)"
                                      R"("name":"Again","color":[0,1,0,1]}}])"));
-        expect(contains(laterEdit, "already open in Bloom"),
-               "and so is a later edit: " + laterEdit);
+        expect(contains(laterEdit, "two copies differ"), "and so is a later edit: " + laterEdit);
 
         // Closing the session writes nothing, so it still works.
         server.bindProject(live);
@@ -3446,6 +3594,7 @@ int main() {
         fileSessionsBesideALiveProject();
         mergeEntryReadBack();
         svgFootageWarningQuery();
+        rangedSequenceImportQuery();
         nodeOutputsQuery();
         fieldTestArguments();
         gradientReadBack();

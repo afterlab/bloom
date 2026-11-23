@@ -18,6 +18,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <thread>
 
@@ -210,11 +211,8 @@ void reportJobRoute(Json& out, yyjson_mut_val* value, const TransientResult& job
 // The destination with `{name}`, `{job}`, `{format}` and `{date}` expanded. A frame number pattern
 // stays for renderDestination; a token that is not one of these is refused rather than written.
 std::string expandedDestination(const std::string& text, const document::Composition& composition,
-                                const std::string_view builtInPreset,
+                                const document::ExportFormat format,
                                 const std::string_view jobName) {
-    const auto preset = host::builtInExportPreset(builtInPreset);
-    if (!preset)
-        throw std::runtime_error("The export preset is not available");
     host::ExportDestinationContext context;
     context.compositionName = composition.name();
     const auto now = std::time(nullptr);
@@ -227,7 +225,7 @@ std::string expandedDestination(const std::string& text, const document::Composi
     context.year = static_cast<std::uint16_t>(local.tm_year + 1900);
     context.month = static_cast<std::uint8_t>(local.tm_mon + 1);
     context.day = static_cast<std::uint8_t>(local.tm_mday);
-    auto expanded = host::expandDestinationTokens(text, context, jobName, preset->settings.format);
+    auto expanded = host::expandDestinationTokens(text, context, jobName, format);
     if (!expanded)
         throw InvalidInput("the destination uses an unknown token or a value with a path "
                            "separator; use {name}, {job}, {format}, {date} or a frame number "
@@ -236,6 +234,15 @@ std::string expandedDestination(const std::string& text, const document::Composi
         at != std::string::npos && expanded->compare(at, 7, "{frame}") != 0)
         throw InvalidInput("the destination uses an unknown token");
     return *expanded;
+}
+
+std::string expandedDestination(const std::string& text, const document::Composition& composition,
+                                const std::string_view builtInPreset,
+                                const std::string_view jobName) {
+    const auto preset = host::builtInExportPreset(builtInPreset);
+    if (!preset)
+        throw std::runtime_error("The export preset is not available");
+    return expandedDestination(text, composition, preset->settings.format, jobName);
 }
 
 std::string unknownPresetMessage(const std::string_view preset) {
@@ -280,7 +287,7 @@ ResolvedPreset resolvePreset(McpServerCore::State& core, McpCall& call,
             if (listed != catalogue->presets.end())
                 preset = *listed;
         };
-        if (!core.dependencies.exports.run(read, call.control.stop))
+        if (!queueRoute(core, call).access.run(read, call.control.stop))
             throw ToolFailure(McpToolErrorCode::Cancelled, "The request was cancelled.");
     }
     if (!preset)
@@ -290,6 +297,28 @@ ResolvedPreset resolvePreset(McpServerCore::State& core, McpCall& call,
                                : preset->capabilities.extension;
     const bool still = preset->capabilities.imageSequence;
     return {.preset = std::move(*preset), .still = still, .extension = extension};
+}
+
+// #766: without `first` and `last` a render or export covers the composition's whole range, and
+// giving one of them takes the composition's range for the other. `frame` is one frame.
+struct FrameSpan final {
+    std::uint64_t first = 0;
+    std::uint64_t last = 0;
+};
+[[nodiscard]] FrameSpan frameSpan(yyjson_val* arguments, const bool frameGiven,
+                                  const document::Composition& composition) {
+    if (frameGiven) {
+        const auto frame = integer(member(arguments, "frame"));
+        return {frame, frame};
+    }
+    const auto rate = composition.format().frameRate();
+    const auto mapping = core::FrameTimeMapping::create(composition.duration(), rate.numerator(),
+                                                        rate.denominator());
+    if (!mapping)
+        throw InvalidInput("The composition has no frames to render");
+    auto* first = member(arguments, "first");
+    auto* last = member(arguments, "last");
+    return {first ? integer(first) : 0, last ? integer(last) : mapping.value()->maximumFrameIndex()};
 }
 
 yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
@@ -319,12 +348,6 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
-    const auto last = frameGiven ? first : integer(member(arguments, "last"));
-    if (first > last || last - first >= 10000)
-        throw InvalidInput("Range must contain 1..10000 frames");
-    // A one-frame range is a still: one file named as given, not a sequence.
-    const bool range = !frameGiven && first != last;
     const auto mapping = std::ranges::find(kPresetMappings, presetName, &PresetMapping::preset);
     // #650: every other preset the catalogue lists runs as a transient export queue job, the same
     // way the in-app server runs every export.
@@ -343,6 +366,14 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
         snapshot.project().findComposition(document::CompositionId::fromRaw(id));
     if (!composition)
         throw InvalidInput("Composition does not exist");
+    const auto span = frameSpan(arguments, frameGiven, *composition);
+    const auto first = span.first;
+    const auto last = span.last;
+    // A movie is not limited to the sequence cap: its frames are not files.
+    if (first > last || (stillPreset && last - first >= 10000))
+        throw InvalidInput("Range must contain 1..10000 frames");
+    // A one-frame range is a still: one file named as given, not a sequence.
+    const bool range = !frameGiven && first != last;
     // {name}, {job}, {format} and {date} expand here, as the export queue expands them, so a file
     // is never written with a token in its name.
     const auto requested = expandedDestination(requestedText, *composition, mapping->builtIn,
@@ -460,6 +491,12 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             : preference == Preference::Hardware ? Platform::Required
             : *preset == output::OutputPresetV1::ProResMovV1 ? Platform::Required
                                                              : Platform::Preferred;
+        // #771: the delivered file's true peak over the limit renders the export again with the
+        // limiter lower by the overshoot and a margin, a bounded number of times: the rule the
+        // export queue applies (export_output_drivers.cpp).
+        constexpr std::uint32_t kTruePeakRenders = 3;
+        constexpr double kTruePeakMarginDb = 0.1;
+        double truePeakHeadroomDb = 0.0;
         const auto attempt = [&](const Platform policy) {
             host::SequenceExportRequestV1 request{
                 .composition = {snapshot, composition->id()},
@@ -483,10 +520,13 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                 .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
                 .gpuProvider = gpuExportProvider,
                 .loudness = loudness ? std::optional(output::AudioLoudnessTargetV1{
-                                           loudness->targetLufs, loudness->truePeakDbtp})
+                                           loudness->targetLufs, loudness->truePeakDbtp,
+                                           truePeakHeadroomDb})
                                      : std::nullopt,
                 .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
                                            : platform::ArtifactOverwritePolicy::CreateOnly};
+            if (core.dependencies.sequenceExportSeam)
+                core.dependencies.sequenceExportSeam(request);
             auto made = std::make_unique<host::SequenceExportRunnerV1>(
                 scheduler, compiler, *session.publicationCoordinator(),
                 *session.artifactCoordinator(), ledger, std::move(request), *retirement);
@@ -509,24 +549,62 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             }
             return made;
         };
-        auto owned = attempt(platformEncoder);
-        // The system's encoder was preferred and failed after it began: render the export again
-        // on Bloom's FFmpeg encoder, once, and say so in the report.
+        auto encoderPolicy = platformEncoder;
+        auto owned = attempt(encoderPolicy);
         std::string replaced;
-        if (!owned->result()->published() &&
-            owned->result()->failureStage ==
-                host::SequenceExportFailureStageV1::PlatformEncoderFailed &&
-            !stop.stop_requested()) {
-            replaced = owned->result()->failure ? owned->result()->failure->detail
-                                                : std::string("it did not finish the file");
+        std::uint32_t truePeakRenders = 0;
+        std::string truePeakNote;
+        const auto dbtpText = [](const double value) {
+            char text[32];
+            std::snprintf(text, sizeof text, "%.2f", value);
+            return std::string(text);
+        };
+        while (!owned->result()->published() && !stop.stop_requested()) {
+            const auto& failed = *owned->result();
+            // The system's encoder was preferred and failed after it began: render the export
+            // again on Bloom's FFmpeg encoder, once, and say so in the report.
+            if (failed.failureStage == host::SequenceExportFailureStageV1::PlatformEncoderFailed &&
+                replaced.empty()) {
+                replaced = failed.failure ? failed.failure->detail
+                                          : std::string("it did not finish the file");
+                encoderPolicy = Platform::Skipped;
+            } else if (failed.failureStage ==
+                           host::SequenceExportFailureStageV1::TruePeakExceeded &&
+                       failed.loudness && truePeakRenders < kTruePeakRenders) {
+                // #771: nothing was published. The encoder changed the sound after the limiter;
+                // the limiter goes lower by the overshoot.
+                const auto& measured = *failed.loudness;
+                const auto over = measured.finalTruePeakDbtp - measured.truePeakLimitDbtp;
+                truePeakHeadroomDb += over + kTruePeakMarginDb;
+                ++truePeakRenders;
+                truePeakNote = "; the delivered file's true peak was " +
+                               dbtpText(measured.finalTruePeakDbtp) + " dBTP, " + dbtpText(over) +
+                               " dB over the " + dbtpText(measured.truePeakLimitDbtp) +
+                               " dBTP limit, so Bloom rendered the export again with the limiter " +
+                               dbtpText(truePeakHeadroomDb) + " dB lower (" +
+                               std::to_string(truePeakRenders + 1) + " renders)";
+            } else
+                break;
             owned.reset();
-            owned = attempt(Platform::Skipped);
+            owned = attempt(encoderPolicy);
         }
         auto& runner = *owned;
         if (!replaced.empty())
             report += "; the system encoder failed partway (" + replaced +
                       "), so Bloom's FFmpeg encoder rendered the export again";
+        if (runner.result()->published())
+            report += truePeakNote;
         if (!runner.result()->published()) {
+            if (runner.result()->failureStage ==
+                    host::SequenceExportFailureStageV1::TruePeakExceeded &&
+                runner.result()->loudness)
+                throw std::runtime_error(
+                    "The exported file's sound went over its true-peak limit (" +
+                        dbtpText(runner.result()->loudness->finalTruePeakDbtp) + " dBTP, limit " +
+                        dbtpText(runner.result()->loudness->truePeakLimitDbtp) + " dBTP) after " +
+                        std::to_string(truePeakRenders + 1) +
+                        " renders with the limiter lowered each time, so it was not published "
+                        "and nothing was replaced.");
             if (runner.result()->failureStage == host::SequenceExportFailureStageV1::Destination)
                 throw ToolFailure(McpToolErrorCode::PreflightBlocked,
                                   destination.filename().string() +
@@ -603,13 +681,20 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
         (frameGiven && (member(arguments, "first") || member(arguments, "last"))))
         throw InvalidInput(
             "Specify exactly a frame or inclusive first/last range and a destination");
-    const auto first = integer(member(arguments, frameGiven ? "frame" : "first"));
-    const auto last = frameGiven ? first : integer(member(arguments, "last"));
+    const auto liveSnapshot = call.session.snapshot();
+    const auto* liveComposition =
+        liveSnapshot.project().findComposition(document::CompositionId::fromRaw(id));
+    if (!liveComposition)
+        throw InvalidInput("Composition does not exist");
+    const auto span = frameSpan(arguments, frameGiven, *liveComposition);
+    const auto first = span.first;
+    const auto last = span.last;
     // A one-frame range is a still: one file named as given, not a sequence.
     const bool range = !frameGiven && first != last;
-    if (first > last || last - first >= core.dependencies.limits.renderFrames)
-        throw InvalidInput("Range must contain 1..10000 frames");
     const auto found = resolvePreset(core, call, presetName, compositionExport);
+    // A movie is not limited to the sequence cap: its frames are not files.
+    if (first > last || (found.still && last - first >= core.dependencies.limits.renderFrames))
+        throw InvalidInput("Range must contain 1..10000 frames");
     if (!compositionExport && !found.still)
         throw InvalidInput("Use export for media presets and encoding settings");
     if (found.still && (member(arguments, "profile") || member(arguments, "audio") ||
@@ -652,8 +737,12 @@ yyjson_mut_val* renderLive(McpServerCore::State& core, Json& out, McpCall& call,
             throw InvalidInput("Audio sample rate is outside 8000..192000");
         request.settings.audioSampleRate = static_cast<std::uint32_t>(value);
     }
+    // {name}, {job}, {format} and {date} expand here, as on the headless route, so a file is never
+    // written with a token in its name.
+    const auto expanded = expandedDestination(requested, *liveComposition, preset->settings.format,
+                                              compositionExport ? "MCP export" : "MCP render");
     const auto destination =
-        renderDestination(requested, presetName, found.extension, range, first, found.still, true);
+        renderDestination(expanded, presetName, found.extension, range, first, found.still, true);
     if (destination.pattern)
         request.settings.naming.pattern = *destination.pattern;
     request.destination =
@@ -749,8 +838,11 @@ void pruneScopePictures(const std::filesystem::path& folder) { pruneCaptures(fol
 
 yyjson_mut_val* renderTool(McpServerCore::State& core, Json& out, McpCall& call,
                            yyjson_val* arguments, const bool compositionExport) {
-    return call.live != nullptr ? renderLive(core, out, call, arguments, compositionExport)
-                                : renderHeadless(core, out, call, arguments, compositionExport);
+    // #783: a projectFile session renders and exports through its own export queue, exactly as
+    // the open project does through the application's.
+    return call.live != nullptr || call.fileExports != nullptr
+               ? renderLive(core, out, call, arguments, compositionExport)
+               : renderHeadless(core, out, call, arguments, compositionExport);
 }
 
 namespace {

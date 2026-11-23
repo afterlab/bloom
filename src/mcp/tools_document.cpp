@@ -15,6 +15,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -555,6 +556,42 @@ struct DataFiles final {
     return root;
 }
 
+// #769: bloom.export.add-job's `outputs` and bloom.export.add-output's `output` take an output as
+// JSON text; an object is written out as that text, so the documented object form works and a
+// refusal names the argument and the index. Nothing is returned for any other argument.
+std::optional<scripting::Value> exportOutputValue(const std::string& id, const std::string& name,
+                                                  yyjson_val* item, const std::string& at) {
+    const bool list = id == "bloom.export.add-job" && name == "outputs";
+    if (!list && !(id == "bloom.export.add-output" && name == "output"))
+        return std::nullopt;
+    const auto text = [&](yyjson_val* one, const std::string& field) {
+        if (yyjson_is_str(one))
+            return string(one, kRequestLimit);
+        if (!yyjson_is_obj(one))
+            throw InvalidInput(at + " (" + id + "): " + field +
+                               " expects an output object such as {\"preset\": "
+                               "\"builtin:h264-mov\", \"destination\": {\"path\": "
+                               "\"/exports/a.mov\"}} or its JSON text");
+        std::size_t length = 0;
+        const std::unique_ptr<char, decltype(&std::free)> written(
+            yyjson_val_write(one, 0, &length), &std::free);
+        if (!written)
+            throw InvalidInput(at + " (" + id + "): " + field + " could not be read");
+        return std::string(written.get(), length);
+    };
+    if (!list)
+        return scripting::Value(text(item, "argument \"output\""));
+    if (!yyjson_is_arr(item))
+        throw InvalidInput(at + " (" + id + "): argument \"outputs\" expects an array of output " +
+                           "objects (or JSON text)");
+    scripting::ValueArray values;
+    std::size_t index = 0;
+    yyjson_arr_iter iterator = yyjson_arr_iter_with(item);
+    while (auto* child = yyjson_arr_iter_next(&iterator))
+        values.emplace_back(text(child, "outputs[" + std::to_string(index++) + "]"));
+    return scripting::Value(std::move(values));
+}
+
 bool matches(yyjson_val* value, const scripting::ValueKind kind) {
     using Kind = scripting::ValueKind;
     switch (kind) {
@@ -1072,6 +1109,11 @@ yyjson_mut_val* runTransact(McpServerCore::State& core, Json& out, McpCall& call
             // #752: a subtitle time may also be a timestamp "HH:MM:SS.mmm".
             const bool timestamp = schema->kind == scripting::ValueKind::Time &&
                                    yyjson_is_str(item) && id.starts_with("bloom.subtitles.");
+            // #769: an export output is JSON; it may be given as the object itself.
+            if (const auto output = exportOutputValue(id, name, item, at)) {
+                values.emplace(name, *output);
+                continue;
+            }
             if (!matches(item, schema->kind) && !timestamp)
                 throw InvalidInput(at + " (" + id + "): argument \"" + name + "\" expects " +
                                    std::string(scripting::valueKindName(schema->kind)) +

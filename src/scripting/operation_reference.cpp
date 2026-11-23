@@ -444,11 +444,16 @@ OperationReference OperationReference::build(const OperationRegistry& registry) 
             entry.errors.push_back(std::move(common));
         }
     }
-    // Tools that can act on another project file in a headless session of its own.
+    // Tools that can act on another project file in a headless session of its own (#783: the
+    // export.* queue tools reach that file's own export queue).
     for (auto& entry : reference.entries_) {
-        constexpr std::array<std::string_view, 8> fileTools{"query",  "transact", "history",
-                                                           "render", "export",   "capture",
-                                                           "project.save", "project.close"};
+        constexpr std::array<std::string_view, 22> fileTools{
+            "query",          "transact",         "history",      "render",
+            "export",         "capture",          "project.save", "project.close",
+            "export.start",   "export.start-all", "export.pause", "export.resume",
+            "export.stop",    "export.stop-all",  "export.retry", "export.confirm-replace",
+            "export.status",  "export.events",    "export.log",   "export.wait",
+            "export.presets", "export.script"};
         if (entry.kind != ReferenceKind::Tool ||
             std::ranges::find(fileTools, std::string_view(entry.name)) == fileTools.end())
             continue;
@@ -463,10 +468,18 @@ OperationReference OperationReference::build(const OperationRegistry& registry) 
                         "call runs in a headless session of that file, kept between calls so "
                         "edits and undo persist; project.save writes it and project.close with "
                         "this argument releases it (discardChanges closes it with unsaved "
-                        "edits). A file that is open in Bloom is refused. At most four files at "
-                        "once. Renders of such a file use the server's GPU provider when it has "
-                        "one and a device is available, and the CPU reference path otherwise; "
-                        "the render result reports the route (provenance, gpuFrames and "
+                        "edits, stopJobs stops its running export jobs). The file's render and "
+                        "export run on its own export queue, as the open project's run on "
+                        "Bloom's: the result carries its job id, and export.status, export.wait, "
+                        "export.stop, export.log and the other export.* tools take the same "
+                        "projectFile to reach that queue. A file that is open in Bloom (or the "
+                        "server's own project) is that open project: the call attaches to it and "
+                        "its result adds attachedToOpenProject, fileDiffers and, when the open "
+                        "copy differs from the file, fileDifference and a reload offer "
+                        "(project.open with discardChanges). At most four files at once. Renders "
+                        "of such a file use the server's GPU provider when it has one and a "
+                        "device is available, and the CPU reference path otherwise; the render "
+                        "result reports the route (provenance, gpuFrames and "
                         "cpuReferenceFrames).",
              .required = false,
              .choices = {}});

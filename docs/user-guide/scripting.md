@@ -7,7 +7,7 @@ ownership, render compiler, output analysis, approval, and publication chain as 
 bloom-cli new <file>
 bloom-cli open <file>
 bloom-cli run <script.json>
-bloom-cli render [--project <file>] (--frame N | --range A-B) \
+bloom-cli render [--project <file>] [--frame N | --range A-B] \
   --preset PngRgba8SrgbV1|FlatExrRgba32fLinRec709SceneV1 --out <dir> [--replace] \
   [--require-device] [--subtitles srt,vtt,ttml] [--subtitle-nodes <id>,...] \
   [--background transparent|composition]
@@ -15,6 +15,11 @@ bloom-cli export --project <file> (--all | --job <id>...) [--replace] [--save] \
   [--subtitles srt,vtt,ttml] [--embed-subtitles] [--subtitle-nodes <id>,...]
 bloom-cli help [<name>] [--json]
 ```
+
+Without `--frame` or `--range`, `bloom-cli render` renders the composition's whole range. `--range` may leave an
+end open: `--range 24-` runs from frame 24 to the composition's last frame, `--range -23` from its first frame
+to frame 23. In Python, `bloom.render.range()` takes the same defaults (`first` and `last` are optional), and MCP
+`render` and `export` behave the same way when `first` or `last` is left out.
 
 `--subtitles` writes each Subtitles node's cues as sidecar files of those formats beside the
 output (`<name>.<language>.srt`), `--embed-subtitles` embeds them as tracks in an MP4, MOV or WebM
@@ -175,7 +180,9 @@ object: `{"preset", "settings": {"format", "codecProfile", ...}, "destination": 
 built-in `preset` and gives no `settings` takes that preset's settings, as `apply-preset` does
 (`{"preset": "builtin:prores-422hq-mov", "destination": {"path": "Exports/{name}.mov"}}`); a preset
 that is not built in needs `settings`, and a refused output says why. Without `outputs`, `add-job`
-adds one H.264 MP4 output at `Exports/{name}.mp4`.
+adds one H.264 MP4 output at `Exports/{name}.mp4`. `outputs` is a list of such objects (a Python
+dict, or a JSON object over MCP and `run` scripts), or of their JSON text; a refused output is named by its position, as
+`outputs[1]`, with the reason. `bloom.export.add-output` takes one the same way.
 
 **Session calls** act on runtime state only (never undoable, never saved): `export.start`,
 `export.start-all`, `export.pause`, `export.resume`, `export.stop`, `export.stop-all`,

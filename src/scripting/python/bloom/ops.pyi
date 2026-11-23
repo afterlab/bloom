@@ -3700,9 +3700,11 @@ class ExportOps:
               Unit: label colour as [r, g, b], each an integer 0..255
               Range: 0..255
           outputs  array  optional
-              Outputs as JSON strings; omitted adds one H.264 MP4 output. One output as JSON: {"preset":
-              id, "settings": {output settings}, "destination": {"portability", "path", "overwrite"},
-              "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
+              Outputs as objects, or as JSON text; omitted adds one H.264 MP4 output. Example:
+              [{"preset": "builtin:h264-mov", "destination": {"path": "/exports/a.mov"}}, {"preset":
+              "builtin:prores-422-mov", "destination": {"path": "/exports/b.mov"}}]. One output as JSON:
+              {"preset": id, "settings": {output settings}, "destination": {"portability", "path",
+              "overwrite"}, "enabled", "importIntoAssets"}; every field is optional. A built-in "preset"
               (export.presets lists them) with no "settings" takes that preset's settings; "settings"
               given with it override them. "overwrite" is "ask", "replace" or "refuse"; an output with
               no destination path must be given one before Start. A destination is a path below the

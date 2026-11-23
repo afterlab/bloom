@@ -208,7 +208,8 @@ struct ExportQueueService::State {
     // Transient jobs: runtime-only records in their own id range, never in the document.
     std::map<ExportJobId, document::ExportJob> transients;
     std::set<ExportJobId> acknowledged;
-    std::uint64_t nextTransient = 1ULL << 62U;
+    // Transient ids stay below 2^53 - 1 so a JSON client reads them back exactly.
+    std::uint64_t nextTransient = 1ULL << 52U;
 };
 
 namespace detail {

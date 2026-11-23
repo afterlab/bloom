@@ -30,6 +30,7 @@ using scripting::Arguments;
 using scripting::StableId;
 using scripting::Value;
 using scripting::ValueArray;
+using scripting::ValueMapping;
 
 int failures = 0;
 
@@ -719,6 +720,36 @@ void exportPresetOutputs() {
                job->outputs.front().settings.format == document::ExportFormat::ProResMov &&
                job->outputs.front().destination.path == "Exports/{name}.mov",
            "the output takes the ProRes preset's settings and keeps its .mov destination");
+
+    // #769: an output may be an object (a dict from Python, an object over MCP), and a refusal
+    // names the output that failed.
+    const auto outputObject = [](const std::string& preset, const std::string& path) {
+        return Value(ValueMapping{
+            .keys = {"preset", "destination"},
+            .values = {Value(preset), Value(ValueMapping{.keys = {"path"}, .values = {Value(path)}})}});
+    };
+    auto objects = fixture.run(
+        "bloom.export.add-job",
+        {{"composition", Value(StableId{fixture.main.value()})},
+         {"outputs", Value(ValueArray{outputObject("builtin:prores-422hq-mov", "Exports/a.mov"),
+                                      outputObject("builtin:prores-422hq-mov", "Exports/b.mov")})}});
+    const auto objectJobs = Fixture::outputs<document::ExportJobId>(objects, "exportJob");
+    fixture.refresh();
+    const auto* objectJob =
+        objectJobs.empty() ? nullptr : fixture.snapshot->project().findExportJob(objectJobs.front());
+    expect(objects.succeeded() && objectJob != nullptr && objectJob->outputs.size() == 2 &&
+               objectJob->outputs[0].destination.path == "Exports/a.mov" &&
+               objectJob->outputs[1].destination.path == "Exports/b.mov",
+           "a job takes two outputs given as objects");
+    auto badSecond = fixture.run(
+        "bloom.export.add-job",
+        {{"composition", Value(StableId{fixture.main.value()})},
+         {"outputs", Value(ValueArray{outputObject("builtin:prores-422hq-mov", "Exports/a.mov"),
+                                      outputObject("builtin:no-such-preset", "Exports/b.mov")})}});
+    expect(!badSecond.succeeded() && badSecond.diagnostic &&
+               badSecond.diagnostic->message.find("outputs[1]") != std::string::npos &&
+               badSecond.diagnostic->argument == "outputs",
+           "a refused output names the field and the index");
 
     auto unknown = addJob(R"({"preset":"builtin:no-such-preset"})");
     expect(!unknown.succeeded() && unknown.diagnostic &&

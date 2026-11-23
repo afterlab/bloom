@@ -475,6 +475,18 @@ if(BUILD_TESTING)
                        COMMAND bloom_host_export_audio_formats_test --frame-reuse
                        LABELS unit host media output TIMEOUT 600)
 
+        # #772: an export of a composition with sixteen generated movie layers completes.
+        add_executable(bloom_host_export_movie_layers_test
+                       "${PROJECT_SOURCE_DIR}/tests/integration/movie_layers_export_tests.cpp")
+        target_include_directories(bloom_host_export_movie_layers_test PRIVATE
+                                   "${PROJECT_SOURCE_DIR}/tests/support")
+        target_link_libraries(bloom_host_export_movie_layers_test PRIVATE bloom_host bloom_commands)
+        add_dependencies(bloom_host_export_movie_layers_test bloom-media-worker)
+        bloom_enable_warnings(bloom_host_export_movie_layers_test)
+        bloom_add_test(NAME bloom.host.export-movie-layers
+                       COMMAND bloom_host_export_movie_layers_test
+                       LABELS unit host media output TIMEOUT 600)
+
         add_executable(bloom_host_frame_export_publication_test
                        tests/frame_export_publication_tests.cpp)
         target_link_libraries(bloom_host_frame_export_publication_test PRIVATE bloom_host

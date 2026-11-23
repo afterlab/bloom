@@ -268,6 +268,12 @@ class CanonicalGraph final {
     [[nodiscard]] LayerStack* merge(NodeId id) noexcept;
     [[nodiscard]] std::span<const LayerStack> merges() const noexcept { return layerStacks_; }
     [[nodiscard]] std::optional<NodeId> outputMergeId() const noexcept;
+    // The layer Merge upstream of Output: the one feeding it directly, or the one reached by
+    // following each effect node's single Image input back from Output (a finishing chain after
+    // the Merge). Empty when no layer Merge is upstream. outputMergeId() stays the direct-feed
+    // query.
+    [[nodiscard]] std::optional<NodeId>
+    upstreamMergeId(const NodeDefinitionRegistry& registry = builtInNodeDefinitions()) const noexcept;
     [[nodiscard]] const std::optional<OutputPortRef>& compositionOutput() const noexcept {
         return compositionOutput_;
     }

@@ -45,6 +45,10 @@ struct VideoSessionUse final {
     bool independentFrames = false;
     std::uint32_t stream = 0;
     std::uint64_t frame = 0;
+    // #772: the linear pass (an export) reading the source, and the composition time of its frame.
+    // The pass's sources are admitted beyond the idle retention while it runs.
+    std::shared_ptr<LinearPassRetention> pass = nullptr;
+    std::optional<core::RationalTime> passFrame = std::nullopt;
 };
 // True for the codecs whose every frame is a random-access point, matching the decode worker's
 // intra-only list (slice-threaded decoders).
@@ -63,7 +67,7 @@ inline constexpr std::size_t kOrderedDecoderLanes = 2;
 [[nodiscard]] std::optional<std::size_t>
 chooseOrderedDecoderLane(std::span<const media::video::DecoderReach> lanes, std::uint64_t frame,
                          bool mayStartLane) noexcept;
-class VideoSourceContext final {
+class VideoSourceContext final : public std::enable_shared_from_this<VideoSourceContext> {
   public:
     media::video::DecodedVideoCache cache{0};
     // An intra-only use is served by the session already decoding its frame, else an idle one,
@@ -92,12 +96,20 @@ class VideoSourceContext final {
     void beginShutdown();
     [[nodiscard]] std::uint64_t sourceSnapshotBytes() const { return quota_->residentBytes(); }
     [[nodiscard]] std::size_t sourceSnapshotCount() const { return quota_->residentFiles(); }
+    [[nodiscard]] std::size_t sourceSnapshotFileLimit() const { return quota_->fileLimit(); }
     // Retained sessions are admitted by memory, not a fixed count: their estimated worker bytes
     // must fit this budget (default usable memory, the ledger's automatic total: no fixed fraction,
-    // ADR 0037). At least two sources are kept so two sources can alternate, and never more
-    // sources than the source-snapshot file quota can retain (the parallel sessions of one
-    // intra-only source share its snapshot).
+    // ADR 0037). At least two sources are kept so two sources can alternate. Idle sources are
+    // kept up to kSnapshotFiles (the parallel sessions of one intra-only source share its
+    // snapshot). #772: a source a running linear pass (an export) reads is admitted beyond that:
+    // the frames of the range decide how many sources are needed at once, and the snapshot file
+    // quota is kSnapshotFiles plus those sources.
     void setSessionByteBudget(std::size_t bytes);
+    // #772: LinearPassRetention::frameEvaluated. Releases the sessions `pass` last used for a
+    // frame before `frame` (their layers left the range).
+    void releaseSourcesLeftBefore(const LinearPassRetention& pass, core::RationalTime frame);
+    // #772: a pass ended; what it held beyond the idle retention is released.
+    void passEnded();
     [[nodiscard]] std::size_t retainedSessionCount();
     // Decode route and colour note of the most recently selected sources (most recent first, at
     // most kReportedSources). Status surfaces read this; it is not evaluation output.
@@ -123,6 +135,9 @@ class VideoSourceContext final {
         std::shared_ptr<std::atomic<std::size_t>> users =
             std::make_shared<std::atomic<std::size_t>>(0);
         std::optional<std::pair<std::uint32_t, std::uint64_t>> leasedFrame;
+        // #772: the linear pass that last read this source and the latest frame it read it for.
+        std::weak_ptr<LinearPassRetention> pass;
+        std::optional<core::RationalTime> passFrame;
     };
     // Called with mutex_ held; moves evicted entries into `detached` for destruction unlocked.
     void admitLocked(std::list<SessionEntry>& detached);
@@ -153,7 +168,11 @@ class VideoSourceContext final {
     std::size_t hostByteBudget = std::numeric_limits<std::size_t>::max(),
     // False for a plan compiled for an interactive override: the session and its source revision
     // are retained like any other (allowInsertion), the decoded frame is not stored.
-    bool storeDecoded = true);
+    bool storeDecoded = true,
+    // #772: the request's linear pass and its frame (EvaluationRequest::linearPass,
+    // linearPassFrame).
+    const std::shared_ptr<LinearPassRetention>& linearPass = nullptr,
+    std::optional<core::RationalTime> linearPassFrame = std::nullopt);
 // The selected frame in the working space at the request's proxy scales: videoToSceneLinear, or
 // with a footage pass the stored samples, the pass, the input colour and the proxy resample. The
 // CPU reference for every route.

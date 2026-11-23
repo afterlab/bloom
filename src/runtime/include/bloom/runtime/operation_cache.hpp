@@ -102,14 +102,41 @@ struct OperationCacheValue final {
 class LinearPassRetention final {
   public:
     static constexpr std::size_t kRememberedKeys = 16384;
+    LinearPassRetention() = default;
+    LinearPassRetention(const LinearPassRetention&) = delete;
+    LinearPassRetention& operator=(const LinearPassRetention&) = delete;
+    // Gives back the video sources the pass held beyond what the decode contexts keep for reuse.
+    ~LinearPassRetention();
     // True when `key` was offered before within this pass; otherwise remembers it and returns
     // false. A hash collision only retains an entry, never changes pixels or cache identity.
     [[nodiscard]] bool offer(std::string_view key);
+    // #772: the video sources the pass reads are admitted while it runs, however many its frames
+    // read at once (the source-snapshot file count follows them). The frame at composition time
+    // `frame` (EvaluationRequest::linearPassFrame) finished evaluating: a source last read by an
+    // earlier frame is not read by this one, so its layer has left the range, and its decode
+    // session and source snapshot are released now. Frames may finish in any order.
+    void frameEvaluated(core::RationalTime frame);
+    // Called by a video decode context the first time the pass reads a source from it.
+    void addVideoSources(const std::weak_ptr<detail::VideoSourceContext>& sources);
+    // #772: a frame's video source capture found the snapshot quota full and waited for released
+    // snapshots to close. The pass's owner reports these (the export log).
+    struct VideoSnapshotWait final {
+        std::optional<core::RationalTime> frame;
+        std::string source;
+        std::uint32_t waits = 0;
+        std::uint64_t nanoseconds = 0;
+    };
+    void noteVideoSnapshotWait(VideoSnapshotWait wait);
+    // The waits noted since the last call, oldest first.
+    [[nodiscard]] std::vector<VideoSnapshotWait> takeVideoSnapshotWaits();
 
   private:
+    [[nodiscard]] std::vector<std::shared_ptr<detail::VideoSourceContext>> videoSources();
     std::mutex mutex_;
     std::unordered_set<std::size_t> offered_;
     std::deque<std::size_t> order_;
+    std::vector<std::weak_ptr<detail::VideoSourceContext>> videoSources_;
+    std::vector<VideoSnapshotWait> videoSnapshotWaits_;
 };
 
 // Owned by the evaluator session. Concurrent preview/export tasks share this bounded LRU.
