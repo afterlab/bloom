@@ -27,8 +27,12 @@ module's dependency boundary.
 
 A layer's bounds are its Layer Output boundary's `EvaluatedOperationBounds::output` at the time: the
 axis-aligned rectangle around the layer's transformed content polygon in composition pixel-edge
-coordinates, at full composition resolution, not clipped by the frame. A layer outside its range,
-disabled, or with empty content has no bounds and is skipped.
+coordinates, at full composition resolution, not clipped by the frame. A rotated or sheared Shape
+Source layer (a ring, an arc, a trimmed path) reports the box of its drawn ink instead (#774):
+`EvaluatedOperationBounds::ink`, measured on the stroked, trimmed geometry after the layer's
+transform, which `layerOutputBounds()` puts in `output` and `layerAlignmentGeometry()` reads. The
+evaluator's own `output` stays the content box's, so groups and effects built from it do not move.
+A layer outside its range, disabled, or with empty content has no bounds and is skipped.
 
 `runtime::layerOutputBounds(plan, bounds)` is the one filter (a Layer Output operation, a valid
 layer id, non-empty output) over an evaluated frame's per-operation bounds. Both sources go through

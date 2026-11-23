@@ -890,7 +890,9 @@ through the same route (`help` lists them with their arguments):
   render would use now, and `font` in the answer says when that is a fallback or still downloading.
 - `kind:"layer-bounds"` with `composition`, `layer` and optional `time` returns the evaluated
   bounds: `local` (the content rectangle before the layer transform), `corners` (four corners after
-  it) and `output` (their axis-aligned box), with the space stated in the answer; a time outside the
+  it) and `output` (their axis-aligned box; for a shape layer that is rotated or sheared, the box
+  of its drawn ink after trim, stroke and transform, within a pixel), with the space stated in the
+  answer; a time outside the
   layer reads `visible:false` with a reason.
 - `kind:"outputs"` with `node`, optional `composition`, `time` and `expectedRevision` evaluates the
   node at that time and lists every output with its socket `kind` and `value`: numbers, vectors

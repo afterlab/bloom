@@ -39,6 +39,9 @@ layerOutputBounds(const CompiledCompositionPlan& plan,
             !entry.layerId.isValid() || entry.output.empty())
             continue;
         result.push_back(entry);
+        // #774: a layer's reported box is its ink's: after trim, stroke and transform.
+        if (entry.ink && !entry.ink->empty())
+            result.back().output = *entry.ink;
     }
     return result;
 }

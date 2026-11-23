@@ -17,6 +17,7 @@
 #include "gpu_scene_vector_emission.hpp"
 
 #include "operation_key.hpp"
+#include "shape_ink_bounds.hpp"
 #include "visible_support.hpp"
 #include <bloom/core/blend_mode.hpp>
 #include <bloom/render/cpu_image_primitives.hpp>
@@ -1227,6 +1228,20 @@ CpuGpuSceneBuilder::buildImpl(const std::shared_ptr<const CompiledCompositionPla
                 geometry.output.top = std::min(geometry.output.top, point.y);
                 geometry.output.right = std::max(geometry.output.right, point.x);
                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
+            }
+            // #774: as on the CPU reference, a rotated shape's ink is smaller than the box of its
+            // rotated content box.
+            if (!scaledContent && vectors[index]) {
+                const auto& inkChain = *vectors[index];
+                if (const auto* inkShape =
+                        std::get_if<CompiledShape>(&plan->operations()[inkChain.source])) {
+                    geometry.ink = detail::shapeInkOutputBounds(
+                        *inkShape, *plan,
+                        detail::resolvedForClock(
+                            frameResolved,
+                            plan->operationClock(OperationIndex::fromRaw(inkChain.source))),
+                        map, [&cancellation] { return cancellation.isCancellationRequested(); });
+                }
             }
             geometry.anchor = map({(centre.x + anchor->value.x) * contentScale,
                                    (centre.y + anchor->value.y) * contentScale});
