@@ -211,6 +211,13 @@ std::uint64_t ExportResourceReservationV1::chargedBytes() const noexcept {
     return chargedBytes_;
 }
 
+std::optional<std::uint64_t> ExportResourceReservationV1::serviceAllowance() const noexcept {
+    if (!ledger_ || !participatesInServiceCap_)
+        return std::nullopt;
+    const std::lock_guard lock(ledger_->mutex);
+    return ledger_->concurrentAllowance;
+}
+
 std::uint64_t ExportResourceReservationV1::alreadyRootedBytes() const noexcept {
     return rooted_ ? rooted_->alreadyRootedBytes : 0;
 }

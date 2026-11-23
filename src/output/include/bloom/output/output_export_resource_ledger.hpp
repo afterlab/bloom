@@ -117,6 +117,9 @@ class ExportResourceReservationV1 final {
     [[nodiscard]] std::optional<std::uint64_t> jobAllowance() const noexcept {
         return jobAllowance_;
     }
+    // The service-wide allowance this reservation's charges count against, when they do (#765:
+    // a refusal names it).
+    [[nodiscard]] std::optional<std::uint64_t> serviceAllowance() const noexcept;
     [[nodiscard]] std::uint64_t alreadyRootedBytes() const noexcept;
     [[nodiscard]] std::shared_ptr<runtime::GpuProcessingPhasePolicy>
     processingPolicy() const noexcept;

@@ -25,10 +25,12 @@
 #include <bloom/media/provider/ffmpeg_manifest.hpp>
 #include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
+#include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
 #include <bloom/render/packed_host_retirement.hpp>
 #include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/compiled_plan.hpp>
+#include <bloom/runtime/cpu_composition_evaluator.hpp>
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/memory_headroom.hpp>
 #include <bloom/runtime/memory_pressure_monitor.hpp>
@@ -392,10 +394,12 @@ struct Fixture {
     }
     host::SequenceExportResultV1
     run(host::SequenceExportRequestV1 request, bool cancel = false, bool crash = false,
-        const std::function<void(host::SequenceExportRunnerV1&)>& each = {}) {
+        const std::function<void(host::SequenceExportRunnerV1&)>& each = {},
+        output::ExportResourceLedgerV1* const ledgerOverride = nullptr) {
         std::atomic<std::int64_t> pid{0};
         request.worker.launched = [&](auto value) { pid.store(value); };
-        host::SequenceExportRunnerV1 runner(scheduler, compiler, publications, artifacts, ledger,
+        auto& active = ledgerOverride != nullptr ? *ledgerOverride : ledger;
+        host::SequenceExportRunnerV1 runner(scheduler, compiler, publications, artifacts, active,
                                             std::move(request), *retirement);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(240);
         bool injected = false;
@@ -422,9 +426,9 @@ struct Fixture {
         }
         check(runner.result().has_value(), "composition export deadline");
         const auto releasedDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (ledger.chargedBytes() != 0 && std::chrono::steady_clock::now() < releasedDeadline)
+        while (active.chargedBytes() != 0 && std::chrono::steady_clock::now() < releasedDeadline)
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        check(ledger.chargedBytes() == 0,
+        check(active.chargedBytes() == 0,
               "terminal export releases frame and source audio reservations");
         return need(runner.result());
     }
@@ -589,26 +593,146 @@ void testRetentionOnlyCapacityWaitStalls() {
           "with only retention held the wait stalls after its limit");
 }
 
-// #586: a refused audio backing admission is reported as that refusal. Other work holds every
-// processing request slot but the export's own (what cached audio did before it retired to
-// retention), so the decoded audio's own claim is refused: the export fails with the provider's
-// Busy and the audio sentence, which the job reports as a resource refusal and never as a full
-// destination (the disk has room; nothing was written).
-void testRefusedAudioBackingIsNotDiskFull(Fixture& f, const std::filesystem::path& directory) {
-    constexpr std::uint64_t mib = 1024ULL * 1024;
-    auto policy = capacityPolicy(768 * mib);
-    auto provider = capacityProvider(f.scheduler, policy, nullptr);
-    // Other work holds every processing request slot but two. The export's frame queue takes one
-    // and the frame being analysed takes the other, which it keeps until it has been encoded; the
-    // decoded audio's backing is opened while that first frame is encoded, needs a slot of its
-    // own, and is refused.
-    std::vector<std::shared_ptr<render::GpuProcessingPhaseLease>> others;
-    for (int slot = 0; slot < 30; ++slot) {
-        auto granted = policy->reserve(
-            {.pixels = 1, .metadataBytes = 72, .sourceFree = true, .native = false});
-        check(granted.lease != nullptr, "audio refusal: another request slot is admitted");
-        others.push_back(std::move(granted.lease));
+// #765: the refusal sentence names what was refused, the asset, the bytes and the limit that
+// refused them, for each limit.
+void testAudioAdmissionRefusalText() {
+    using Status = output::ExportResourceAdmissionStatusV1;
+    output::ExportAudioAdmissionRefusalV1 refusal{
+        .refused = "Audio backing admission refused",
+        .asset = document::AssetId::fromRaw(7),
+        .bytes = 393240,
+        .purpose = "its decoded audio window",
+        .status = Status::ServiceAllowanceExceeded,
+        .allowance = std::nullopt,
+        .serviceAllowance = std::nullopt,
+        .hostMemory = output::ExportAudioHostMemoryV1{.freeBytes = 1024, .usableBytes = 4096},
+        .decodedSources = 3};
+    const auto text = [&] { return output::describeExportAudioAdmissionRefusalV1(refusal); };
+    check(text() == "Audio backing admission refused: audio asset 7 needs 393240 bytes of memory "
+                    "for its decoded audio window, but there is not enough free memory: the "
+                    "processing memory has 1024 of 4096 bytes free (3 audio sources of this export "
+                    "were decoded at the time).",
+          "refusal text: the processing root's free memory: " + text());
+    refusal.hostMemory =
+        output::ExportAudioHostMemoryV1{.freeBytes = 1U << 30, .usableBytes = 1U << 30};
+    refusal.serviceAllowance = 8192;
+    refusal.decodedSources = 1;
+    check(text().find("but that is more than is left of the memory allowed to running exports "
+                      "(8192 bytes) (1 audio source of this export were decoded") !=
+              std::string::npos,
+          "refusal text: the allowance shared by running exports: " + text());
+    refusal.status = Status::JobAllowanceExceeded;
+    refusal.allowance = 4096;
+    check(text().find("but that is more than is left of the export's memory allowance of 4096 "
+                      "bytes") != std::string::npos,
+          "refusal text: the export's own allowance: " + text());
+    refusal.status = Status::CapacityRefreshFailed;
+    check(text().find("but the free memory could not be measured") != std::string::npos,
+          "refusal text: an unmeasured capacity: " + text());
+}
+
+// #765: a generated 48 kHz 16-bit WAV whose sample at frame i and channel c is value(i, c).
+using GeneratedSample = std::function<std::int16_t(std::uint64_t, unsigned)>;
+media::provider::Bytes generatedWave(const std::uint32_t frames, const unsigned channels,
+                                     const GeneratedSample& value) {
+    media::provider::Bytes pcm;
+    const auto text = [&](std::string_view word) {
+        for (char c : word)
+            pcm.push_back(static_cast<std::byte>(c));
+    };
+    const auto number = [&](std::uint64_t v, unsigned width) {
+        for (unsigned i = 0; i < width; ++i)
+            pcm.push_back(static_cast<std::byte>((v >> (8U * i)) & 255U));
+    };
+    const std::uint64_t data = std::uint64_t{frames} * channels * 2U;
+    text("RIFF");
+    number(36 + data, 4);
+    text("WAVEfmt ");
+    number(16, 4);
+    number(1, 2);
+    number(channels, 2);
+    number(48000, 4);
+    number(48000ULL * channels * 2U, 4);
+    number(channels * 2U, 2);
+    number(16, 2);
+    text("data");
+    number(data, 4);
+    for (std::uint64_t i = 0; i < frames; ++i)
+        for (unsigned c = 0; c < channels; ++c)
+            number(static_cast<std::uint16_t>(value(i, c)), 2);
+    return pcm;
+}
+
+// #765: writes `count` generated WAVs beside the fixture, adds each as an audio asset and adds an
+// audio layer for each to the fixture's composition, in order. Returns the assets.
+std::vector<document::AssetId> addGeneratedAudioLayers(
+    Fixture& f, const std::filesystem::path& directory, const std::size_t count,
+    const std::function<std::uint32_t(std::size_t)>& frames, const unsigned channels,
+    const std::function<std::int16_t(std::size_t, std::uint64_t, unsigned)>& value) {
+    std::vector<document::AssetId> assets;
+    {
+        auto snapshot = f.doc.snapshot();
+        auto draft = f.doc.draft(snapshot);
+        for (std::size_t layer = 0; layer < count; ++layer) {
+            const auto pcm = generatedWave(frames(layer), channels, [&](auto frame, auto c) {
+                return value(layer, frame, c);
+            });
+            const auto name = "layer-" + std::to_string(layer) + ".wav";
+            const auto source = std::filesystem::absolute(directory / name);
+            {
+                std::ofstream file(source, std::ios::binary);
+                file.write(reinterpret_cast<const char*>(pcm.data()),
+                           static_cast<std::streamsize>(pcm.size()));
+                check(static_cast<bool>(file), "generated audio source");
+            }
+            const auto asset = need(draft.ids().allocateAsset());
+            document::AssetRecord record;
+            record.id = asset;
+            record.kind = document::AssetKind::Audio;
+            record.name = name;
+            record.locator.path = name;
+            record.locator.relinkHint = bloom::core::fileUriFromAbsolutePath(source).value();
+            record.contentDigest = media::provider::digestBytes(pcm);
+            record.rate = 48000;
+            record.channels = channels;
+            record.frames = frames(layer);
+            record.duration = need(core::RationalTime::create(frames(layer), 48000));
+            check(draft.project().addAsset(record), "generated audio asset");
+            assets.push_back(asset);
+        }
+        check(f.doc.commit(snapshot.revision(), std::move(draft)).committed(),
+              "generated audio asset commit");
     }
+    commands::CommandStack stack(f.doc);
+    for (const auto asset : assets) {
+        commands::Transaction transaction("Generated audio layer", f.doc.snapshot().revision());
+        transaction.emplace<commands::AddAudioLayer>(f.initial.initialCompositionId, asset);
+        const auto added = stack.execute(std::move(transaction));
+        check(added.changed(), "generated audio layer (status " +
+                                   std::to_string(static_cast<int>(added.status)) + ")");
+    }
+    return assets;
+}
+
+// #586 #765: a refused audio backing admission is reported as that refusal, naming the resource and
+// the amount. Under a processing root with 128 MiB of host memory the export's frames fit, one at a
+// time if they must; the first frame plays 64 sources of 32 channels whose decoded windows need
+// 144 MiB between them, more than the root has, so one of their claims is refused. The export fails
+// with the provider's Busy and the audio sentence, which the job reports as a resource refusal and
+// never as a full destination (the disk has room; nothing was written). Request slots are not the
+// limit: every source's claim shares the export's own processing phase.
+void testRefusedAudioBackingIsNotDiskFull(const std::filesystem::path& parent) {
+    const auto directory = parent / "audio-backing-refused";
+    std::filesystem::create_directories(directory);
+    Fixture f(directory);
+    (void)addGeneratedAudioLayers(
+        f, directory, 64, [](std::size_t) { return 2400U; }, 32,
+        [](std::size_t layer, std::uint64_t frame, unsigned c) {
+            return static_cast<std::int16_t>(static_cast<int>((frame + c + layer) % 7U) - 3);
+        });
+    constexpr std::uint64_t mib = 1024ULL * 1024;
+    auto policy = capacityPolicy(128 * mib);
+    auto provider = capacityProvider(f.scheduler, policy, nullptr);
     const auto path = directory / "audio-backing-refused.mov";
     auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
     request.gpuProvider = provider;
@@ -626,23 +750,149 @@ void testRefusedAudioBackingIsNotDiskFull(Fixture& f, const std::filesystem::pat
     const std::string detail = result.failure ? result.failure->detail : std::string();
     check(!result.published() && result.failure &&
               result.failure->reason == media::provider::Error::Busy &&
-              detail.find("Audio backing admission refused") != std::string::npos &&
+              detail.find("admission refused: audio asset ") != std::string::npos &&
               !std::filesystem::exists(path),
           "audio refusal: the export fails with the refused audio backing: " + detail + " / " +
               result.diagnostic);
+    check(detail.find(" bytes of memory for ") != std::string::npos &&
+              detail.find("there is not enough free memory: the processing memory has ") !=
+                  std::string::npos &&
+              detail.find(" of " + std::to_string(128 * mib) + " bytes free") != std::string::npos,
+          "audio refusal: the sentence names the bytes and the free memory: " + detail);
     if (result.failure) {
         const auto reported = host::classifyExportMediaFailure(result.failure->reason);
         const auto reason =
             host::exportMediaFailureReason(reported.code, detail, !result.diagnostic.empty());
         check(reported.code == host::ExportFailureCode::ResourceRefused &&
                   reason.find("ran out of space") == std::string::npos &&
-                  reason.find("Audio backing admission refused") != std::string::npos,
+                  reason.find("admission refused: audio asset ") != std::string::npos,
               "audio refusal: the job reports a resource refusal naming the audio backing, not a "
               "full destination: " +
                   reason);
     }
-    others.clear();
     check(provider->shutdownAndWait(std::chrono::seconds(3)), "audio refusal provider retires");
+}
+
+// #765: the fixture's own layer plays the reference ramp; each of 64 more layers plays its own
+// small pattern. Every sample is a multiple of 1/32768 well inside full scale, so the CPU
+// reference mix, the plain sum of every layer's samples, is exact in any order.
+constexpr std::size_t kManyAudioLayers = 64;
+constexpr std::uint32_t kShortLayerFrames = 12000; // 0.25 s: layers 0 to 31
+constexpr std::uint32_t kLongLayerFrames = 96000;  // 2 s, the composition: layers 32 to 63
+std::int16_t manyLayerSample(const std::size_t layer, const std::uint64_t frame, const unsigned c) {
+    return static_cast<std::int16_t>(
+        static_cast<int>((frame * (layer + 3) + c * 5U + layer) % 15U) - 7);
+}
+std::uint32_t manyLayerFrames(const std::size_t layer) {
+    return layer < kManyAudioLayers / 2 ? kShortLayerFrames : kLongLayerFrames;
+}
+float manyLayerReferenceMix(const std::uint64_t frame, const unsigned c) {
+    int sum = (static_cast<int>((frame + c) % 997) - 498) * 32;
+    for (std::size_t layer = 0; layer < kManyAudioLayers; ++layer)
+        if (frame < manyLayerFrames(layer))
+            sum += manyLayerSample(layer, frame, c);
+    return static_cast<float>(sum) / 32768.F;
+}
+
+void checkManyLayerMix(const host::SequenceExportResultV1& result,
+                       const std::filesystem::path& path, const std::uint64_t firstSample,
+                       const std::string& label) {
+    check(result.published(),
+          label + ": the export publishes: " + (result.failure ? result.failure->detail : "") +
+              " / " + result.diagnostic);
+    const auto qc = need(result.evidence);
+    const std::uint64_t samples = kLongLayerFrames - firstSample;
+    check(qc.audioSamples == samples, label + ": sample count");
+    media::video::VideoDecodeSession decoder(path);
+    const auto probe = need(decoder.probe());
+    const auto decoded = need(media::video::decodeAudioClip(decoder, probe, samples * 2));
+    check(decoded.frames == samples && decoded.channels == 2, label + ": published audio layout");
+    std::uint64_t differing = 0;
+    for (std::uint64_t i = 0; i < samples; ++i)
+        for (unsigned c = 0; c < 2; ++c)
+            if (decoded.planes[c][i] != manyLayerReferenceMix(firstSample + i, c))
+                ++differing;
+    check(differing == 0, label + ": every sample equals the CPU reference mix (" +
+                              std::to_string(differing) + " differ)");
+}
+
+// #765: an export of a composition with 65 audio layers. Every layer's source is decoded at once at
+// the start, which no longer takes a processing request slot per layer (the root has 32), so the
+// export completes and its mix equals the CPU reference mix sample for sample, under a processing
+// root and without one. A range that starts after the short layers end plays only the long ones,
+// and the export holds only the sources a block plays (exportAudioClipSoundsV1).
+void testManyAudioLayers(const std::filesystem::path& parent) {
+    const auto directory = parent / "many-audio-layers";
+    std::filesystem::create_directories(directory);
+    Fixture f(directory);
+    const auto assets =
+        addGeneratedAudioLayers(f, directory, kManyAudioLayers, manyLayerFrames, 2,
+                                [](std::size_t layer, std::uint64_t frame, unsigned c) {
+                                    return manyLayerSample(layer, frame, c);
+                                });
+
+    // What the mix plays: at the start every layer, from half a second on only the long ones.
+    const auto compiled =
+        f.compiler.compile({f.doc.snapshot(), f.initial.initialCompositionId}, {});
+    check(compiled.plan != nullptr, "many layers: plan compiles");
+    const auto playing = [&](const core::RationalTime from, const core::RationalTime to) {
+        const auto mix =
+            need(runtime::CpuCompositionEvaluator{}.evaluateAudioMix(compiled.plan, from, {}));
+        check(mix.clips.size() == kManyAudioLayers + 1, "many layers: every layer is in the mix");
+        std::vector<document::AssetId> sounding;
+        const auto snapshot = f.doc.snapshot();
+        for (const auto& clip : mix.clips)
+            if (output::exportAudioClipSoundsV1(clip, snapshot.project().findAsset(clip.assetId),
+                                                from, to, 48000))
+                sounding.push_back(clip.assetId);
+        return sounding;
+    };
+    const auto frameSpan = [](const std::int64_t frame) {
+        return std::pair{need(core::RationalTime::create(frame, 24)),
+                         need(core::RationalTime::create(frame + 1, 24))};
+    };
+    const auto [startFrom, startTo] = frameSpan(0);
+    check(playing(startFrom, startTo).size() == kManyAudioLayers + 1,
+          "many layers: the first frame plays every layer");
+    const auto [lateFrom, lateTo] = frameSpan(12);
+    const auto late = playing(lateFrom, lateTo);
+    check(late.size() == kManyAudioLayers / 2 + 1 &&
+              std::ranges::none_of(late,
+                                   [&](const auto asset) {
+                                       return std::ranges::find(
+                                                  assets.begin(),
+                                                  assets.begin() + kManyAudioLayers / 2,
+                                                  asset) != assets.begin() + kManyAudioLayers / 2;
+                                   }),
+          "many layers: after half a second only the long layers play");
+
+    constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
+    {
+        auto policy = capacityPolicy(2 * gib);
+        auto provider = capacityProvider(f.scheduler, policy, nullptr);
+        const auto path = directory / "many-layers-rooted.mov";
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        request.gpuProvider = provider;
+        checkManyLayerMix(f.run(std::move(request)), path, 0, "many layers under a root");
+        check(policy->snapshot().reservations.totalHostClaimBytes == 0,
+              "many layers: every audio claim retires with the export");
+        check(provider->shutdownAndWait(std::chrono::seconds(3)), "many layers provider retires");
+    }
+    {
+        const auto path = directory / "many-layers.mov";
+        checkManyLayerMix(f.run(f.request(path, output::OutputPresetV1::ProResMovV1)), path, 0,
+                          "many layers without a root");
+    }
+    {
+        auto policy = capacityPolicy(2 * gib);
+        auto provider = capacityProvider(f.scheduler, policy, nullptr);
+        const auto path = directory / "many-layers-late.mov";
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        request.gpuProvider = provider;
+        request.range.firstFrame = 12;
+        checkManyLayerMix(f.run(std::move(request)), path, 24000, "many layers from half a second");
+        check(provider->shutdownAndWait(std::chrono::seconds(3)), "late range provider retires");
+    }
 }
 
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
@@ -1357,7 +1607,8 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     check(refused.failure && refused.failure->reason == media::provider::Error::Oversized,
           "frame queue budget enforced");
     testCapacityWait(f, directory, nullptr);
-    testRefusedAudioBackingIsNotDiskFull(f, directory);
+    testRefusedAudioBackingIsNotDiskFull(directory);
+    testManyAudioLayers(directory);
     if (const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER"); loader && *loader)
         testCapacityWait(f, directory, loader);
     {
@@ -1436,6 +1687,7 @@ int main(int argc, char** argv) {
                        ? 77
                        : 0;
         }
+        testAudioAdmissionRefusalText();
         testRootedQueueAdmission();
         testRetentionOnlyCapacityWaitStalls();
         const auto outcome = tests(directory, requireDevice, proofDirectory);
