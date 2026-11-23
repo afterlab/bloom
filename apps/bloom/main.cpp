@@ -93,6 +93,7 @@
 #include <bloom/ui/window_status_bar.hpp>
 #include <bloom/ui/workspace_host.hpp>
 #include <bloom/update/configuration.hpp>
+#include <bloom/update/installer_activity.hpp>
 
 #include <QApplication>
 #include <QCoreApplication>
@@ -167,6 +168,9 @@ struct FinishCrashReporter final {
 
 int main(int argc, char* argv[]) try {
     // Before anything starts: no display, settings, profile or single-instance logic has run.
+    // The Windows installer starts Bloom with an argument of its own once it has installed it
+    // (#788); it is not one of Bloom's.
+    const bool startedByInstaller = bloom::update::takeStartedByInstallerArgument(argc, argv);
     const bool reportVersion = argc == 2 && std::string_view(argv[1]) == "--version";
     // `--update-settings` reports what this build was set up with for updates, for the package
     // check of a release (cmake/package/check_package.cmake, rule `release`).
@@ -186,6 +190,24 @@ int main(int argc, char* argv[]) try {
             WriteFile(out, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
 #else
         std::fwrite(text.data(), 1, text.size(), stdout);
+#endif
+        return 0;
+    }
+    // Bloom opened by hand while its installer runs (an update, #788) would be the version being
+    // replaced, holding the folder the installer keeps for going back. The installer's window
+    // says that Bloom is being updated and opens Bloom when it is done: it is shown, and this
+    // start ends before it writes or holds anything.
+    if (!startedByInstaller && bloom::update::installerRunning()) {
+        (void)bloom::update::showInstallerWindow();
+        const std::string_view text =
+            "Bloom is being updated. The installer opens Bloom when the update is done.\n";
+#if defined(_WIN32)
+        const HANDLE error = GetStdHandle(STD_ERROR_HANDLE);
+        DWORD written = 0;
+        if (error != nullptr && error != INVALID_HANDLE_VALUE)
+            WriteFile(error, text.data(), static_cast<DWORD>(text.size()), &written, nullptr);
+#else
+        std::fwrite(text.data(), 1, text.size(), stderr);
 #endif
         return 0;
     }
@@ -1333,7 +1355,7 @@ int main(int argc, char* argv[]) try {
     const bool installUpdateNow =
         updateService.environment().configuration.testBuild &&
         qEnvironmentVariableIsSet(bloom::ui::kUpdateTestInstallNowVariable) &&
-        !updateStartup.restoredFrom.has_value();
+        !updateStartup.restoredFrom.has_value() && !updateStartup.installFailed.has_value();
     QTimer::singleShot(
         0, &updateController,
         [&updateController, &appImageMenuOffer, updateStartup, installUpdateNow] {

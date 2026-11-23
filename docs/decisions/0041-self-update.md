@@ -204,7 +204,12 @@ Before the installation is replaced, the driver starts the helper in its watch m
   unsaved and nothing is running, because the installer needs Bloom gone and a close that stops
   to ask would leave it waiting. WinSparkle then starts the installer, which waits for Bloom to
   close and renames the installed folder to `<folder>.previous`; Bloom starts the helper with a
-  plan that names that folder, and closes.
+  plan that names that folder, and closes. The installer shows its progress window from Bloom's
+  close until it starts the new version, and never installs without the kept folder: when the
+  folder stays in use it installs nothing, and an install that installs nothing, fails or stops
+  puts the installed version back, leaves it a notice and starts it, which the helper's watch
+  sees as the installed version starting again. A Bloom opened by hand while the installer runs
+  shows the installer's window and ends at once (#788).
 
 The helper waits for Bloom to exit and then for the new version to confirm its start. It waits
 for the exit as long as Bloom runs, because the platform's updater installs whenever Bloom is

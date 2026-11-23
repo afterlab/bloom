@@ -40,6 +40,16 @@ struct PlatformUpdateHooks final {
     std::function<void()> requestClose;
 };
 
+// The two versions the platform's updater is given (#787). Its window names the installed
+// version as `displayed`, the version's label (0.1.0-alpha.4, the form of the About window and
+// the release names). It compares `compared`, the compact build version (0.1.0a4), with the
+// appcast's sparkle:version; the appcast's sparkle:shortVersionString is the new version's label.
+struct PlatformUpdaterVersions final {
+    std::string displayed;
+    std::string compared;
+};
+[[nodiscard]] PlatformUpdaterVersions platformUpdaterVersions();
+
 // Starts the update helper in its watch mode for `version`, which the platform's updater is
 // about to install: the helper waits for Bloom to exit and for that version to confirm its
 // start, and puts the kept previous version back when it does not (ADR 0041). False when the

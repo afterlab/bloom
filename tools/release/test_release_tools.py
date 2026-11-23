@@ -214,6 +214,77 @@ class VersionTests(unittest.TestCase):
             self.assertEqual(appcast.build_version(label), compact, label)
 
 
+class WindowsUpdateInstallerTests(unittest.TestCase):
+    """#788: what the Windows installer and Bloom agree on while an update installs."""
+
+    def setUp(self) -> None:
+        self.script = (ROOT / "packaging" / "windows" / "bloom.iss").read_text(encoding="utf-8")
+        self.header = (ROOT / "src" / "update" / "include" / "bloom" / "update" /
+                       "installer_activity.hpp").read_text(encoding="utf-8")
+
+    def define(self, name: str) -> str:
+        found = re.search(rf'^\s*#define {name} "([^"]*)"', self.script, re.MULTILINE)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def constant(self, name: str) -> str:
+        found = re.search(rf'{name} = L?"([^"]*)"', self.header)
+        self.assertIsNotNone(found, name)
+        return found.group(1)
+
+    def test_installer_arguments(self) -> None:
+        release = load("bloom_release_release", TOOLS / "release.py")
+        arguments = release.INSTALLER_ARGUMENTS.split()
+        # A visible progress window and nothing else: no question, no cancel, no close of a Bloom.
+        for wanted in ("/SILENT", "/SUPPRESSMSGBOXES", "/NOCANCEL", "/NORESTART",
+                       "/NOCLOSEAPPLICATIONS", "/RELAUNCH=1"):
+            self.assertIn(wanted, arguments)
+        self.assertNotIn("/VERYSILENT", arguments)
+
+    def test_bloom_and_the_installer_agree(self) -> None:
+        self.assertEqual(self.define("SetupMutexName"), self.constant("kWindowsSetupMutex"))
+        e2e = (TOOLS / "update_e2e.py").read_text(encoding="utf-8")
+        self.assertIn(f'SETUP_MUTEX = "{self.constant("kWindowsSetupMutex")}"', e2e)
+        self.assertIn("SetupMutex={#SetupMutexName}", self.script)
+        started = self.define("StartedByInstaller")
+        self.assertEqual(started, self.constant("kStartedByInstallerArgument"))
+        # Every start of Bloom by the installer carries the argument, or it would end at once.
+        runs = [line for line in self.script.splitlines()
+                if line.startswith('Filename: "{app}\\Bloom.exe"')]
+        self.assertEqual(len(runs), 2)
+        for line in runs:
+            self.assertIn('Parameters: "{#StartedByInstaller}"', line)
+        self.assertIn("Exec(Folder + '\\Bloom.exe', '{#StartedByInstaller}'", self.script)
+        # The window a Bloom opened during the install looks for.
+        self.assertEqual(self.define("AppName"), "Bloom")
+        self.assertIn("WizardForm.Caption := 'Updating {#AppName}'", self.script)
+        self.assertEqual(self.constant("kUpdatingWindowTitle"), "Updating Bloom")
+        self.assertEqual(self.constant("kSetupWindowTitle"), "Setup - Bloom")
+        # The notice of an update that was not installed.
+        self.assertIn(f"FailureNoticeName = '{self.constant('kInstallFailureNoticeName')}'",
+                      self.script)
+
+    def test_an_update_never_installs_without_the_kept_version(self) -> None:
+        prepare = self.script[self.script.index("function PrepareToInstall"):]
+        prepare = prepare[:prepare.index("\nend;\n") + 6]
+        # In an update a folder that cannot be renamed stops the install before anything is
+        # copied; only an install without /RELAUNCH=1 goes on over the folder.
+        update_branch = prepare.index("if RelaunchRequested() then\n      begin")
+        self.assertLess(update_branch, prepare.index("installing over it"))
+        self.assertIn("Result := '{#AppName} was not updated: '", prepare)
+        self.assertIn("KeptAside := True;", prepare)
+        # A stopped update puts the kept version back, tells it and starts it.
+        deinit = self.script[self.script.index("procedure DeinitializeSetup"):]
+        for step in ("RenameFile(KeptFolder, Folder)", "SaveStringToFile(Folder + '\\' + "
+                     "FailureNoticeName", "Exec(Folder + '\\Bloom.exe'"):
+            self.assertIn(step, deinit)
+        # The program is installed after the files beside it and before the folders.
+        files = self.script[self.script.index("[Files]"):self.script.index("[Icons]")]
+        self.assertLess(files.index('Excludes: "\\Bloom.exe"'),
+                        files.index('Source: "{#SourceDir}\\Bloom.exe"'))
+        self.assertLess(files.index('Source: "{#SourceDir}\\Bloom.exe"'), files.index("#sub AddFolder"))
+
+
 class AppcastTests(unittest.TestCase):
     def test_notes_to_html(self) -> None:
         text = appcast.notes_to_html(changelog.section(GOOD, VERSION))
@@ -230,6 +301,44 @@ class AppcastTests(unittest.TestCase):
         ET.fromstring("<body>" + text + "</body>")
         self.assertIn("&lt;script&gt;", appcast.notes_to_html("- <script>alert(1)</script>"))
         self.assertNotIn("<a ", appcast.notes_to_html("[x](javascript:alert(1))"))
+
+    def test_notes_document(self) -> None:
+        """#787: the notes' page states its colors and a sans-serif system font, on the page and
+        on its body, and its content is the notes unchanged."""
+        notes = changelog.section(GOOD, VERSION)
+        page = appcast.notes_document(notes)
+        self.assertTrue(page.startswith("<!DOCTYPE html>"))
+        style = re.search(r"<style>(.*)</style>", page).group(1)
+        self.assertIn("color-scheme: light", style)
+        self.assertIn("background: #ffffff", style)
+        self.assertIn("color: #1f1f1f", style)
+        for font in ('"Segoe UI"', "-apple-system", "sans-serif"):
+            self.assertIn(font, style)
+        self.assertRegex(style, r"font-family: [^;]*sans-serif;")
+        self.assertRegex(style, r"code \{[^}]*background: #f0f0f0; color: #1f1f1f;")
+        self.assertRegex(style, r"a \{ color: #[0-9a-f]{6}; \}")
+        body = re.search(r'<body style="([^"]*)">\n(.*)\n</body></html>$', page, re.S)
+        self.assertIsNotNone(body)
+        self.assertIn("background: #ffffff;", body.group(1))
+        self.assertIn("color: #1f1f1f;", body.group(1))
+        self.assertIn("'Segoe UI'", body.group(1))
+        self.assertIn("sans-serif", body.group(1))
+        # The notes themselves are what notes_to_html makes, unchanged.
+        self.assertEqual(body.group(2), appcast.notes_to_html(notes))
+        # Dark text on a light background: the contrast ratio of the stated pair is high.
+        def luminance(color: str) -> float:
+            channels = [int(color[i:i + 2], 16) / 255 for i in (1, 3, 5)]
+            linear = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+                      for c in channels]
+            return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+        ratio = ((luminance(appcast.NOTES_BACKGROUND) + 0.05) /
+                 (luminance(appcast.NOTES_TEXT) + 0.05))
+        self.assertGreater(ratio, 7.0)
+        # The appcast's description is this page.
+        text = appcast.appcast_text("windows", VERSION, DATE, notes, 1, "x",
+                                    "https://example.invalid/a")
+        item = ET.fromstring(text).find("./channel/item")
+        self.assertEqual(item.findtext("description"), page)
 
     def test_date(self) -> None:
         self.assertEqual(appcast.rfc822("2026-11-17"), "Tue, 17 Nov 2026 00:00:00 +0000")
@@ -408,7 +517,8 @@ class ChainTests(unittest.TestCase):
             self.assertEqual(item.findtext("pubDate"), "Tue, 17 Nov 2026 00:00:00 +0000")
             self.assertEqual(item.findtext(SPARKLE + "version"), "0.1.0a1")
             self.assertEqual(item.findtext(SPARKLE + "shortVersionString"), VERSION)
-            self.assertEqual(item.findtext("description"), html_notes)
+            self.assertEqual(item.findtext("description"), appcast.notes_document(notes))
+            self.assertIn(html_notes, item.findtext("description"))
             enclosure = item.find("enclosure")
             self.assertEqual(enclosure.get("url"), self.base + name)
             self.assertEqual(enclosure.get("length"), str(len(data)))

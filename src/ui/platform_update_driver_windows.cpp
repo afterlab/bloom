@@ -14,7 +14,6 @@
 
 #include <bloom/ui/platform_update_driver.hpp>
 
-#include <bloom/core/version.hpp>
 #include <bloom/ui/update_service.hpp>
 
 #include <QByteArray>
@@ -51,6 +50,7 @@ struct WinSparkleFunctions final {
     void(__cdecl* setAppcastUrl)(const char*) = nullptr;
     int(__cdecl* setEddsaPublicKey)(const char*) = nullptr;
     void(__cdecl* setAppDetails)(const wchar_t*, const wchar_t*, const wchar_t*) = nullptr;
+    void(__cdecl* setAppBuildVersion)(const wchar_t*) = nullptr;
     void(__cdecl* setRegistryPath)(const char*) = nullptr;
     void(__cdecl* setAutomaticCheck)(int) = nullptr;
     void(__cdecl* setCanShutdownCallback)(CanShutdownCallback) = nullptr;
@@ -83,6 +83,7 @@ template <typename Function>
            resolve(library, "win_sparkle_set_appcast_url", functions.setAppcastUrl) &&
            resolve(library, "win_sparkle_set_eddsa_public_key", functions.setEddsaPublicKey) &&
            resolve(library, "win_sparkle_set_app_details", functions.setAppDetails) &&
+           resolve(library, "win_sparkle_set_app_build_version", functions.setAppBuildVersion) &&
            resolve(library, "win_sparkle_set_registry_path", functions.setRegistryPath) &&
            resolve(library, "win_sparkle_set_automatic_check_for_updates",
                    functions.setAutomaticCheck) &&
@@ -228,13 +229,14 @@ class WinSparkleDriver final : public PlatformUpdateDriver {
                                       .toLocal8Bit();
         functions_.setLanguage("en");
         functions_.setAppcastUrl(appcastUrl.c_str());
-        // The update list gives versions in the compact form, which is what is compared.
+        // The window names the installed version by its label (0.1.0-alpha.4); the update list's
+        // sparkle:version is the compact form, which is what is compared (#787). With a build
+        // version set, WinSparkle compares it and shows the details' version.
+        const auto versions = platformUpdaterVersions();
         functions_.setAppDetails(company.toStdWString().c_str(), name.toStdWString().c_str(),
-                                 QString::fromUtf8(core::buildVersion().data(),
-                                                   static_cast<qsizetype>(
-                                                       core::buildVersion().size()))
-                                     .toStdWString()
-                                     .c_str());
+                                 QString::fromStdString(versions.displayed).toStdWString().c_str());
+        functions_.setAppBuildVersion(
+            QString::fromStdString(versions.compared).toStdWString().c_str());
         functions_.setRegistryPath(registryPath.constData());
         if (functions_.setEddsaPublicKey(key.constData()) != 1) {
             qWarning() << "The platform updater refused the update key; no update is shown.";

@@ -2,6 +2,7 @@
 
 #include <bloom/update/apply.hpp>
 #include <bloom/update/install_kind.hpp>
+#include <bloom/update/installer_activity.hpp>
 
 #include <cstdint>
 #include <filesystem>
@@ -86,6 +87,8 @@ writePlanAndHelper(const ApplyPlan& plan, const std::filesystem::path& installed
 struct StartupResult final {
     // The version of an update that could not start, when this version was put back for it.
     std::optional<std::string> restoredFrom;
+    // The update the Windows installer could not install, when it put this version back (#788).
+    std::optional<InstallFailure> installFailed;
     bool finishPlan = false;
 };
 [[nodiscard]] StartupResult settleAtStartup(const UpdateFolders& folders,

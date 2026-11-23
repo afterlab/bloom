@@ -68,7 +68,8 @@ set(test_extension ".bloomcheck${name_code}")
 set(test_prog_id "BloomPackageCheck${name_code}.Project")
 set(test_path_value "BloomPackageCheckPath${name_code}")
 set(defines "AppId={${test_id}" "AppName=${test_name}" "ProjectExtension=${test_extension}"
-            "ProjectProgId=${test_prog_id}" "PathValueName=${test_path_value}")
+            "ProjectProgId=${test_prog_id}" "PathValueName=${test_path_value}"
+            "SetupMutexName=BloomPackageCheckSetup${name_code}")
 set(upgrade_version "9.9.9")
 
 set(uninstall_key

@@ -7,13 +7,24 @@
 ;   Interactive           Bloom-<version>-windows-x86_64-setup.exe
 ;   Silent, deployment    Bloom-<version>-windows-x86_64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES
 ;                             /NORESTART [/DIR="<folder>"] [/TASKS="addtopath"]
-;   Silent upgrade, as    Bloom-<version>-windows-x86_64-setup.exe /VERYSILENT /SUPPRESSMSGBOXES
-;   Bloom's updater runs      /NORESTART /RELAUNCH=1
-;   it
+;   Upgrade, as Bloom's   Bloom-<version>-windows-x86_64-setup.exe /SILENT /SUPPRESSMSGBOXES
+;   updater runs it           /NOCANCEL /NORESTART /NOCLOSEAPPLICATIONS /RELAUNCH=1
+;   (tools/release/release.py, INSTALLER_ARGUMENTS)
 ;   Silent uninstall      <install folder>\unins000.exe /VERYSILENT /SUPPRESSMSGBOXES /NORESTART
 ;
 ; /RELAUNCH=1 starts Bloom again after a silent install. Without it a silent install starts
 ; nothing. An interactive install offers to start Bloom on its last page.
+;
+; An update (/RELAUNCH=1, #788) shows only its progress window, titled "Updating Bloom", from the
+; moment Bloom closes until the new version opens, and asks nothing (/SILENT, /SUPPRESSMSGBOXES,
+; /NOCANCEL). It never installs without keeping the version it replaces (PrepareToInstall), never
+; closes a Bloom (/NOCLOSEAPPLICATIONS), and when it cannot finish it puts that version back,
+; leaves it a notice and starts it (DeinitializeSetup).
+;
+; While any run of this installer goes on it holds the mutex SetupMutexName. A Bloom opened by
+; hand meanwhile shows this installer's window and ends at once (apps/bloom/main.cpp,
+; src/update/installer_activity.cpp), so it neither runs the version being replaced nor holds
+; its folder. The installer starts Bloom with StartedByInstaller, the one start that goes on.
 ;
 ; The installer never asks for administrator rights: it installs for the current user only.
 ;
@@ -29,7 +40,7 @@
 ;
 ; Only the package check's own test changes these, so that it never touches an installed Bloom:
 ;
-;   AppId  AppName  ProjectExtension  ProjectProgId  PathValueName
+;   AppId  AppName  ProjectExtension  ProjectProgId  PathValueName  SetupMutexName
 
 #ifndef AppVersion
   #define AppVersion "0.1.0-alpha.1"
@@ -69,6 +80,14 @@
   #define PathValueName "Path"
 #endif
 
+; The mutex this installer holds while it runs, and the argument it starts Bloom with. Bloom's own
+; copies of both are in src/update/include/bloom/update/installer_activity.hpp
+; (kWindowsSetupMutex, kStartedByInstallerArgument); tools/release checks that they agree.
+#ifndef SetupMutexName
+  #define SetupMutexName "AfterlabBloomSetup"
+#endif
+#define StartedByInstaller "--started-by-installer"
+
 #define PictureDir RepositoryDir + "\apps\bloom\installer\windows"
 
 [Setup]
@@ -102,12 +121,30 @@ ChangesAssociations=yes
 ChangesEnvironment=yes
 CloseApplications=yes
 RestartApplications=no
+SetupMutex={#SetupMutexName}
 VersionInfoVersion={#NumericVersion}
 OutputDir={#OutputDir}
 OutputBaseFilename={#OutputBaseFilename}
 
+; The files beside the program first, then the program, then the folders. A Bloom.exe that is
+; opened while an update installs then always finds the libraries it starts with, and ends at once
+; (see the top of this file). The folders are listed one entry each when the script is compiled.
 [Files]
-Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
+Source: "{#SourceDir}\*"; Excludes: "\Bloom.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceDir}\Bloom.exe"; DestDir: "{app}"; Flags: ignoreversion
+#define FindHandle
+#define FindResult
+#define FolderName
+#sub AddFolder
+  #define FolderName FindGetFileName(FindHandle)
+  #if FolderName != "." && FolderName != ".." && DirExists(SourceDir + "\" + FolderName)
+Source: "{#SourceDir}\{#FolderName}\*"; DestDir: "{app}\{#FolderName}"; Flags: recursesubdirs createallsubdirs ignoreversion skipifsourcedoesntexist
+  #endif
+#endsub
+#for {FindHandle = FindResult = FindFirst(SourceDir + "\*", faDirectory); FindResult; FindResult = FindNext(FindHandle)} AddFolder
+#if FindHandle
+  #call FindClose(FindHandle)
+#endif
 
 [Icons]
 Name: "{autoprograms}\{#AppName}"; Filename: "{app}\Bloom.exe"
@@ -140,18 +177,57 @@ Type: filesandordirs; Name: "{app}.previous"
 
 [Run]
 ; After an interactive install: the usual checkbox on the last page.
-Filename: "{app}\Bloom.exe"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\Bloom.exe"; Parameters: "{#StartedByInstaller}"; Description: "{cm:LaunchProgram,{#AppName}}"; Flags: nowait postinstall skipifsilent
 ; After a silent install: only when the command line has /RELAUNCH=1 (Bloom's updater passes it).
-Filename: "{app}\Bloom.exe"; Flags: nowait postinstall skipifnotsilent; Check: RelaunchRequested
+Filename: "{app}\Bloom.exe"; Parameters: "{#StartedByInstaller}"; Flags: nowait postinstall skipifnotsilent; Check: RelaunchRequested
 
 [Code]
 const
   EnvironmentKey = 'Environment';
   PathValue = '{#PathValueName}';
+  // The notice an update that could not be installed leaves for the version put back
+  // (src/update/installer_activity.hpp, kInstallFailureNoticeName).
+  FailureNoticeName = 'update-failed';
+
+var
+  // The installed folder and the name its version is kept under, once PrepareToInstall knows them.
+  InstalledFolder, KeptFolder: String;
+  // The installed folder was renamed to KeptFolder.
+  KeptAside: Boolean;
+  // Every file is installed (ssPostInstall).
+  InstallDone: Boolean;
+  // Why an update did not install, in words for the artist; empty when nothing is known.
+  FailureReason: String;
 
 function RelaunchRequested(): Boolean;
 begin
   Result := ExpandConstant('{param:RELAUNCH|0}') = '1';
+end;
+
+// An update's window says what happens, from the moment Bloom closes until it opens again (#788).
+// Its title is the one a Bloom opened meanwhile looks for (installer_activity.hpp).
+procedure InitializeWizard();
+begin
+  if RelaunchRequested() then
+    WizardForm.Caption := 'Updating {#AppName}';
+end;
+
+procedure CurPageChanged(CurPageID: Integer);
+begin
+  if not RelaunchRequested() then
+    Exit;
+  if CurPageID = wpPreparing then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Updating {#AppName}';
+    WizardForm.PageDescriptionLabel.Caption :=
+      '{#AppName} is closing so that it can be updated to {#AppVersion}. It opens again by itself when the update is done.';
+  end
+  else if CurPageID = wpInstalling then
+  begin
+    WizardForm.PageNameLabel.Caption := 'Updating {#AppName}';
+    WizardForm.PageDescriptionLabel.Caption :=
+      'Installing {#AppName} {#AppVersion}. {#AppName} opens again by itself when it is done.';
+  end;
 end;
 
 // The folder the PATH option puts into the user's PATH.
@@ -249,44 +325,112 @@ begin
 end;
 
 // An upgrade keeps the version it replaces beside the new one, as <folder>.previous, so that
-// Bloom's updater can put it back when the new version does not start (ADR 0041). When the
-// folder cannot be renamed (a file in it is in use) the upgrade goes on over the existing
-// folder and no previous version is kept.
+// Bloom's updater can put it back when the new version does not start (ADR 0041).
 //
 // Bloom's updater starts this installer and then closes Bloom (/RELAUNCH=1), so the folder is
 // still in use for a moment. In that run the rename is tried again for up to a minute, until
-// Bloom has gone.
+// Bloom has gone; a Bloom opened meanwhile ends at once (see the top of this file). An update
+// never goes on without the kept version (#788): when the folder still cannot be renamed, it
+// installs nothing, and DeinitializeSetup starts the version that is there and says why.
+//
+// An install the artist or a deployment started goes on over the existing folder when it cannot
+// be renamed (a file in it is in use), and keeps no previous version.
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
-  Folder, Previous: String;
   Tries: Integer;
 begin
   Result := '';
-  Folder := RemoveBackslash(ExpandConstant('{app}'));
-  if not FileExists(Folder + '\Bloom.exe') then
+  InstalledFolder := RemoveBackslash(ExpandConstant('{app}'));
+  KeptFolder := InstalledFolder + '.previous';
+  if not FileExists(InstalledFolder + '\Bloom.exe') then
     Exit;
-  Previous := Folder + '.previous';
-  if DirExists(Previous) then
-    DelTree(Previous, True, True, True);
+  if DirExists(KeptFolder) then
+    DelTree(KeptFolder, True, True, True);
   Tries := 1;
   if RelaunchRequested() then
     Tries := 120;
-  while not RenameFile(Folder, Previous) do
+  while not RenameFile(InstalledFolder, KeptFolder) do
   begin
     Tries := Tries - 1;
     if Tries <= 0 then
     begin
+      if RelaunchRequested() then
+      begin
+        FailureReason := 'Another program kept its folder in use, so the update could not keep ' +
+          'the version you had for going back.';
+        Log('The installed folder could not be renamed; the update installs nothing.');
+        Result := '{#AppName} was not updated: ' + FailureReason;
+        Exit;
+      end;
       Log('The installed folder could not be renamed; installing over it.');
       Exit;
     end;
     Sleep(500);
   end;
+  KeptAside := True;
+end;
+
+// The folder the installer installs into, or '' before it is known.
+function InstallFolder(): String;
+begin
+  Result := InstalledFolder;
+  if Result = '' then
+  begin
+    try
+      Result := RemoveBackslash(ExpandConstant('{app}'));
+    except
+      Result := '';
+    end;
+  end;
+end;
+
+// An update that did not install (it failed, or stopped): the version that was there is put back
+// in its place, is told what happened (src/update/installer_activity.hpp) and is started, so the
+// artist has a working Bloom again (#788). The update helper's watch, which Bloom started before
+// it closed, sees that version start and ends.
+procedure DeinitializeSetup();
+var
+  Folder, Reason: String;
+  ResultCode: Integer;
+begin
+  if (not RelaunchRequested()) or InstallDone then
+    Exit;
+  Folder := InstallFolder();
+  if Folder = '' then
+  begin
+    Log('The update stopped before its folder was known; nothing to start.');
+    Exit;
+  end;
+  if KeptAside then
+  begin
+    // What the stopped install left in the folder goes, and the kept version comes back.
+    if DirExists(Folder) then
+      DelTree(Folder, True, True, True);
+    if not RenameFile(KeptFolder, Folder) then
+    begin
+      // The update helper puts the kept version back when no version confirms its start.
+      Log('The kept version could not be put back; the update helper restores it.');
+      Exit;
+    end;
+  end;
+  if not FileExists(Folder + '\Bloom.exe') then
+    Exit;
+  Reason := FailureReason;
+  if Reason = '' then
+    Reason := 'The installer stopped before the update was installed.';
+  if not SaveStringToFile(Folder + '\' + FailureNoticeName,
+                          'version={#AppVersion}' + #13#10 + 'reason=' + Reason + #13#10, False) then
+    Log('Could not write the notice of the update that was not installed.');
+  if not Exec(Folder + '\Bloom.exe', '{#StartedByInstaller}', Folder, SW_SHOWNORMAL, ewNoWait,
+              ResultCode) then
+    Log('Could not start the version that was put back.');
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 begin
   if CurStep = ssPostInstall then
   begin
+    InstallDone := True;
     // The mark of a copy this installer installed (src/update/install_kind.cpp).
     if not SaveStringToFile(ExpandConstant('{app}\install-kind'), 'kind=windows-installer' + #10, False) then
       Log('Could not write the install-kind file.');
