@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bloom/color/bloom_neutral_builtin.hpp>
 #include <bloom/color/ocio_builtin_registry.hpp>
 #include <bloom/commands/animation_operations.hpp>
@@ -43,6 +44,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -895,6 +897,157 @@ void testManyAudioLayers(const std::filesystem::path& parent) {
     }
 }
 
+// #770: a generated 44.1 kHz mono WAV of IEEE float samples, so any decoded sample round-trips.
+media::provider::Bytes floatWave(const std::vector<float>& samples) {
+    media::provider::Bytes wave;
+    const auto text = [&](std::string_view word) {
+        for (char c : word)
+            wave.push_back(static_cast<std::byte>(c));
+    };
+    const auto number = [&](std::uint64_t v, unsigned width) {
+        for (unsigned i = 0; i < width; ++i)
+            wave.push_back(static_cast<std::byte>((v >> (8U * i)) & 255U));
+    };
+    const std::uint64_t data = samples.size() * sizeof(float);
+    text("RIFF");
+    number(36 + data, 4);
+    text("WAVEfmt ");
+    number(16, 4);
+    number(3, 2); // WAVE_FORMAT_IEEE_FLOAT
+    number(1, 2);
+    number(44100, 4);
+    number(44100ULL * sizeof(float), 4);
+    number(sizeof(float), 2);
+    number(32, 2);
+    text("data");
+    number(data, 4);
+    for (const float sample : samples)
+        number(std::bit_cast<std::uint32_t>(sample), 4);
+    return wave;
+}
+
+// #770: an MP3 as a text-to-speech service writes it (44.1 kHz mono VBR, an ID3v2 tag, a Xing
+// header declaring the encoder delay) plays in a movie export. Before the fix its audio stream
+// stopped decoding at the first block and the export failed. The export's mix equals, sample for
+// sample, the export of the same composition whose layer plays the MP3's decoded samples from a
+// float WAV (the same mixer and resampler, both published as 24-bit PCM), so the MP3 reached the
+// mix whole; it is audible while it plays and silent after it ends.
+void testMp3AudioLayer(const std::filesystem::path& parent) {
+    const auto directory = parent / "mp3-audio-layer";
+    std::filesystem::create_directories(directory);
+    const auto mp3 = directory / "tagged-vbr-mono.mp3";
+    std::filesystem::copy_file(std::filesystem::path{BLOOM_AUDIO_FIXTURE_DIR} /
+                                   "tagged-vbr-mono.mp3",
+                               mp3, std::filesystem::copy_options::overwrite_existing);
+    const auto readBytes = [](const std::filesystem::path& path) {
+        std::ifstream in(path, std::ios::binary);
+        const std::vector<char> chars((std::istreambuf_iterator<char>(in)),
+                                      std::istreambuf_iterator<char>());
+        media::provider::Bytes bytes(chars.size());
+        std::ranges::transform(chars, bytes.begin(),
+                               [](const char c) { return static_cast<std::byte>(c); });
+        return bytes;
+    };
+    // Exports the fixture's composition (the reference ramp) with one more layer playing `source`.
+    const auto exportWith = [&](const std::filesystem::path& source, const std::string& label) {
+        const auto run = directory / label;
+        std::filesystem::create_directories(run);
+        Fixture f(run);
+        {
+            auto snapshot = f.doc.snapshot();
+            auto draft = f.doc.draft(snapshot);
+            const auto asset = need(draft.ids().allocateAsset());
+            document::AssetRecord record;
+            record.id = asset;
+            record.kind = document::AssetKind::Audio;
+            record.name = source.filename().string();
+            record.locator.path = source.filename().string();
+            record.locator.relinkHint =
+                bloom::core::fileUriFromAbsolutePath(std::filesystem::absolute(source)).value();
+            record.contentDigest = media::provider::digestBytes(readBytes(source));
+            record.rate = 44100;
+            record.channels = 1;
+            record.frames = 66150;
+            record.duration = need(core::RationalTime::create(66150, 44100));
+            check(draft.project().addAsset(record), label + ": audio asset");
+            check(f.doc.commit(snapshot.revision(), std::move(draft)).committed(),
+                  label + ": audio asset commit");
+            commands::CommandStack stack(f.doc);
+            commands::Transaction transaction("MP3 layer", f.doc.snapshot().revision());
+            transaction.emplace<commands::AddAudioLayer>(f.initial.initialCompositionId, asset);
+            check(stack.execute(std::move(transaction)).changed(), label + ": audio layer");
+        }
+        const auto path = run / "export.mov";
+        auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
+        // A movie carries 16-bit PCM unless a source is deeper; the float WAV is, the MP3 is not.
+        // Both mixes publish at 24 bits so they compare sample for sample.
+        request.pcmCodec = "pcm_s24le";
+        const auto result = f.run(std::move(request));
+        check(result.published(),
+              label + ": the export publishes: " + (result.failure ? result.failure->detail : "") +
+                  " / " + result.diagnostic);
+        check(result.evidence && result.evidence->audioSamples == 96000, label + ": sample count");
+        media::video::VideoDecodeSession decoder(path);
+        const auto probe = need(decoder.probe());
+        auto decoded = need(media::video::decodeAudioClip(decoder, probe, 96000U * 2U));
+        check(decoded.frames == 96000 && decoded.channels == 2, label + ": published audio layout");
+        return decoded.planes;
+    };
+    const auto fromMp3 = exportWith(mp3, "from-mp3");
+    std::vector<float> decodedMp3;
+    {
+        media::video::VideoDecodeSession session(mp3);
+        const auto probe = need(session.probe());
+        const auto clip = need(media::video::decodeAudioClip(session, probe, 1U << 20U));
+        check(clip.rate == 44100 && clip.channels == 1 && clip.frames == 66150,
+              "mp3 layer: the worker decodes all 66150 frames of the 44.1 kHz mono MP3");
+        decodedMp3 = clip.planes.front();
+    }
+    const auto wav = directory / "decoded-mp3.wav";
+    {
+        const auto bytes = floatWave(decodedMp3);
+        std::ofstream file(wav, std::ios::binary);
+        file.write(reinterpret_cast<const char*>(bytes.data()),
+                   static_cast<std::streamsize>(bytes.size()));
+        check(static_cast<bool>(file), "mp3 layer: decoded WAV written");
+    }
+    const auto fromWav = exportWith(wav, "from-wav");
+    {
+        std::size_t differing = 0;
+        std::size_t first = 96000;
+        double widest = 0.0;
+        for (unsigned c = 0; c < 2; ++c)
+            for (std::size_t i = 0; i < 96000; ++i)
+                if (fromMp3[c][i] != fromWav[c][i]) {
+                    ++differing;
+                    first = std::min(first, i);
+                    widest = std::max(widest,
+                                      static_cast<double>(std::abs(fromMp3[c][i] - fromWav[c][i])));
+                }
+        check(differing == 0,
+              "mp3 layer: the export's mix equals the mix of the MP3's decoded samples (" +
+                  std::to_string(differing) + " differ, first at " + std::to_string(first) +
+                  ", widest " + std::to_string(widest) + ")");
+    }
+    // The reference ramp alone, as verify() reads it; the MP3 is 1.5 s of a 2 s composition.
+    const auto ramp = [](const std::size_t i, const unsigned c) {
+        return static_cast<float>(static_cast<int>((i + c) % 997) - 498) / 1024.F;
+    };
+    std::size_t audible = 0;
+    std::size_t afterEnd = 0;
+    for (std::size_t i = 0; i < 96000; ++i) {
+        const bool differs = fromMp3[0][i] != ramp(i, 0) || fromMp3[1][i] != ramp(i, 1);
+        if (i < 72000 && differs)
+            ++audible;
+        if (i >= 76800 && differs)
+            ++afterEnd;
+    }
+    check(audible > 60000, "mp3 layer: the MP3 is heard while it plays (" +
+                               std::to_string(audible) + " of 72000 frames)");
+    check(afterEnd == 0, "mp3 layer: nothing plays after the MP3 ends (" +
+                             std::to_string(afterEnd) + " frames differ from the ramp)");
+}
+
 void verify(const host::SequenceExportResultV1& r, const std::filesystem::path& path, bool video) {
     check(r.published(), r.failure ? r.failure->detail : "composition was not published");
     const auto qc = need(r.evidence);
@@ -1609,6 +1762,7 @@ GpuProofOutcome tests(const std::filesystem::path& directory, const bool require
     testCapacityWait(f, directory, nullptr);
     testRefusedAudioBackingIsNotDiskFull(directory);
     testManyAudioLayers(directory);
+    testMp3AudioLayer(directory);
     if (const char* loader = std::getenv("BLOOM_TEST_VULKAN_LOADER"); loader && *loader)
         testCapacityWait(f, directory, loader);
     {
