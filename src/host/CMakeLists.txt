@@ -414,6 +414,9 @@ if(BUILD_TESTING)
             "${PROJECT_SOURCE_DIR}/src/runtime/include" "${PROJECT_SOURCE_DIR}/src/core/include"
             "${PROJECT_SOURCE_DIR}/src/document/include" "${PROJECT_SOURCE_DIR}/src/render/include")
         add_dependencies(bloom_host_sequence_export_runner_test bloom-media-worker)
+        # #770: the committed MP3 fixture (no MP3 encoder is a build dependency).
+        target_compile_definitions(bloom_host_sequence_export_runner_test PRIVATE
+            BLOOM_AUDIO_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/src/media/audio/tests/fixtures")
         # The GPU video proof prepares the export's display/view through the packaged shader tools,
         # exactly as the application and headless roots do.
         bloom_package_gpu_shader_tools(bloom_host_sequence_export_runner_test)

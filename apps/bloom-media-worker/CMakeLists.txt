@@ -97,13 +97,15 @@ if(bloom_ffmpeg_worker)
     # #752: embedded subtitle tracks (ASS text for FFmpeg's encoders, the reopened tracks, the MOV
     # text track's enabled flag), for the reopen check of both provider builds. #761: the written
     # streams' facts (codec, profile, size, rate, channels, bit rate) for the same reopen.
+    # #771: the loudness and true peak of the written sound, for the same reopen.
     add_library(bloom_media_ffmpeg_subtitle_tracks STATIC ffmpeg_subtitle_tracks.cpp
-                ffmpeg_written_streams.cpp)
+                ffmpeg_written_streams.cpp ffmpeg_audio_loudness.cpp)
     target_include_directories(bloom_media_ffmpeg_subtitle_tracks
                                PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
     target_compile_features(bloom_media_ffmpeg_subtitle_tracks PUBLIC cxx_std_20)
     target_link_libraries(bloom_media_ffmpeg_subtitle_tracks
-                          PUBLIC bloom_media_provider FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil)
+                          PUBLIC bloom_media_provider FFmpeg::avformat FFmpeg::avcodec FFmpeg::avutil
+                          PRIVATE bloom_media_loudness)
     bloom_enable_warnings(bloom_media_ffmpeg_subtitle_tracks)
     add_library(bloom_media_ffmpeg_worker_provider STATIC ffmpeg_provider.cpp)
     target_link_libraries(bloom_media_ffmpeg_worker_provider PRIVATE bloom_media_provider bloom_platform_process
@@ -431,6 +433,21 @@ if(BLOOM_MEDIA_FIXTURE_TESTS)
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" LABELS unit media TIMEOUT 60)
     set_tests_properties(bloom.media.aac-sync PROPERTIES FIXTURES_REQUIRED media-encode
                          SKIP_RETURN_CODE 77)
+    # Issue #770: a tagged VBR MP3 (ID3v2, Xing header with encoder delay) decodes completely
+    # through the worker, against FFmpeg read directly. The fixture is committed (no MP3 encoder
+    # is a build dependency), so it runs on every platform.
+    add_executable(bloom_media_mp3_audio_test
+                   "${PROJECT_SOURCE_DIR}/src/media/video/tests/mp3_audio_tests.cpp")
+    target_link_libraries(bloom_media_mp3_audio_test PRIVATE bloom_media_video FFmpeg::avformat
+                          FFmpeg::avcodec FFmpeg::avutil)
+    target_compile_definitions(bloom_media_mp3_audio_test PRIVATE
+        BLOOM_AUDIO_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/src/media/audio/tests/fixtures")
+    set_target_properties(bloom_media_mp3_audio_test PROPERTIES
+                          BUILD_RPATH "${CMAKE_CURRENT_BINARY_DIR}/lib")
+    bloom_enable_warnings(bloom_media_mp3_audio_test)
+    add_dependencies(bloom_media_mp3_audio_test bloom-media-worker)
+    bloom_add_test(NAME bloom.media.mp3-audio COMMAND bloom_media_mp3_audio_test
+                   LABELS unit media audio TIMEOUT 60)
     # NVIDIA NVENC needs the device: hold the machine GPU lock. Skipped (77) without a driver.
     bloom_add_test(NAME bloom.media.encode-nvenc COMMAND bloom_media_encode_test
                    "${CMAKE_CURRENT_BINARY_DIR}/encode-fixtures" --nvenc

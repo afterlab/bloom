@@ -1809,6 +1809,16 @@ admitted phases, so with retention alone it stalls after its limit and the job f
 error instead of hanging. A refused audio backing or decode-scratch admission in an export is
 reported as that cause (a resource refusal), never as a full destination.
 
+**Export audio holds no request slot (#765).** An export's decoded audio is claimed as a child of
+the export's own reservation (`ExportResourceReservationV1::reserveScratch`): under a processing
+root each source's window and decode scratch are host bytes on the export's phase, never a phase
+of their own, so the number of audio layers cannot exhaust the 32 request slots (before, the 33rd
+source was refused as "Audio backing admission refused" with memory to spare). Each block of the
+mix opens only the sources its clips play (`exportAudioClipSoundsV1`, which maps each output frame
+as the mixer does), and a source no block has played for a second retires with its claim. A refusal
+names the asset, the bytes and the limit: the root's free host memory, the allowance shared by
+running exports, or the export's own allowance.
+
 **Purge returns device memory (#544).** Purge preview cache (and the media purge, which clears the
 same store) clears the resident scene cache on the service owner, then frees all parked native
 storage, which the cleared entries had moved into, measures the device again and reports the bytes

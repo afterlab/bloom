@@ -2,6 +2,8 @@
 #include <algorithm>
 #include <bit>
 #include <bloom/media/provider/protocol.hpp>
+#include <cmath>
+#include <limits>
 #include <new>
 #include <set>
 
@@ -451,6 +453,17 @@ void qc(Writer& w, const EncodeQcV1& v) {
     w.text(v.encoder);
     subtitleTracks(w, v.subtitles);
     encodedStreams(w, v.streams);
+    // #771: each level travels as its exact IEEE-754 bits; negative infinity is a real reading.
+    const auto level = [](const double value) {
+        return !std::isnan(value) && value < std::numeric_limits<double>::infinity();
+    };
+    require(level(v.audioLufs) && level(v.audioTruePeakDbtp) &&
+            (v.audioMeasured || !v.audioLoudnessMeasured) &&
+            (!v.audioLoudnessMeasured || std::isfinite(v.audioLufs)));
+    w.number(static_cast<std::uint8_t>((v.audioMeasured ? 1U : 0U) |
+                                       (v.audioLoudnessMeasured ? 2U : 0U)));
+    w.number(std::bit_cast<std::uint64_t>(v.audioLufs));
+    w.number(std::bit_cast<std::uint64_t>(v.audioTruePeakDbtp));
 }
 EncodeQcV1 qc(Reader& r) {
     EncodeQcV1 v;
@@ -471,6 +484,12 @@ EncodeQcV1 qc(Reader& r) {
     v.encoder = r.text();
     v.subtitles = subtitleTracks(r);
     v.streams = encodedStreams(r);
+    const auto flags = r.number<std::uint8_t>();
+    require(flags <= 3U);
+    v.audioMeasured = (flags & 1U) != 0;
+    v.audioLoudnessMeasured = (flags & 2U) != 0;
+    v.audioLufs = std::bit_cast<double>(r.number<std::uint64_t>());
+    v.audioTruePeakDbtp = std::bit_cast<double>(r.number<std::uint64_t>());
     Writer validation;
     qc(validation, v);
     return v;

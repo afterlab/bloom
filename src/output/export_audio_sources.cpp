@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <string_view>
 
 namespace bloom::output {
@@ -118,6 +119,92 @@ std::variant<ExportAudioSourceFactsV1, Unavailable> preflightExportAudioSourcesV
         facts.deeperThan16Bit = facts.deeperThan16Bit || deeperThan16Bit(stream->codec);
     }
     return facts;
+}
+
+bool exportAudioClipSoundsV1(const runtime::AudioClipDescription& clip,
+                             const document::AssetRecord* const asset,
+                             const core::RationalTime from, const core::RationalTime to,
+                             const std::uint32_t rate) {
+    if (clip.muted)
+        return false;
+    if (rate == 0 || from.denominator() <= 0 || to.denominator() <= 0)
+        return true;
+    const auto seconds = [](const core::RationalTime time) {
+        return static_cast<double>(time.numerator()) / static_cast<double>(time.denominator());
+    };
+    // The mixer rounds each mapped time to its output frame; two frames cover that either way.
+    const double margin = 2.0 / static_cast<double>(rate);
+    const double start = seconds(clip.startTime) - margin;
+    double end = seconds(clip.endTime) + margin;
+    if (asset != nullptr && asset->kind == document::AssetKind::Audio && asset->rate != 0 &&
+        asset->frames != 0)
+        end = std::min(
+            end, seconds(clip.startTime) +
+                     static_cast<double>(asset->frames) / static_cast<double>(asset->rate) + 0.5);
+    if (!(start < end))
+        return false;
+    // Without mappings the mixer reads the clip at the programme's own time.
+    if (clip.timeMappings.empty())
+        return seconds(from) - margin < end && seconds(to) + margin > start;
+    // mapAudioClipTime silences every time outside the first mapping's range.
+    const auto& range = clip.timeMappings.front();
+    if (seconds(to) + margin <= seconds(range.inPoint) ||
+        seconds(from) - margin >= seconds(range.outPoint))
+        return false;
+    // Otherwise each output frame is mapped as the mixer maps it (mapAudioClipTime).
+    const double first = std::floor(seconds(from) * rate) - 2.0;
+    const double last = std::ceil(seconds(to) * rate) + 2.0;
+    constexpr double representable = 9.0e15;
+    if (!(first > -representable && last < representable))
+        return true;
+    for (auto frame = static_cast<std::int64_t>(first); frame < static_cast<std::int64_t>(last);
+         ++frame) {
+        const auto at = core::RationalTime::create(frame, static_cast<std::int64_t>(rate));
+        if (!at)
+            return true;
+        const auto mapped = runtime::mapAudioClipTime(clip, *at);
+        if (mapped && seconds(*mapped) >= start && seconds(*mapped) < end)
+            return true;
+    }
+    return false;
+}
+
+std::string describeExportAudioAdmissionRefusalV1(const ExportAudioAdmissionRefusalV1& refusal) {
+    std::string text = refusal.refused + ": audio asset " + std::to_string(refusal.asset.value()) +
+                       " needs " + std::to_string(refusal.bytes) + " bytes of memory for " +
+                       refusal.purpose + ", but ";
+    switch (refusal.status) {
+    case ExportResourceAdmissionStatusV1::JobAllowanceExceeded:
+        text += "that is more than is left of the export's memory allowance";
+        if (refusal.allowance)
+            text += " of " + std::to_string(*refusal.allowance) + " bytes";
+        break;
+    case ExportResourceAdmissionStatusV1::ServiceAllowanceExceeded:
+        // The processing root refused it when it has less free than the claim; otherwise the
+        // allowance shared by running exports did.
+        if (refusal.hostMemory && refusal.hostMemory->freeBytes < refusal.bytes)
+            text += "there is not enough free memory: the processing memory has " +
+                    std::to_string(refusal.hostMemory->freeBytes) + " of " +
+                    std::to_string(refusal.hostMemory->usableBytes) + " bytes free";
+        else if (refusal.serviceAllowance)
+            text += "that is more than is left of the memory allowed to running exports (" +
+                    std::to_string(*refusal.serviceAllowance) + " bytes)";
+        else
+            text += "there is not enough free memory or processing capacity";
+        break;
+    case ExportResourceAdmissionStatusV1::CapacityRefreshFailed:
+        text += "the free memory could not be measured";
+        break;
+    case ExportResourceAdmissionStatusV1::ArithmeticOverflow:
+        text += "that byte count overflows";
+        break;
+    case ExportResourceAdmissionStatusV1::Reserved:
+        text += "it was refused";
+        break;
+    }
+    text += " (" + std::to_string(refusal.decodedSources) + " audio source" +
+            (refusal.decodedSources == 1 ? "" : "s") + " of this export were decoded at the time).";
+    return text;
 }
 
 } // namespace bloom::output

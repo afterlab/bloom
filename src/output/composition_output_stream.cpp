@@ -9,9 +9,9 @@
 #include <bloom/output/composition_output_stream.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/platform/source_store.hpp>
-#include <bloom/render/processing_host_storage.hpp>
 #include <bloom/runtime/audio_mix_render.hpp>
 #include <bloom/runtime/cpu_composition_evaluator.hpp>
+#include <bloom/runtime/gpu_processing_phase_policy.hpp>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -80,23 +80,64 @@ measuredAudioBacking(const media::audio::AudioBuffer& buffer) noexcept {
     return bytes;
 }
 
-struct OwnedAudioBuffer final {
-    // The ledger reservation must retire after every buffer owner, including mixer clips.
-    std::shared_ptr<ExportResourceReservationV1> reservation;
+// One audio source's decoded buffer and the claim that admitted its bytes. The mix and the mixer's
+// clips share the buffer through an alias of this holder, so the claim, declared first, retires
+// after the buffer, whoever drops the last owner (#765).
+struct AdmittedAudioBuffer final {
+    std::shared_ptr<ExportResourceReservationV1> claim;
     std::shared_ptr<const media::audio::AudioBuffer> buffer;
 };
+
+// #771: a codec that does not return the samples it was given, so its decoded sound can peak above
+// what the limiter held.
+[[nodiscard]] bool lossyAudioCodec(const std::string& codec) noexcept {
+    return codec == "aac" || codec == "opus";
+}
+// The most trial encodes one export runs, and the margin each correction adds under the overshoot
+// it measured, in dB.
+constexpr std::uint32_t kTrialEncodes = 6;
+constexpr double kTrialMarginDb = 0.05;
+// A trial encode is the export's own audio settings without the picture: the bundled FFmpeg
+// encoder, writing to memory, never to the export's staged file, and not reported as the export's
+// worker.
+[[nodiscard]] EncodeSessionOptionsV1 trialOptions(const EncodeSessionOptionsV1& worker) {
+    auto trial = worker;
+    trial.platformEncoder = PlatformEncoderV1::Skipped;
+    trial.stagedOutput.reset();
+    trial.launched = {};
+    trial.sending = {};
+    trial.memorySampler = {};
+    return trial;
+}
 } // namespace
 struct CompositionOutputStreamV1::State {
     CompositionOutputSourceV1 source;
     EncodeSettingsV1 encoding;
     std::shared_ptr<ExportResourceReservationV1> queueReservation;
     platform::ProcessCancellation cancellation;
+    // #771: the worker options of the audio-only trial encodes (declared before `encoder`, which
+    // takes the originals).
+    EncodeSessionOptionsV1 trialWorker;
     std::unique_ptr<EncodeSessionV1> encoder;
-    std::map<runtime::AudioStreamKey, OwnedAudioBuffer> audioBuffers;
-    // The decode session of every audio source opened for the mix, with the source's name, for
-    // sourceRoutingNotes. Weak: the buffers own the sessions and decide when they retire.
-    std::vector<std::pair<std::string, std::weak_ptr<media::video::VideoDecodeSession>>>
-        audioDecoders;
+    // #765: the audio sources the mix holds decoded now. Only a source a block plays is opened, and
+    // one no block has played for a second of programme retires (releaseIdleAudio), so what the
+    // export holds follows what the range plays, not the number of layers.
+    struct ResidentAudio final {
+        std::shared_ptr<const media::audio::AudioBuffer> buffer;
+        // The mix pass, and the programme sample through which a block of it last played this.
+        std::uint64_t pass = 0;
+        std::uint64_t playedThrough = 0;
+    };
+    std::map<runtime::AudioStreamKey, ResidentAudio> audioBuffers;
+    // Every audio source opened for the mix, for sourceRoutingNotes: its name and its decode
+    // session, weak because the buffers own the sessions, with the notes it had when it retired.
+    struct OpenedAudioSource final {
+        std::string name;
+        std::weak_ptr<media::video::VideoDecodeSession> decoder;
+        std::vector<std::string> notes;
+    };
+    std::map<runtime::AudioStreamKey, OpenedAudioSource> audioSources;
+    std::uint64_t passSerial = 0;
     bool started = false;
     // An audio source failed to read or decode (#428); see loadSource.
     bool audioSourceFailed = false;
@@ -105,6 +146,7 @@ struct CompositionOutputStreamV1::State {
           platform::ProcessCancellation cancel)
         : source(std::move(input)), encoding(std::move(settings)),
           queueReservation(std::move(reservation)), cancellation(std::move(cancel)),
+          trialWorker(trialOptions(worker)),
           encoder(std::make_unique<EncodeSessionV1>(std::move(worker), cancellation)) {}
     const EncodeSettingsV1& settings() const { return encoding; }
     void checkpoint() const {
@@ -113,7 +155,7 @@ struct CompositionOutputStreamV1::State {
     // Decodes one audio source for the offline mix. A read or decode failure names the source
     // and its codec and marks the audio source stage (#428), so the job does not blame the
     // encoder; cancellation and admission refusals keep their own meaning.
-    std::map<runtime::AudioStreamKey, OwnedAudioBuffer>::iterator
+    std::shared_ptr<const media::audio::AudioBuffer>
     loadSource(runtime::TaskContext& context, const runtime::AudioClipDescription& description,
                const media::video::Cancel& cancel) {
         const runtime::AudioStreamKey key{description.assetId, description.audioStream};
@@ -129,7 +171,7 @@ struct CompositionOutputStreamV1::State {
             const auto decoder = std::make_shared<media::video::VideoDecodeSession>(path);
             decoder->setSourceStore(platform::processSourceStore(),
                                     exportAudioLocalCopiesV1(asset->interpretation));
-            audioDecoders.emplace_back(path.filename().string(), decoder);
+            audioSources[key] = {path.filename().string(), decoder, {}};
             const auto probe = checked(decoder->probe(cancel));
             require(probe.sourceDigest == asset->contentDigest, "Audio source changed",
                     Error::SourceChanged);
@@ -154,52 +196,55 @@ struct CompositionOutputStreamV1::State {
             // #586: every refusal below is memory or processing capacity, reported as Busy. Only
             // an output that outgrows its byte limit is Oversized, which the job reports as a
             // full destination.
-            if (queueReservation->processingPolicy()) {
+            // #765: both claims are children of the export's own reservation. Under a processing
+            // root they share its phase, so an audio source takes host bytes but never a request
+            // slot of its own: the number of layers cannot exhaust the root's slots. Without a
+            // root they count against the export's ledger allowance. Each returns its bytes when
+            // it retires.
+            const auto admit = [&](const char* refused, const std::uint64_t bytes,
+                                   const char* purpose) {
                 ExportResourceAdmissionStatusV1 status{};
-                retainedClaim = queueReservation->reserveOwnedHostBacking(retained, status,
-                                                                          context.cancellation());
-                require(retainedClaim != nullptr,
-                        "Audio backing admission refused: not enough free memory or processing "
-                        "capacity for the decoded audio",
-                        Error::Busy);
-                scratchClaim =
-                    queueReservation->reserveScratch(scratchBytes, status, context.cancellation());
-                require(scratchClaim != nullptr,
-                        "Audio decode scratch admission refused: not enough free memory or "
-                        "processing capacity to decode the audio",
-                        Error::Busy);
-            } else {
-                // Legacy callers without a processing root retain the existing ledger
-                // envelope and cannot claim physical-sample backing credit.
-                const auto total = retained + scratchBytes;
-                require(total <= std::numeric_limits<std::uint64_t>::max() -
-                                     queueReservation->chargedBytes(),
-                        "Audio export reservation overflows", Error::Busy);
-                require(queueReservation->expand(queueReservation->chargedBytes() + total) ==
-                            ExportResourceAdmissionStatusV1::Reserved,
-                        "Audio decode ledger reservation refused: not enough free memory for "
-                        "the decoded audio",
-                        Error::Busy);
-            }
+                auto claim =
+                    queueReservation->reserveScratch(bytes, status, context.cancellation());
+                if (claim)
+                    return claim;
+                checkpoint();
+                require(!context.isCancellationRequested(), "Composition output cancelled",
+                        Error::Cancelled);
+                ExportAudioAdmissionRefusalV1 refusal{.refused = refused,
+                                                      .asset = description.assetId,
+                                                      .bytes = bytes,
+                                                      .purpose = purpose,
+                                                      .status = status,
+                                                      .allowance = queueReservation->jobAllowance(),
+                                                      .serviceAllowance =
+                                                          queueReservation->serviceAllowance(),
+                                                      .hostMemory = std::nullopt,
+                                                      .decodedSources = audioBuffers.size()};
+                if (const auto policy = queueReservation->processingPolicy()) {
+                    const auto capacity = policy->usableCapacity();
+                    if (capacity.hostReady)
+                        refusal.hostMemory =
+                            ExportAudioHostMemoryV1{.freeBytes = capacity.hostFreeBytes,
+                                                    .usableBytes = capacity.hostUsableBytes};
+                }
+                throw Unavailable{Error::Busy, describeExportAudioAdmissionRefusalV1(refusal)};
+            };
+            retainedClaim =
+                admit("Audio backing admission refused", retained, "its decoded audio window");
+            scratchClaim =
+                admit("Audio decode scratch admission refused", scratchBytes, "decoding its audio");
             auto buffer = checked(
                 media::video::openWindowedVideoAudio(decoder, probe, description.audioStream));
-            auto backing = std::make_unique<media::audio::AudioBuffer>(std::move(buffer));
-            std::shared_ptr<const media::audio::AudioBuffer> published;
-            if (retainedClaim) {
-                const auto measured = measuredAudioBacking(*backing);
-                require(measured.has_value(), "Audio backing byte count overflows", Error::Busy);
-                published = render::adoptProcessingHostBacking(
-                    std::move(backing), retainedClaim->ownedHostPhase(), measured->allocated,
-                    measured->initialized);
-                require(published != nullptr, "Audio backing exceeds its admitted allocation",
-                        Error::Busy);
-            } else {
-                published = std::shared_ptr<const media::audio::AudioBuffer>(std::move(backing));
-            }
+            auto backing = std::make_shared<const media::audio::AudioBuffer>(std::move(buffer));
+            const auto measured = measuredAudioBacking(*backing);
+            require(measured.has_value() && measured->allocated <= retained,
+                    "Audio backing exceeds its admitted allocation", Error::Busy);
             scratchClaim.reset();
-            return audioBuffers
-                .emplace(key, OwnedAudioBuffer{std::move(retainedClaim), std::move(published)})
-                .first;
+            auto holder = std::make_shared<AdmittedAudioBuffer>(
+                AdmittedAudioBuffer{retainedClaim, std::move(backing)});
+            const auto* raw = holder->buffer.get();
+            return {std::move(holder), raw};
         } catch (const Unavailable& error) {
             if (error.reason == Error::Cancelled || error.reason == Error::Oversized ||
                 error.reason == Error::Busy)
@@ -219,9 +264,27 @@ struct CompositionOutputStreamV1::State {
         NullBackend* sink = nullptr;
         std::uint64_t position = 0;
         std::optional<runtime::AudioMixDescription> blockEndMix;
+        std::uint64_t serial = 0;
     };
+    // #765: retires every decoded source that no block of this pass has played for a second of
+    // programme, or that only an earlier pass played. The second keeps a source that pauses
+    // briefly from being opened again; a source the mix plays later opens again then.
+    void releaseIdleAudio(const MixPass& run, const std::uint64_t through) {
+        const std::uint64_t idle = settings().sampleRate;
+        for (auto entry = audioBuffers.begin(); entry != audioBuffers.end();) {
+            const auto& resident = entry->second;
+            if (resident.pass == run.serial && resident.playedThrough + idle > through) {
+                ++entry;
+                continue;
+            }
+            if (const auto opened = audioSources.find(entry->first); opened != audioSources.end())
+                if (const auto decoder = opened->second.decoder.lock())
+                    opened->second.notes = decoder->routingNotes();
+            entry = audioBuffers.erase(entry);
+        }
+    }
     ~State() {
-        // AudioEngine keeps shared clip buffers. Drop those before their ledger owners.
+        // AudioEngine keeps shared clip buffers; each buffer's claim retires with its last owner.
         pass.mixer.reset();
         audioBuffers.clear();
     }
@@ -242,6 +305,7 @@ struct CompositionOutputStreamV1::State {
             AudioEngine::Config{settings().sampleRate, settings().channels, 16384});
         next.position = 0;
         next.blockEndMix.reset();
+        next.serial = ++passSerial;
         require(!next.mixer->play(source.origin), "Offline mixer failed");
     }
     // Renders the next `count` frames of the programme: interleaved stereo float.
@@ -278,19 +342,38 @@ struct CompositionOutputStreamV1::State {
             streamed;
         // The clips are built where the audio analysis builds its own (#630), so an analysis reads
         // the samples this export writes.
+        // #765: a clip reads its source only in a block it plays in. Every other clip keeps its
+        // place in the mix with no buffer, which the mixer plays as the silence it would have
+        // read, so its source is neither opened nor held for this block.
+        const auto through = run.position + count;
         auto clips = runtime::audioMixClips(
             mix, endMix ? &*endMix : nullptr, time, endTime,
-            [&](const runtime::AudioClipDescription& description) {
-                auto found = audioBuffers.find({description.assetId, description.audioStream});
+            [&](const runtime::AudioClipDescription& description)
+                -> std::shared_ptr<const media::audio::AudioBuffer> {
+                // A block whose end is not representable plays every clip, as before.
+                if (endTime &&
+                    !exportAudioClipSoundsV1(
+                        description, source.snapshot.project().findAsset(description.assetId), time,
+                        *endTime, settings().sampleRate))
+                    return nullptr;
+                const runtime::AudioStreamKey key{description.assetId, description.audioStream};
+                auto found = audioBuffers.find(key);
                 if (found == audioBuffers.end())
-                    found = loadSource(context, description, cancel);
-                require(found->second.buffer != nullptr, "Audio source buffer unavailable",
+                    found =
+                        audioBuffers
+                            .emplace(key, ResidentAudio{loadSource(context, description, cancel)})
+                            .first;
+                auto& resident = found->second;
+                require(resident.buffer != nullptr, "Audio source buffer unavailable",
                         Error::Unavailable);
-                if (found->second.buffer->stream)
-                    streamed.emplace_back(description.assetId, found->second.buffer);
-                return found->second.buffer;
+                resident.pass = run.serial;
+                resident.playedThrough = through;
+                if (resident.buffer->stream)
+                    streamed.emplace_back(description.assetId, resident.buffer);
+                return resident.buffer;
             });
         run.mixer->replaceClips(std::move(clips));
+        releaseIdleAudio(run, through);
         run.sink->clearCaptured();
         require(!run.mixer->renderForTesting(count), "Offline mix failed");
         // The mixer plays silence for a source it cannot read, which is right for a device and
@@ -310,20 +393,95 @@ struct CompositionOutputStreamV1::State {
         run.blockEndMix = std::move(endMix);
         return {captured.begin(), captured.end()};
     }
-    void deliver(const std::vector<float>& interleaved) {
+    // Sends interleaved stereo to `session` as the block that starts at programme frame `at`;
+    // returns the frames sent.
+    std::uint64_t send(EncodeSessionV1& session, const std::vector<float>& interleaved,
+                       const std::uint64_t at) const {
         const auto count = interleaved.size() / 2;
         if (count == 0)
-            return;
+            return 0;
         AudioBlock block;
         block.sampleRate = settings().sampleRate;
         block.channelLayout = {"FL", "FR"};
-        block.pts = fraction(emitted, settings().sampleRate);
+        block.pts = fraction(at, settings().sampleRate);
         block.channels.resize(2, std::vector<float>(count));
         for (std::size_t i = 0; i < count; ++i)
             for (std::size_t c = 0; c < 2; ++c)
                 block.channels[c][i] = interleaved[i * 2 + c];
-        checked(encoder->audio(std::move(block)));
-        emitted += count;
+        checked(session.audio(std::move(block)));
+        return count;
+    }
+    void deliver(const std::vector<float>& interleaved) {
+        emitted += send(*encoder, interleaved, emitted);
+    }
+    // #771 trial encode: the whole programme through the gain and a limiter at `ceilingDbtp`,
+    // encoded alone with the export's codec and settings, decoded back by the worker's verifying
+    // reopen and measured there with the reference library. Returns the decoded true peak.
+    double trialEncode(runtime::TaskContext& context, const double gainDb, const double ceilingDbtp,
+                       const std::uint32_t trial) {
+        const auto total = settings().audioSamples;
+        auto trialSettings = settings();
+        trialSettings.videoCodec.clear();
+        trialSettings.profile.clear();
+        trialSettings.frames = 0;
+        trialSettings.subtitles.clear();
+        EncodeSessionV1 session(trialWorker, cancellation);
+        checked(session.begin(trialSettings));
+        media::audio::loudness::Limiter trialLimiter(settings().sampleRate, 2, gainDb, ceilingDbtp);
+        MixPass run;
+        startPass(run);
+        std::uint64_t sent = 0;
+        std::uint64_t blocks = 0;
+        std::vector<float> limited;
+        const std::string step =
+            "Checking the true peak after encoding (trial " + std::to_string(trial + 1) + ")";
+        while (run.position < total) {
+            checkpoint();
+            const auto count =
+                static_cast<std::uint32_t>(std::min<std::uint64_t>(512, total - run.position));
+            const auto block = renderBlock(run, context, count);
+            limited.clear();
+            trialLimiter.process(block, limited);
+            sent += send(session, limited, sent);
+            if (++blocks % 256 == 0)
+                context.reportProgress({step, "", run.position, total});
+        }
+        run.mixer.reset();
+        limited.clear();
+        trialLimiter.flush(limited);
+        sent += send(session, limited, sent);
+        require(sent == total, "Trial encode sample count differs");
+        const auto qc = checked(session.finish());
+        checked(session.close());
+        require(qc.audioMeasured && qc.audioSamples == total,
+                "The trial encode's sound was not measured", Error::Unavailable);
+        return qc.audioTruePeakDbtp;
+    }
+    // #771: a lossy codec's decoded sound peaks between and above the samples it was given, so the
+    // limiter's ceiling for it is found by encoding: while a trial's decoded true peak is over the
+    // limit, the ceiling comes down by the overshoot (and a small margin) and the trial runs again.
+    // The bundled encoders are deterministic, so the export's own audio stream, given the same
+    // samples, decodes to the last trial's sound. A platform encoder may differ; the export checks
+    // its delivered file as well.
+    double encoderCeiling(runtime::TaskContext& context, const double gainDb, const double limit,
+                          double ceiling, AudioLoudnessReportV1& report) {
+        for (std::uint32_t trial = 0; trial < kTrialEncodes; ++trial) {
+            checkpoint();
+            const auto peak = trialEncode(context, gainDb, ceiling, trial);
+            report.trialEncodes = trial + 1;
+            if (trial == 0)
+                report.firstTrialTruePeakDbtp = peak;
+            report.trialTruePeakDbtp = peak;
+            if (!(peak > limit))
+                return ceiling;
+            ceiling -= peak - limit + kTrialMarginDb;
+        }
+        throw Unavailable{
+            Error::Unavailable,
+            "The " + settings().audioCodec + " encoder kept the sound's true peak at " +
+                std::to_string(report.trialTruePeakDbtp) + " dBTP, above the " +
+                std::to_string(limit) + " dBTP limit, after " + std::to_string(kTrialEncodes) +
+                " trial encodes with the limiter lowered each time."};
     }
     // #570 pass one: the whole programme through the same mixer, into the meter alone. The mix is
     // deterministic, so pass two hears exactly what was measured.
@@ -355,11 +513,19 @@ struct CompositionOutputStreamV1::State {
         report.measuredLufs = before.integratedLufs;
         report.measuredTruePeakDbtp = before.truePeakDbtp;
         report.gainDb = media::audio::loudness::gainToTarget(before, target);
+        auto ceiling = wanted.truePeakDbtp - std::max(0.0, wanted.encoderHeadroomDb);
+        if (lossyAudioCodec(settings().audioCodec) && wanted.trialEncodes)
+            ceiling = encoderCeiling(context, report.gainDb, wanted.truePeakDbtp, ceiling, report);
+        report.limiterCeilingDbtp = ceiling;
         loudnessResult = report;
-        limiter = std::make_unique<media::audio::loudness::Limiter>(
-            settings().sampleRate, 2, report.gainDb, wanted.truePeakDbtp);
+        limiter = std::make_unique<media::audio::loudness::Limiter>(settings().sampleRate, 2,
+                                                                    report.gainDb, ceiling);
         measuredAfter.emplace(settings().sampleRate, 2);
         loudnessMeasured = true;
+    }
+    void prepareLoudness(runtime::TaskContext& context) {
+        if (!settings().audioCodec.empty() && source.loudness && !loudnessMeasured)
+            measureProgramme(context);
     }
     void audio(runtime::TaskContext& context, std::uint64_t through) {
         if (settings().audioCodec.empty())
@@ -416,6 +582,9 @@ std::optional<Unavailable> CompositionOutputStreamV1::writeFrame(const render::R
         auto& s = *state_;
         s.checkpoint();
         if (!s.started) {
+            // #570/#771: the programme is measured (and a lossy codec's trial encodes run) before
+            // the export's encoder starts, so its worker never waits on them.
+            s.prepareLoudness(context);
             checked(s.encoder->begin(s.encoding));
             s.started = true;
         }
@@ -441,6 +610,9 @@ std::optional<Unavailable> CompositionOutputStreamV1::writePreparedFrame(
         auto& s = *state_;
         s.checkpoint();
         if (!s.started) {
+            // #570/#771: the programme is measured (and a lossy codec's trial encodes run) before
+            // the export's encoder starts, so its worker never waits on them.
+            s.prepareLoudness(context);
             checked(s.encoder->begin(s.encoding));
             s.started = true;
         }
@@ -468,10 +640,11 @@ bool CompositionOutputStreamV1::audioSourceFailed() const noexcept {
 }
 std::vector<std::string> CompositionOutputStreamV1::sourceRoutingNotes() const {
     std::vector<std::string> notes;
-    for (const auto& [name, weak] : state_->audioDecoders)
-        if (const auto decoder = weak.lock())
-            for (auto& note : decoder->routingNotes())
-                notes.push_back(name + ": " + std::move(note));
+    for (const auto& [key, opened] : state_->audioSources) {
+        const auto decoder = opened.decoder.lock();
+        for (auto& note : decoder ? decoder->routingNotes() : opened.notes)
+            notes.push_back(opened.name + ": " + std::move(note));
+    }
     return notes;
 }
 bool CompositionOutputStreamV1::platformEncoderRefused() const noexcept {

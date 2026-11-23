@@ -121,9 +121,17 @@ HEVC, and the file's average rate lands near it. **Normalize loudness** brings t
 streaming level, -23 a broadcast level) and **True peak** is the ceiling in dBTP that the sound is never
 allowed to pass (-1 by default). Bloom first measures the whole mix, then gives it the gain that reaches
 the target and holds the ceiling with a limiter, so a loud peak is turned down instead of clipping. The
-job's details report the loudness measured before and delivered after, the true peak and how far the
-limiter reduced it. Silent audio is left alone. Normalizing renders the sound twice, which adds time to
-an export with a lot of audio.
+ceiling holds in the delivered file, not only in what the encoder is given: AAC (MP4) and Opus (WebM)
+rebuild the sound with peaks a little above the samples they were given, so for those formats Bloom
+first encodes the sound alone, decodes it and measures it, and lowers the limiter by any overshoot
+until the encoded sound stays under the ceiling. Every movie and WAV is then decoded back from the
+finished file and measured again; a file whose true peak is still over the ceiling is not published,
+and the output renders again with the limiter lower by the overshoot (at most three more times). The
+job's details report the loudness measured before and the loudness and true peak measured on the
+delivered file, and how far the limiter reduced the peaks. The export log has one line with the
+delivered file's loudness and true peak, what the encoder was given, the ceiling the limiter held and,
+for AAC and Opus, how many trial encodes set it. Silent audio is left alone. Normalizing renders the
+sound twice (more for AAC and Opus), which adds time to an export with a lot of audio.
 **Color space**, **Display** and **View** are lists of what the
 project's color setup offers, with **Project default** first, so a name cannot be mistyped.
 **Project default** is the Viewer's starting view (plain sRGB, **Un-tone-mapped** under ACES CG); the
@@ -230,6 +238,19 @@ while you work in the Viewer** in plain gray, not in a warning color. When a fra
 memory other active work holds (after Bloom's caches gave back theirs), the job reads **Waiting for
 memory** with the amount needed. Waiting and paused time do not count toward the export's time
 limits. Neither is a fault.
+
+A composition can have any number of audio layers. An export decodes a sound only while the
+exported range plays it: a layer that is silent over the range is never read, and a sound that has
+stopped playing gives its memory back a second later. If the memory for a sound is still refused,
+the job fails with a message that names the audio asset, the bytes it needed and the limit that
+refused them, for example "the processing memory has 1048576 of 134217728 bytes free".
+
+An MP3 plays from its first sound in the export as it does in preview. Many MP3 files, such as
+those from text-to-speech services or FFmpeg, declare the encoder's start delay in a header at the
+start of the file; the export skips that delay, so the sound neither starts late nor fails to
+decode. A sound file that ends before the length its own header declares (a download cut short,
+say) fails the export with a message that names the audio asset, instead of publishing the missing
+part as silence.
 
 **Worker memory cap** and **Worker threads** in Preferences (Memory & Caches) are opt-in limits on
 the helper process that encodes a movie or WAV; see [Preferences](preferences.md#export-workers).

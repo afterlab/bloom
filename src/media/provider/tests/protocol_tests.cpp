@@ -2,7 +2,9 @@
 #include <bloom/media/provider/protocol.hpp>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
+#include <optional>
 #include <utility>
 #include <vector>
 using namespace bloom::media::provider;
@@ -197,10 +199,65 @@ void run() {
     rejected(encoded, Error::Truncated);
     arenaFrames(h);
 }
+// #771: the delivered sound's loudness and true peak cross with the encoder's result exactly,
+// silence's negative infinity included; NaN, positive infinity and a loudness without a
+// measurement are refused.
+void encodeQcLoudness() {
+    EncodeQcV1 qc;
+    qc.bytes = 4096;
+    qc.frames = 24;
+    qc.audioSamples = 48000;
+    qc.duration = {1, 1};
+    qc.audioMeasured = true;
+    qc.audioLoudnessMeasured = true;
+    qc.audioLufs = -14.012345678901234;
+    qc.audioTruePeakDbtp = -1.0000000001;
+    const auto crossed = [](const EncodeQcV1& sent) -> std::optional<EncodeQcV1> {
+        const auto bytes = encodeMessage({MessageKind::EncodeQc, 42, 3, sent});
+        if (!std::holds_alternative<Bytes>(bytes))
+            return std::nullopt;
+        const auto decoded = decodeMessage(std::get<Bytes>(bytes));
+        if (!std::holds_alternative<Message>(decoded))
+            return std::nullopt;
+        return std::get<EncodeQcV1>(std::get<Message>(decoded).payload);
+    };
+    const auto loud = crossed(qc);
+    test::check(loud && loud->audioMeasured && loud->audioLoudnessMeasured &&
+                    loud->audioLufs == qc.audioLufs &&
+                    loud->audioTruePeakDbtp == qc.audioTruePeakDbtp,
+                "the delivered loudness and true peak cross exactly");
+    auto silent = qc;
+    silent.audioLoudnessMeasured = false;
+    silent.audioLufs = -std::numeric_limits<double>::infinity();
+    silent.audioTruePeakDbtp = -std::numeric_limits<double>::infinity();
+    const auto quiet = crossed(silent);
+    test::check(quiet && quiet->audioMeasured && !quiet->audioLoudnessMeasured &&
+                    std::isinf(quiet->audioLufs) && quiet->audioLufs < 0 &&
+                    std::isinf(quiet->audioTruePeakDbtp) && quiet->audioTruePeakDbtp < 0,
+                "silence crosses as negative infinity");
+    EncodeQcV1 none;
+    none.bytes = 1;
+    const auto unmeasured = crossed(none);
+    test::check(unmeasured && !unmeasured->audioMeasured && !unmeasured->audioLoudnessMeasured,
+                "a result without audio crosses unmeasured");
+    for (const auto bad :
+         {std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()}) {
+        auto hostile = qc;
+        hostile.audioTruePeakDbtp = bad;
+        test::check(!crossed(hostile), "a true peak that is no level is refused");
+        hostile = qc;
+        hostile.audioLufs = bad;
+        test::check(!crossed(hostile), "a loudness that is no level is refused");
+    }
+    auto loudnessOnly = qc;
+    loudnessOnly.audioMeasured = false;
+    test::check(!crossed(loudnessOnly), "a loudness without a measurement is refused");
+}
 } // namespace
 int main() {
     try {
         run();
+        encodeQcLoudness();
     } catch (const std::exception& e) {
         std::cerr << e.what() << '\n';
         return 1;

@@ -23,7 +23,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -172,6 +174,44 @@ ExistingFileRule existingFileRule(const ExportRunOutput& output,
 
 // The sentence for a publication refused because its file exists without permission to replace
 // it, or changed after it was checked or confirmed.
+// #771: how many times one output renders again because its delivered file went over the
+// true-peak limit, and the margin each correction adds under the overshoot it measured, in dB.
+constexpr std::uint32_t kTruePeakRenders = 3;
+constexpr double kTruePeakMarginDb = 0.1;
+std::string levelText(const double value) {
+    if (!std::isfinite(value))
+        return value < 0 ? "-inf" : "inf";
+    char text[32];
+    std::snprintf(text, sizeof text, "%.2f", value);
+    return text;
+}
+// The export log's loudness line (#771): what the delivered file measures, then what the encoder
+// was given and the ceiling the limiter held for it.
+std::string deliveredLoudnessText(const output::AudioLoudnessReportV1& report) {
+    const auto loudness = [](const bool measured, const double lufs) {
+        return measured ? levelText(lufs) + " LUFS integrated" : std::string("silent");
+    };
+    std::string text =
+        (report.finalFromDeliveredFile ? "Measured on the delivered file: "
+                                       : "Measured on the sound given to the encoder (the "
+                                         "delivered file was not measured): ") +
+        loudness(report.finalMeasured, report.finalLufs) + ", true peak " +
+        levelText(report.finalTruePeakDbtp) + " dBTP (target " + levelText(report.targetLufs) +
+        " LUFS, true-peak limit " + levelText(report.truePeakLimitDbtp) + " dBTP).";
+    if (report.finalFromDeliveredFile)
+        text += " The encoder was given " +
+                loudness(report.encoderInputMeasured, report.encoderInputLufs) +
+                " with a true peak of " + levelText(report.encoderInputTruePeakDbtp) + " dBTP.";
+    text += " The limiter held " + levelText(report.limiterCeilingDbtp) +
+            " dBTP and reduced peaks by up to " + levelText(report.limiterReductionDb) + " dB";
+    if (report.trialEncodes > 0)
+        text += "; " + std::to_string(report.trialEncodes) +
+                (report.trialEncodes == 1 ? " trial encode" : " trial encodes") +
+                " of the sound alone set that ceiling for the lossy codec (the first measured " +
+                levelText(report.firstTrialTruePeakDbtp) + " dBTP decoded, the last " +
+                levelText(report.trialTruePeakDbtp) + " dBTP)";
+    return text + ".";
+}
 std::string existingFileReason(const ExportRunOutput& output, const std::filesystem::path& path) {
     const auto name = path.filename().string();
     const auto rule = existingFileRule(output, path);
@@ -1967,6 +2007,7 @@ class MediaDriver final : public DriverBase {
     // Starts the export with the platform encoder taking part as `platformEncoder` says. The
     // second start of an output (the platform encoder failed partway) passes Skipped.
     void launch(const media::provider::PlatformEncoderV1 platformEncoder) {
+        platformEncoder_ = platformEncoder;
         const auto& settings = input_.output.record.settings;
         const auto preset = mediaPreset(settings.format);
         const auto* composition = input_.snapshot.project().findComposition(input_.composition);
@@ -2030,8 +2071,9 @@ class MediaDriver final : public DriverBase {
         request.useCachedFrames = settings.useCachedFrames;
         request.subtitles = embeddedSubtitles();
         if (settings.loudness)
-            request.loudness = output::AudioLoudnessTargetV1{settings.loudness->targetLufs,
-                                                             settings.loudness->truePeakDbtp};
+            request.loudness =
+                output::AudioLoudnessTargetV1{settings.loudness->targetLufs,
+                                              settings.loudness->truePeakDbtp, truePeakHeadroomDb_};
         const auto rule = existingFileRule(input_.output, input_.output.destination.firstPath);
         request.overwritePolicy = rule.policy;
         request.confirmedExisting = rule.confirmed;
@@ -2178,6 +2220,27 @@ class MediaDriver final : public DriverBase {
             if (stopRequested_ ||
                 (result.failure && result.failure->reason == media::provider::Error::Cancelled))
                 return finishStopped();
+            // #771: the delivered file's sound peaked over the limit after the encoder (a platform
+            // encoder the trial encodes do not model). Nothing was published; the output renders
+            // again with the limiter lower by the overshoot, a bounded number of times.
+            if (result.failureStage == SequenceExportFailureStageV1::TruePeakExceeded &&
+                result.loudness && truePeakRenders_ < kTruePeakRenders) {
+                const auto& measured = *result.loudness;
+                const auto over = measured.finalTruePeakDbtp - measured.truePeakLimitDbtp;
+                truePeakHeadroomDb_ += over + kTruePeakMarginDb;
+                ++truePeakRenders_;
+                log(runtime::DiagnosticSeverity::Warning, "export.audio.true-peak-again",
+                    "The delivered file's true peak was " + levelText(measured.finalTruePeakDbtp) +
+                        " dBTP, " + levelText(over) + " dB over the " +
+                        levelText(measured.truePeakLimitDbtp) +
+                        " dBTP limit (the encoder changed the sound after the limiter). Bloom is "
+                        "rendering the output again with the limiter " +
+                        levelText(truePeakHeadroomDb_) + " dB lower; nothing was published.");
+                approvalAsked_ = false;
+                runner_.reset();
+                launch(platformEncoder_);
+                return;
+            }
             // Issue #370: the system's encoder was preferred, began the export and failed it
             // partway (or its file failed the worker's reopen check). Nothing was published, so the
             // output
@@ -2255,6 +2318,13 @@ class MediaDriver final : public DriverBase {
                     "This computer's own encoder refused the export (" + detail +
                         "). Bloom's FFmpeg encoder can export it instead: set the output's "
                         "encoder to Software and render again."));
+            case SequenceExportFailureStageV1::TruePeakExceeded:
+                log(runtime::DiagnosticSeverity::Error, "export.audio.true-peak", detail);
+                return fail(failure(ExportFailureCode::VerificationFailed, "export.audio.true-peak",
+                                    "The exported file's sound went over its true-peak limit (" +
+                                        detail + ") after " + std::to_string(truePeakRenders_ + 1) +
+                                        " renders with the limiter lowered each time, so it was "
+                                        "not published and nothing was replaced."));
             case SequenceExportFailureStageV1::PlatformEncoderFailed:
             case SequenceExportFailureStageV1::Unclassified:
                 break;
@@ -2296,6 +2366,10 @@ class MediaDriver final : public DriverBase {
                 "Written stream: " + exportWrittenStreamText(stream));
             report_.verification.streams.push_back(std::move(stream));
         }
+        // #771: the loudness and true peak measured on the delivered file, in the log.
+        if (result.loudness)
+            log(runtime::DiagnosticSeverity::Information, "export.audio.loudness",
+                deliveredLoudnessText(*result.loudness));
         const auto expectedFrames = input_.range.last - input_.range.first + 1;
         if (result.evidence) {
             const auto& evidence = *result.evidence;
@@ -2325,6 +2399,12 @@ class MediaDriver final : public DriverBase {
 
     std::unique_ptr<SequenceExportRunnerV1> runner_;
     bool approvalAsked_ = false;
+    // #771: how the platform encoder took part in the current start, and the extra limiter
+    // headroom and number of renders a delivered file over the true-peak limit has caused.
+    media::provider::PlatformEncoderV1 platformEncoder_ =
+        media::provider::PlatformEncoderV1::Preferred;
+    double truePeakHeadroomDb_ = 0.0;
+    std::uint32_t truePeakRenders_ = 0;
     bool stopRequested_ = false;
     bool paused_ = false;
     bool hardware_ = false;

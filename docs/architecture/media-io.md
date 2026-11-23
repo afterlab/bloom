@@ -463,11 +463,28 @@ Windows and macOS, and the macOS system encoder) reads the file's video and audi
 with `ffmpeg::readWrittenStreams`: the codec and profile names FFmpeg reports, the picture size
 and reduced frame rate or the channels and sample rate, and a bit rate counted from the packet
 bytes over the stream's duration. They are returned as `EncodeQcV1::streams` (media worker
-protocol schema 13), and the reopen fails unless there is one video stream (for a movie) and one
+protocol schema 13 and later), and the reopen fails unless there is one video stream (for a movie) and one
 audio stream (when the output carries audio). The host copies them to the export result, logs one
 `export.stream` line each, and the MCP, Python and bloom-cli results list them. ProRes takes its
 profile from `prores_ks`'s private `profile` option, and the reopen requires the written profile
 to be the one the preset names.
+
+Delivered loudness (#771). The same reopen decodes the file's sound and measures it with libebur128
+(`bloom_media_loudness`, the library the export's own meter and limiter use): the FFmpeg worker
+feeds the samples its audio check decodes anyway (`ffmpeg::WrittenAudioMeter`, the encoder's
+priming already skipped and the last frame's padding left out), and the macOS system encoder's
+route decodes its file with FFmpeg by path (`ffmpeg::measureWrittenAudio`). The integrated
+loudness, the true peak and whether each was measured are returned as `EncodeQcV1::audioMeasured`,
+`audioLoudnessMeasured`, `audioLufs` and `audioTruePeakDbtp` (media worker protocol schema 14;
+each level crosses as its exact IEEE-754 bits, negative infinity for silence, never NaN or positive
+infinity). A loudness-normalizing export takes its delivered reading from them: its report's final
+level and true peak are the delivered file's, and a file whose true peak is over the target's limit
+is not published (`SequenceExportFailureStageV1::TruePeakExceeded`; the export queue renders the
+output again with the limiter lower by the overshoot, at most three more times). For AAC and Opus
+the export first runs audio-only trial encodes on the bundled FFmpeg encoder, decoded and measured
+the same way, and lowers the limiter's ceiling by each trial's overshoot until the encoded sound
+keeps the limit; the bundled encoders are deterministic, so the export's own stream decodes to the
+last trial's sound.
 
 The two encoders are enabled in the FFmpeg configuration; see
 [dependency-intake.md](dependency-intake.md). `bloom.media.subtitle-encode` covers H.264 MP4

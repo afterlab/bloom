@@ -25,6 +25,8 @@
 #include <bloom/host/project_session.hpp>
 #include <bloom/host/publication_coordinator.hpp>
 #include <bloom/host/sequence_export_runner.hpp>
+#include <bloom/media/audio/loudness.hpp>
+#include <bloom/media/video/audio.hpp>
 #include <bloom/media/video/session.hpp>
 #include <bloom/output/export_audio_sources.hpp>
 #include <bloom/output/media_output.hpp>
@@ -39,9 +41,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -84,7 +88,7 @@ document::Snapshot currentSnapshot(const host::ProjectSession& session) {
 // decoder reads but the bundled FFmpeg build has no decoder for), and WAVE_FORMAT_EXTENSIBLE
 // float 5.1 (FL FR FC LFE BL BR) holding the constants in kSurroundLevels, and float stereo
 // holding kConstantLevel.
-enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm, Surround51, ConstantStereo };
+enum class WavEncoding { Pcm16, Pcm24, Float32, ImaAdpcm, Surround51, ConstantStereo, Transients };
 constexpr float kConstantLevel = 0.5F;
 constexpr std::array<float, 6> kSurroundLevels{0.1F, 0.2F, 0.3F, 0.4F, 0.05F, 0.15F};
 
@@ -93,7 +97,35 @@ void put(std::vector<char>& out, const std::uint64_t value, const int bytes) {
         out.push_back(static_cast<char>((value >> (8 * i)) & 0xFFU));
 }
 
-// One second of a 440 Hz stereo tone at 48 kHz, or of constant 5.1 levels for Surround51.
+// #771: a steady bed of tone and noise with a loud noise burst every 125 ms, the kind of programme
+// a true-peak limiter has to hold down and a lossy codec rebuilds with peaks above what it was
+// given.
+double transientSample(const std::uint32_t frame, const std::uint32_t channel) {
+    constexpr double pi = 3.141592653589793;
+    const auto t = static_cast<double>(frame) / 48000.0;
+    // Noise from a hash of the frame (no state, so any frame is the same in every run), smoothed by
+    // a short moving average into the band every codec keeps.
+    const auto noise = [](const std::uint32_t at, const std::uint32_t lane) {
+        std::uint32_t state = at * 2654435761U + (lane + 1U) * 40503U;
+        state ^= state >> 15U;
+        state *= 2246822519U;
+        state ^= state >> 13U;
+        return static_cast<double>(state % 20001U) / 10000.0 - 1.0;
+    };
+    double smoothed = 0.0;
+    for (std::uint32_t tap = 0; tap < 3U; ++tap)
+        smoothed += noise(frame + tap, channel) / 3.0;
+    // A bed of tones and noise, different in each channel.
+    double value = 0.06 * std::sin(2.0 * pi * (220.0 + 110.0 * channel) * t) + 0.05 * smoothed;
+    // Every 125 ms a burst of the same noise decaying over 8 ms, much louder than the bed: dense
+    // peaks the limiter has to hold down hard.
+    const auto phase = frame % 6000U;
+    value += 0.9 * std::exp(-static_cast<double>(phase) / 384.0) * noise(frame, channel + 2U);
+    return value;
+}
+
+// One second of a 440 Hz stereo tone at 48 kHz, of constant 5.1 levels for Surround51, or of
+// transientSample for Transients.
 std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncoding encoding) {
     constexpr std::uint32_t rate = 48000;
     const std::uint32_t channels = encoding == WavEncoding::Surround51 ? 6 : 2;
@@ -123,17 +155,20 @@ std::filesystem::path writeWav(const std::filesystem::path& path, const WavEncod
                 put(data, raw, 4);
             }
     } else {
-        const bool floating =
-            encoding == WavEncoding::Float32 || encoding == WavEncoding::ConstantStereo;
+        const bool floating = encoding == WavEncoding::Float32 ||
+                              encoding == WavEncoding::ConstantStereo ||
+                              encoding == WavEncoding::Transients;
         format = floating ? 3 : 1;
         bits = encoding == WavEncoding::Pcm16 ? 16 : encoding == WavEncoding::Pcm24 ? 24 : 32;
         blockAlign = static_cast<std::uint16_t>(channels * bits / 8);
         for (std::uint32_t frame = 0; frame < rate; ++frame) {
-            const double value =
+            const double tone =
                 encoding == WavEncoding::ConstantStereo
                     ? static_cast<double>(kConstantLevel)
                     : 0.25 * std::sin(2.0 * 3.141592653589793 * 440.0 * frame / double(rate));
             for (std::uint32_t channel = 0; channel < channels; ++channel) {
+                const double value =
+                    encoding == WavEncoding::Transients ? transientSample(frame, channel) : tone;
                 if (floating) {
                     const auto sample = static_cast<float>(value);
                     std::uint32_t raw = 0;
@@ -1189,6 +1224,105 @@ void testLoudnessThroughVideoContainers() {
     }
 }
 
+// #771: the true-peak limit holds in the delivered file of a lossy codec. AAC in MP4 and Opus in
+// WebM are normalized to -14 LUFS with a -1 dBTP limit from a transient-heavy source the limiter
+// has to hold down; each published file is decoded independently and measured with the reference
+// library (libebur128): its true peak is at or below the limit, and the report and the log give the
+// delivered file's own reading. The first trial encode, with the limiter at the limit itself (what
+// an export did before #771), measures over it, so the source reproduces the overshoot.
+void testTruePeakHoldsInLossyDelivery() {
+    struct Lossy {
+        ExportFormat format;
+        std::string profile, extension;
+    };
+    const std::vector<Lossy> outputs{{ExportFormat::H264Mp4, "high", "mp4"},
+                                     {ExportFormat::Vp9Webm, "8bit", "webm"}};
+    Fixture f("true-peak-lossy", WavEncoding::Transients);
+    for (const auto& output : outputs) {
+        const auto name = "true peak in " + output.extension;
+        document::ExportOutputSettings settings;
+        settings.format = output.format;
+        settings.codecProfile = output.profile;
+        settings.includeAudio = true;
+        settings.loudness = document::ExportLoudness{-14.0, -1.0};
+        const auto file = "Exports/limited." + output.extension;
+        const auto finished = f.run(f.addJob(settings, file), name);
+        const auto report = loudnessReportOf(finished);
+        expect(report.has_value(), name + ": the movie publishes with a loudness report");
+        if (!report)
+            continue;
+        expect(report->finalTruePeakDbtp <= -1.0,
+               name + ": the delivered true peak is at or below -1 dBTP (report " +
+                   std::to_string(report->finalTruePeakDbtp) + ")");
+        // The published file, decoded on its own and measured with the reference library.
+        media::video::VideoDecodeSession session(f.folder / file);
+        const auto probed = session.probe();
+        const auto* probe = std::get_if<media::provider::ProbeResult>(&probed);
+        expect(probe != nullptr, name + ": the published file probes");
+        if (probe == nullptr)
+            continue;
+        auto decoded = media::video::decodeAudioClip(session, *probe, 4U * 48000U);
+        const auto* sound = std::get_if<media::audio::AudioBuffer>(&decoded);
+        // The decoder may hand back the codec's last padded frame too; the programme is the first
+        // second, as the export's own reopen measured it.
+        expect(sound != nullptr && sound->channels == 2 && sound->rate == 48000 &&
+                   sound->planes.size() == 2 && sound->planes[0].size() >= 48000,
+               name + ": the published file's sound decodes, one second of stereo (" +
+                   (sound == nullptr
+                        ? std::get<media::provider::Unavailable>(decoded).detail
+                        : std::to_string(sound->channels) + " channels at " +
+                              std::to_string(sound->rate) + " Hz, " +
+                              std::to_string(sound->planes.empty() ? 0 : sound->planes[0].size()) +
+                              " frames") +
+                   ")");
+        if (sound == nullptr || sound->planes.size() != 2 || sound->planes[0].size() < 48000 ||
+            sound->planes[1].size() < 48000)
+            continue;
+        std::vector<float> interleaved(2U * 48000U);
+        for (std::size_t i = 0; i < 48000; ++i)
+            for (std::size_t c = 0; c < 2; ++c)
+                interleaved[i * 2 + c] = sound->planes[c][i];
+        media::audio::loudness::Meter meter(48000, 2);
+        expect(meter.add(interleaved), name + ": the reference meter takes the sound");
+        const auto measured = meter.measurement();
+        expect(measured.truePeakDbtp <= -1.0,
+               name + ": the published file measures at or below -1 dBTP (" +
+                   std::to_string(measured.truePeakDbtp) + ")");
+        expect(report->finalMeasured && measured.loudnessMeasured &&
+                   std::abs(measured.integratedLufs - report->finalLufs) < 0.05,
+               name + ": the report's loudness is the published file's (file " +
+                   std::to_string(measured.integratedLufs) + ", report " +
+                   std::to_string(report->finalLufs) + ")");
+        expect(std::abs(measured.truePeakDbtp - report->finalTruePeakDbtp) < 0.05,
+               name + ": the report's true peak is the published file's (file " +
+                   std::to_string(measured.truePeakDbtp) + ", report " +
+                   std::to_string(report->finalTruePeakDbtp) + ")");
+        // The log reports the delivered file's true peak and how many trial encodes it took.
+        std::string line;
+        for (const auto& entry : f.service->log(finished->id, 0).entries)
+            if (entry.code == "export.audio.loudness")
+                line = entry.message;
+        char peak[32];
+        std::snprintf(peak, sizeof peak, "true peak %.2f dBTP", report->finalTruePeakDbtp);
+        expect(line.starts_with("Measured on the delivered file: ") &&
+                   line.find(peak) != std::string::npos,
+               name + ": the log gives the delivered file's true peak (" + line + ")");
+        std::cout << "  " << name << ": " << line << '\n';
+        const auto trials = line.find(" trial encodes of the sound alone");
+        std::size_t start = trials;
+        while (start != std::string::npos && start > 0 &&
+               std::isdigit(static_cast<unsigned char>(line[start - 1])) != 0)
+            --start;
+        const auto count = trials == std::string::npos || start == trials
+                               ? 0
+                               : std::stoul(line.substr(start, trials - start));
+        expect(count >= 2, name +
+                               ": the first trial at the limit went over it, so the limiter "
+                               "was lowered for the encoder (" +
+                               line + ")");
+    }
+}
+
 // #570: a WAV export normalized to a loudness target. The tone source measures about -12.4 LUFS
 // (a 0.25-amplitude sine in both channels); the export brings it to the target, the report states
 // the measured and the delivered level, and an independent meter reading of the published file
@@ -1440,6 +1574,7 @@ int main(const int argc, char** argv) {
         testCompileFailureNamesItsSubject();
         testLoudnessNormalization();
         testLoudnessThroughVideoContainers();
+        testTruePeakHoldsInLossyDelivery();
     } catch (const std::exception& error) {
         std::cerr << "FAIL: " << error.what() << '\n';
         return 1;

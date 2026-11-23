@@ -1,4 +1,5 @@
 #include "ffmpeg_provider.hpp"
+#include "ffmpeg_audio_loudness.hpp"
 #include "ffmpeg_reopen_compare.hpp"
 #include "ffmpeg_stream_color_tags.hpp"
 #include "ffmpeg_subtitle_tracks.hpp"
@@ -1063,6 +1064,10 @@ struct AudioCursor final {
     std::vector<std::vector<float>> pending;
     // Sample following the last delivered block; a request starting here continues.
     std::optional<std::int64_t> next;
+    // An audio-only file whose stream declares its own length ends there (#770); empty when the
+    // length is an estimate or covers other streams.
+    std::optional<std::int64_t> declaredEnd;
+    int lastFrameSamples = 0;
 };
 void openAudio(AudioCursor& cursor, std::unique_ptr<Input> input, const unsigned streamIndex) {
     cursor = {};
@@ -1077,15 +1082,27 @@ void openAudio(AudioCursor& cursor, std::unique_ptr<Input> input, const unsigned
     decoder(in, stream, nullptr);
     cursor.layout = channels(stream.codecpar->ch_layout);
     // Container timestamps can start well after zero (for example MPEG-TS).
+    bool video = false;
     for (unsigned i = 0; i < in.format->nb_streams; ++i) {
         const auto& candidate = *in.format->streams[i];
         if (candidate.codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video = true;
             if (candidate.start_time != AV_NOPTS_VALUE)
                 cursor.origin =
                     av_rescale_q(candidate.start_time, candidate.time_base, {1, cursor.rate});
             break;
         }
     }
+    // A file without video counts from its audio's own first presentation, as its probed
+    // duration does (#770). An MP3 whose Xing header declares the encoder delay starts there: the
+    // demuxer trims the delay, so the first decoded frame is timed after zero.
+    if (!video && stream.start_time != AV_NOPTS_VALUE)
+        cursor.origin = av_rescale_q(stream.start_time, stream.time_base, {1, cursor.rate});
+    // Its length is then the stream's own, counted from the same first presentation, unless the
+    // demuxer estimated it from the bit rate (an MP3 without a Xing header).
+    if (!video && stream.duration != AV_NOPTS_VALUE && stream.duration > 0 &&
+        in.format->duration_estimation_method != AVFMT_DURATION_FROM_BITRATE)
+        cursor.declaredEnd = av_rescale_q(stream.duration, stream.time_base, {1, cursor.rate});
 }
 AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
     require(cursor.input && request.stream == cursor.stream, "Requested stream is not audio");
@@ -1164,6 +1181,7 @@ AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
                 "Audio timestamp exceeds limits", Error::Oversized);
         const auto end = begin + f.nb_samples;
         cursor.previousEnd = end;
+        cursor.lastFrameSamples = f.nb_samples;
         if (end <= first + static_cast<std::int64_t>(result.channels.front().size())) {
             av_frame_unref(input.frame);
             continue;
@@ -1194,6 +1212,14 @@ AudioBlock audio(AudioCursor& cursor, const CallRequest& request) {
     // stream's last sample is silence. A stream that gave no audio at all is still refused.
     require(cursor.previousEnd.has_value(), "Audio block is outside the stream duration",
             Error::Unavailable);
+    // A stream that declares its own length and ends more than one coded frame (and one time
+    // base tick) short of it is truncated: refuse rather than play the rest as silence.
+    if (cursor.declaredEnd) {
+        const auto tick = av_rescale_q_rnd(1, stream.time_base, {1, rate}, AV_ROUND_UP);
+        const auto frame = std::max(stream.codecpar->frame_size, cursor.lastFrameSamples);
+        require(*cursor.declaredEnd - *cursor.previousEnd <= frame + tick,
+                "Audio stream ended before its declared length", Error::Unavailable);
+    }
     for (auto& channel : result.channels)
         channel.resize(request.samples, 0.0F);
     return complete();
