@@ -53,6 +53,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -446,8 +447,9 @@ const std::shared_ptr<render::PackedHostRetirementOwner>& capacityRetirement() {
 }
 
 // A shared processing root with `headroom` bytes of host capacity, as the application samples it.
-std::shared_ptr<runtime::GpuProcessingPhasePolicy> capacityPolicy(const std::uint64_t headroom) {
-    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, capacityRetirement());
+// The fixture's reading of a root with `headroom` free under an 8 GiB process limit, taken now.
+void applyCapacitySample(runtime::GpuProcessingPhasePolicy& policy, const std::uint64_t headroom,
+                         const std::uint64_t serial) {
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
     runtime::MemoryBudgetState sample;
     sample.machine.availableBytes = 60 * gib;
@@ -458,11 +460,35 @@ std::shared_ptr<runtime::GpuProcessingPhasePolicy> capacityPolicy(const std::uin
                                       .kind = runtime::ProcessMemoryLimitKind::Finite,
                                       .limitBytes = 8 * gib,
                                       .currentBytes = 8 * gib - headroom});
-    sample.sampleSerial = 1;
+    sample.sampleSerial = serial;
     sample.processSampleFresh = true;
-    policy->applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+    policy.applyHostSample(sample, 60 * gib, sample.process.sampledAt);
+}
+
+std::shared_ptr<runtime::GpuProcessingPhasePolicy> capacityPolicy(const std::uint64_t headroom) {
+    auto policy = std::make_shared<runtime::GpuProcessingPhasePolicy>(32, capacityRetirement());
+    applyCapacitySample(*policy, headroom, 1);
     return policy;
 }
+
+// A provider given a root it does not own never samples it: the root's owner does (the desktop's
+// memory budget controller, every few seconds), and a reading is valid for ten seconds. An export
+// that outlives the fixture's one reading would wait for host capacity that is never sampled again,
+// so a test whose export can take that long keeps its root sampled as the owner does.
+class KeptSampled final {
+  public:
+    KeptSampled(std::shared_ptr<runtime::GpuProcessingPhasePolicy> policy,
+                const std::uint64_t headroom)
+        : thread_([policy = std::move(policy), headroom](const std::stop_token& stop) {
+              for (std::uint64_t serial = 2; !stop.stop_requested(); ++serial) {
+                  applyCapacitySample(*policy, headroom, serial);
+                  std::this_thread::sleep_for(std::chrono::milliseconds(250));
+              }
+          }) {}
+
+  private:
+    std::jthread thread_;
+};
 
 std::shared_ptr<host::GpuExportProvider>
 capacityProvider(runtime::TaskScheduler& scheduler,
@@ -875,6 +901,7 @@ void testManyAudioLayers(const std::filesystem::path& parent) {
     constexpr std::uint64_t gib = 1024ULL * 1024 * 1024;
     {
         auto policy = capacityPolicy(2 * gib);
+        const KeptSampled sampled(policy, 2 * gib);
         auto provider = capacityProvider(f.scheduler, policy, nullptr);
         const auto path = directory / "many-layers-rooted.mov";
         auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
@@ -891,6 +918,7 @@ void testManyAudioLayers(const std::filesystem::path& parent) {
     }
     {
         auto policy = capacityPolicy(2 * gib);
+        const KeptSampled sampled(policy, 2 * gib);
         auto provider = capacityProvider(f.scheduler, policy, nullptr);
         const auto path = directory / "many-layers-late.mov";
         auto request = f.request(path, output::OutputPresetV1::ProResMovV1);
@@ -1423,12 +1451,14 @@ GpuProofOutcome testGpuVideoProvenance(Fixture& f, const std::filesystem::path& 
                   "transform runs");
         const auto bytes = [](const std::filesystem::path& file) {
             std::ifstream in(file, std::ios::binary);
-            return std::string(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+            return std::string(std::istreambuf_iterator<char>(in),
+                               std::istreambuf_iterator<char>());
         };
         check(bytes(directory / "gpu-reuse-first.mov") == bytes(path) &&
                   bytes(directory / "gpu-reuse-second.mov") == bytes(path),
               "GPU reuse: both movies are byte-identical to the export without reuse (first: " +
-                  test_support::movieDifference(bytes(directory / "gpu-reuse-first.mov"), bytes(path)) +
+                  test_support::movieDifference(bytes(directory / "gpu-reuse-first.mov"),
+                                                bytes(path)) +
                   "; second: " +
                   test_support::movieDifference(bytes(directory / "gpu-reuse-second.mov"),
                                                 bytes(path)) +
