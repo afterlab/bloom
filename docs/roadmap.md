@@ -34,7 +34,7 @@ Everything in this section is on `main` and covered by tests. Each row names the
 
 | Group | Issues |
 | --- | --- |
-| v0.1.0-alpha.4 (in preparation): exports with many audio and movie layers, MP3 files, the true-peak limit in delivered AAC and Opus, cached-frame reuse, MCP export from a project file, sequence import names and path bounds, clearer export failures, and the Windows update window | #765 #766 #767 #768 #769 #770 #771 #772 #773 #774 #775 #783 #784 #785 #787 #788 #789 #790 |
+| v0.1.0-alpha.4 (2026-11-24): exports with many audio and movie layers, MP3 files, the true-peak limit in delivered AAC and Opus, cached-frame reuse, MCP export from a project file, sequence import names and path bounds, clearer export failures, and the Windows update window | #765 #766 #767 #768 #769 #770 #771 #772 #773 #774 #775 #783 #784 #785 #787 #788 #789 #790 |
 | v0.1.0-alpha.3 (2026-11-23): subtitles, styled and animated text, filtered and pixel-art scaling, coordinate spaces, Path Stroke dash patterns, Image Switch, export backgrounds, and presets that state their codecs, with the reliability fixes before them | #752 #757 #758 #742 #743 #591 #759 #531 #760 #761 |
 | v0.1.0-alpha.2 (2026-11-20): large projects that always save, agent work over MCP that stays quiet and responsive at scale, the MCP field-test bugs, and crash reports kept on the user's machine | the rows below, down to the save fix |
 | Crash reports: Crashpad's out-of-process handler in every package, a text report and a minidump kept on the user's machine, a notice on the next start, debug symbols kept as release-workflow artifacts | #736 |

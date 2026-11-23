@@ -205,7 +205,7 @@ as fit (see [GPU admission](architecture/gpu-backend.md#processing-phase-admissi
 
 ## Current Checkpoint
 
-- v0.1.0-alpha.4 is in preparation: exports with many audio and movie layers, the true-peak limit
+- v0.1.0-alpha.4 was released on 2026-11-24: exports with many audio and movie layers, the true-peak limit
   in delivered AAC and Opus files, MCP export from a project file, and a clearer Windows update.
   v0.1.0-alpha.3 was released on 2026-11-23: subtitles, styled and animated text, filtered scaling,
   Image Switch and exports that state their codecs. v0.1.0-alpha.2 was released on 2026-11-20: large
