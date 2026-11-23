@@ -124,6 +124,9 @@ class VideoSourceContext final : public std::enable_shared_from_this<VideoSource
     static constexpr std::size_t kReportedSources = 32;
     static constexpr std::size_t kSnapshotFiles = 8;
     static constexpr std::size_t kMinimumRetainedSessions = 2;
+    // The file limit a new context's quota starts with: kSnapshotFiles, or the test-only
+    // BLOOM_TEST_SNAPSHOT_FILE_LIMIT (video_source.cpp).
+    [[nodiscard]] static std::size_t initialSnapshotFiles() noexcept;
 
   private:
     std::mutex mutex_;
@@ -159,7 +162,7 @@ class VideoSourceContext final : public std::enable_shared_from_this<VideoSource
     std::list<SessionEntry> sessions_;
     std::shared_ptr<platform::FileSnapshotQuota> quota_ =
         std::make_shared<platform::FileSnapshotQuota>(
-            media::video::defaultSourceSnapshotQuotaBytes(), kSnapshotFiles);
+            media::video::defaultSourceSnapshotQuotaBytes(), initialSnapshotFiles());
     std::shared_ptr<render::detail::PackedHostRetirementState> retirement_;
     std::uint64_t generation_ = 0;
     bool closed_ = false;

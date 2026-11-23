@@ -13,8 +13,11 @@
 #include <bloom/runtime/memory_budget_ledger.hpp>
 #include <bloom/runtime/value_graph_evaluation.hpp>
 #include <bloom/runtime/video_asset.hpp>
+#include <charconv>
+#include <cstdlib>
 #include <limits>
 #include <numeric>
+#include <optional>
 #include <thread>
 #include <vector>
 namespace bloom::runtime::detail {
@@ -79,6 +82,29 @@ std::size_t VideoSourceContext::retainedSessionCount() {
     const std::lock_guard lock(mutex_);
     return sessions_.size();
 }
+namespace {
+// Test-only: BLOOM_TEST_SNAPSHOT_FILE_LIMIT=<files> holds every video source snapshot quota of the
+// process to that many files, so a test can reach the full-quota resource limit (#772) through a
+// whole surface (export queue, Python, bloom-cli, bloom-mcp) with a few small movies. Read at each
+// admission, so a test sets it before its first export; 0 refuses every capture (a still-frame
+// render reads its layers one at a time and releases each source before the next, so only a
+// limit of 0 can fill its quota). Nothing in the product sets it, no user setting maps to it, and
+// when it is unset or not a decimal, nothing changes.
+[[nodiscard]] std::optional<std::size_t> testSnapshotFileLimit() noexcept {
+    const char* const value = std::getenv("BLOOM_TEST_SNAPSHOT_FILE_LIMIT"); // NOLINT(concurrency-mt-unsafe)
+    if (value == nullptr || *value == '\0')
+        return std::nullopt;
+    std::size_t files = 0;
+    const auto* const end = value + std::char_traits<char>::length(value);
+    const auto parsed = std::from_chars(value, end, files);
+    if (parsed.ec != std::errc{} || parsed.ptr != end)
+        return std::nullopt;
+    return files;
+}
+} // namespace
+std::size_t VideoSourceContext::initialSnapshotFiles() noexcept {
+    return testSnapshotFileLimit().value_or(kSnapshotFiles);
+}
 void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
     if (sessionByteBudget_ == 0)
         sessionByteBudget_ = processMemoryBudgetLedger().defaultTotalByteBudget();
@@ -112,7 +138,7 @@ void VideoSourceContext::admitLocked(std::list<SessionEntry>& detached) {
     }
     // The snapshot files: the idle retention plus every source the running passes need. A
     // snapshot released above still counts until it closes; a capture waits for that.
-    quota_->setFileLimit(kSnapshotFiles + (sources.size() - idle));
+    quota_->setFileLimit(testSnapshotFileLimit().value_or(kSnapshotFiles + (sources.size() - idle)));
 }
 void VideoSourceContext::releaseSourcesLeftBefore(const LinearPassRetention& pass,
                                                   const core::RationalTime frame) {
