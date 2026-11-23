@@ -107,7 +107,8 @@ class GpuExportProvider final {
     ownedPackedHostRetirementOwner() const noexcept;
     // #785: the frames this provider's exports evaluated, for exports whose output reuses cached
     // frames. One cache per provider, created on first use over processingPhasePolicy() (whose
-    // reclaimers give its memory back). Thread-safe.
+    // reclaimers give its memory back). Null once beginShutdown() ran, which drops every retained
+    // frame. Thread-safe.
     [[nodiscard]] std::shared_ptr<ExportFrameCacheV1> exportFrameCache();
     // Worker-only. Provider-owned roots refresh at most once per five seconds; injected GUI
     // roots use their existing asynchronous application sampler and never sample here.

@@ -1807,6 +1807,10 @@ void testCachedFramesAreReused() {
                    std::to_string(held.bytes) + " of " + std::to_string(before) + " bytes)");
         policy->reclaimFor(render::GpuProcessingPhaseDomain::Host,
                            policy->usableCapacity().hostUsableBytes + held.bytes);
+        // The jobs' own frame attempts retire on their worker; once they have, the root holds none
+        // of the frames the cache gave back.
+        (void)f.pumpUntil(
+            [&] { return before - policy->usableCapacity().hostClaimBytes >= held.bytes; }, 10);
         const auto after = policy->usableCapacity().hostClaimBytes;
         expect(cache->stats().entries == 0 && before - after >= held.bytes,
                "memory: a host wait on the root releases every retained frame (" +

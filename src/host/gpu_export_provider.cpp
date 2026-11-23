@@ -129,6 +129,8 @@ struct GpuExportProvider::State final {
     std::shared_ptr<runtime::PackedHostRetirementOwner> packedHostOwner;
     std::mutex frameCacheMutex;
     std::shared_ptr<ExportFrameCacheV1> frameCache;
+    // Set by beginShutdown(): no cache is made or handed out afterwards.
+    bool frameCacheClosed = false;
     std::mutex samplingMutex;
     std::shared_ptr<runtime::MemoryBudgetLedger> samplingLedger;
     // Same sampled root; escaped contexts keep its ledger alive through unregister.
@@ -424,6 +426,8 @@ std::shared_ptr<ExportFrameCacheV1> GpuExportProvider::exportFrameCache() {
     if (!state_ || !state_->options.processingPhasePolicy)
         return nullptr;
     const std::lock_guard lock(state_->frameCacheMutex);
+    if (state_->frameCacheClosed)
+        return nullptr;
     if (!state_->frameCache)
         state_->frameCache = ExportFrameCacheV1::create(state_->options.processingPhasePolicy);
     return state_->frameCache;
@@ -457,6 +461,21 @@ void GpuExportProvider::beginShutdown() noexcept {
     }
     if (sourcePool)
         sourcePool->close();
+    // #785: retained export frames hold rooted pixels; the root's owners retire only once they go.
+    std::shared_ptr<ExportFrameCacheV1> frameCache;
+    {
+        const std::lock_guard lock(state_->frameCacheMutex);
+        frameCache = std::move(state_->frameCache);
+        state_->frameCacheClosed = true;
+    }
+    if (frameCache) {
+        try {
+            frameCache->clear();
+        } catch (...) {
+            // Dropping the cache below still releases every frame it held.
+        }
+        frameCache.reset();
+    }
     if (state_->packedHostOwner)
         state_->packedHostOwner->beginShutdown();
 }

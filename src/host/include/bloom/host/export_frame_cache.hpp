@@ -1,7 +1,6 @@
 #pragma once
 
 #include <bloom/core/sha256.hpp>
-#include <bloom/render/final_pixel_storage.hpp>
 #include <bloom/runtime/composite_frame_cache.hpp>
 #include <bloom/runtime/evaluation.hpp>
 

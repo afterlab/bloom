@@ -729,7 +729,10 @@ class ImageDriver final : public DriverBase {
     // #785: the output's "Use cached frames": this output's frames take part in the provider's
     // export frame cache under one run serial. Absent when the setting is off or no provider.
     [[nodiscard]] std::optional<ExportFrameReuseV1> frameReuse() {
-        if (!input_.output.record.settings.useCachedFrames || dependencies_.gpu == nullptr)
+        // A device-required export proves every frame on the device in this run (AGENTS.md), so it
+        // evaluates every frame.
+        if (!input_.output.record.settings.useCachedFrames || dependencies_.gpu == nullptr ||
+            input_.requireDevice)
             return std::nullopt;
         if (!frameReuse_) {
             auto cache = dependencies_.gpu->exportFrameCache();

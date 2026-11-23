@@ -255,6 +255,7 @@ RenderResult Render::run(Session& session, runtime::TaskScheduler& scheduler,
     output.settings.encoder = request.encoder;
     output.settings.subtitles = request.subtitles;
     output.settings.background = request.background;
+    output.settings.useCachedFrames = false; // #785: a render request always evaluates fresh frames.
     if (request.subtitles && request.subtitles->embed &&
         !document::exportFormatEmbedsSubtitles(*format))
         return failed(std::string(host::kSubtitleEmbedUnsupportedReason));
