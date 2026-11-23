@@ -18,6 +18,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdio>
 #include <fstream>
 #include <thread>
 
@@ -490,6 +491,12 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             : preference == Preference::Hardware ? Platform::Required
             : *preset == output::OutputPresetV1::ProResMovV1 ? Platform::Required
                                                              : Platform::Preferred;
+        // #771: the delivered file's true peak over the limit renders the export again with the
+        // limiter lower by the overshoot and a margin, a bounded number of times: the rule the
+        // export queue applies (export_output_drivers.cpp).
+        constexpr std::uint32_t kTruePeakRenders = 3;
+        constexpr double kTruePeakMarginDb = 0.1;
+        double truePeakHeadroomDb = 0.0;
         const auto attempt = [&](const Platform policy) {
             host::SequenceExportRequestV1 request{
                 .composition = {snapshot, composition->id()},
@@ -513,10 +520,13 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
                 .ocioConfigUri = std::string(colorIntent->ocioConfigUri),
                 .gpuProvider = gpuExportProvider,
                 .loudness = loudness ? std::optional(output::AudioLoudnessTargetV1{
-                                           loudness->targetLufs, loudness->truePeakDbtp})
+                                           loudness->targetLufs, loudness->truePeakDbtp,
+                                           truePeakHeadroomDb})
                                      : std::nullopt,
                 .overwritePolicy = replace ? platform::ArtifactOverwritePolicy::CreateOrReplace
                                            : platform::ArtifactOverwritePolicy::CreateOnly};
+            if (core.dependencies.sequenceExportSeam)
+                core.dependencies.sequenceExportSeam(request);
             auto made = std::make_unique<host::SequenceExportRunnerV1>(
                 scheduler, compiler, *session.publicationCoordinator(),
                 *session.artifactCoordinator(), ledger, std::move(request), *retirement);
@@ -539,24 +549,62 @@ yyjson_mut_val* renderHeadless(McpServerCore::State& core, Json& out, McpCall& c
             }
             return made;
         };
-        auto owned = attempt(platformEncoder);
-        // The system's encoder was preferred and failed after it began: render the export again
-        // on Bloom's FFmpeg encoder, once, and say so in the report.
+        auto encoderPolicy = platformEncoder;
+        auto owned = attempt(encoderPolicy);
         std::string replaced;
-        if (!owned->result()->published() &&
-            owned->result()->failureStage ==
-                host::SequenceExportFailureStageV1::PlatformEncoderFailed &&
-            !stop.stop_requested()) {
-            replaced = owned->result()->failure ? owned->result()->failure->detail
-                                                : std::string("it did not finish the file");
+        std::uint32_t truePeakRenders = 0;
+        std::string truePeakNote;
+        const auto dbtpText = [](const double value) {
+            char text[32];
+            std::snprintf(text, sizeof text, "%.2f", value);
+            return std::string(text);
+        };
+        while (!owned->result()->published() && !stop.stop_requested()) {
+            const auto& failed = *owned->result();
+            // The system's encoder was preferred and failed after it began: render the export
+            // again on Bloom's FFmpeg encoder, once, and say so in the report.
+            if (failed.failureStage == host::SequenceExportFailureStageV1::PlatformEncoderFailed &&
+                replaced.empty()) {
+                replaced = failed.failure ? failed.failure->detail
+                                          : std::string("it did not finish the file");
+                encoderPolicy = Platform::Skipped;
+            } else if (failed.failureStage ==
+                           host::SequenceExportFailureStageV1::TruePeakExceeded &&
+                       failed.loudness && truePeakRenders < kTruePeakRenders) {
+                // #771: nothing was published. The encoder changed the sound after the limiter;
+                // the limiter goes lower by the overshoot.
+                const auto& measured = *failed.loudness;
+                const auto over = measured.finalTruePeakDbtp - measured.truePeakLimitDbtp;
+                truePeakHeadroomDb += over + kTruePeakMarginDb;
+                ++truePeakRenders;
+                truePeakNote = "; the delivered file's true peak was " +
+                               dbtpText(measured.finalTruePeakDbtp) + " dBTP, " + dbtpText(over) +
+                               " dB over the " + dbtpText(measured.truePeakLimitDbtp) +
+                               " dBTP limit, so Bloom rendered the export again with the limiter " +
+                               dbtpText(truePeakHeadroomDb) + " dB lower (" +
+                               std::to_string(truePeakRenders + 1) + " renders)";
+            } else
+                break;
             owned.reset();
-            owned = attempt(Platform::Skipped);
+            owned = attempt(encoderPolicy);
         }
         auto& runner = *owned;
         if (!replaced.empty())
             report += "; the system encoder failed partway (" + replaced +
                       "), so Bloom's FFmpeg encoder rendered the export again";
+        if (runner.result()->published())
+            report += truePeakNote;
         if (!runner.result()->published()) {
+            if (runner.result()->failureStage ==
+                    host::SequenceExportFailureStageV1::TruePeakExceeded &&
+                runner.result()->loudness)
+                throw std::runtime_error(
+                    "The exported file's sound went over its true-peak limit (" +
+                        dbtpText(runner.result()->loudness->finalTruePeakDbtp) + " dBTP, limit " +
+                        dbtpText(runner.result()->loudness->truePeakLimitDbtp) + " dBTP) after " +
+                        std::to_string(truePeakRenders + 1) +
+                        " renders with the limiter lowered each time, so it was not published "
+                        "and nothing was replaced.");
             if (runner.result()->failureStage == host::SequenceExportFailureStageV1::Destination)
                 throw ToolFailure(McpToolErrorCode::PreflightBlocked,
                                   destination.filename().string() +

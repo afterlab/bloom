@@ -118,6 +118,26 @@ if(BUILD_TESTING)
         LABELS unit mcp
         TIMEOUT 300
     )
+    # #771: the stdio route's movie export renders again when the delivered file's true peak is
+    # over the limit, through the real runner and media worker (Opus forced by the test seam).
+    add_executable(bloom_mcp_true_peak_rerender_test
+                   "${PROJECT_SOURCE_DIR}/tests/integration/mcp_true_peak_rerender_tests.cpp")
+    target_include_directories(bloom_mcp_true_peak_rerender_test PRIVATE
+                               "${PROJECT_SOURCE_DIR}/tests/support")
+    target_link_libraries(bloom_mcp_true_peak_rerender_test PRIVATE bloom_mcp bloom_commands
+                                                                    bloom_media_video
+                                                                    bloom_media_audio
+                                                                    yyjson::yyjson)
+    if(TARGET bloom-media-worker)
+        add_dependencies(bloom_mcp_true_peak_rerender_test bloom-media-worker)
+    endif()
+    bloom_enable_warnings(bloom_mcp_true_peak_rerender_test)
+    bloom_add_test(
+        NAME bloom.mcp.true-peak-rerender
+        COMMAND bloom_mcp_true_peak_rerender_test
+        LABELS unit mcp
+        TIMEOUT 300
+    )
     # #747: asynchronous transact jobs, idempotency keys, retry advice and multi-parameter bulk
     # keys, on a live session whose owner thread the test runs.
     add_executable(bloom_mcp_transact_jobs_test tests/transact_jobs_tests.cpp)

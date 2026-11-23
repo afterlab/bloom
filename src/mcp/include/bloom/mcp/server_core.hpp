@@ -21,6 +21,7 @@
 namespace bloom::host {
 class ExportQueueService;
 class GpuExportProvider;
+struct SequenceExportRequestV1;
 } // namespace bloom::host
 namespace bloom::runtime {
 class TaskScheduler;
@@ -181,6 +182,11 @@ struct McpCoreDependencies final {
     // #747 (D1): told about every asynchronous transact job step (McpJobEvent). Optional; it must
     // not block or call back into the core.
     std::function<void(const McpJobEvent&)> jobEvents{};
+    // Test seam (#771), null in production: called on every movie request the stdio route runs
+    // directly (ProRes, DNxHR, WAV), after the route filled it in. Those presets carry PCM sound,
+    // which no encoder changes after the limiter; a test switches the request to Opus with the
+    // trial encodes off to reach the route's render-again path.
+    std::function<void(host::SequenceExportRequestV1&)> sequenceExportSeam{};
 };
 
 inline constexpr std::size_t kMcpRetainedCaptures = 16;
