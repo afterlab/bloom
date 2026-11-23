@@ -283,7 +283,8 @@ void addQueryKindEntries(std::vector<ReferenceEntry>& out) {
          "solid's own size, a text block's laid-out box). `corners` are that rectangle's four "
          "corners after the layer's transform and its parents', in composition pixels (x to the "
          "right, y down, origin at the frame's top-left corner), in the order top-left, "
-         "top-right, bottom-right, bottom-left; `bounds` is the axis-aligned box around them and "
+         "top-right, bottom-right, bottom-left; `bounds` is the axis-aligned box around them (for a rotated or sheared shape "
+         "layer, the box around its drawn ink after trim, stroke and transform) and "
          "`anchor` the layer's anchor point, both in composition pixels and not clipped to the "
          "frame. A layer outside its range, disabled or empty at that time answers "
          "visible:false with a reason.",

@@ -145,10 +145,10 @@ layerAlignmentGeometry(const document::Composition& composition, const core::Rat
         const auto* layer = composition.graph().findLayer(entry.layerId);
         if (layer == nullptr || entry.output.empty() || !seen.insert(entry.layerId.value()).second)
             continue;
-        commands::LayerAlignmentGeometry geometry{.layer = entry.layerId,
-                                                  .bounds = {entry.output.left, entry.output.top,
-                                                             entry.output.right,
-                                                             entry.output.bottom}};
+        // #774: a rotated shape aligns by its ink, as layerOutputBounds() reports it.
+        const auto& box = entry.ink && !entry.ink->empty() ? *entry.ink : entry.output;
+        commands::LayerAlignmentGeometry geometry{
+            .layer = entry.layerId, .bounds = {box.left, box.top, box.right, box.bottom}};
         const auto keyTime = commands::layerKeyTimeOfCompositionTime(layer->timing, time);
         if (keyTime) {
             const auto position = sampleVec2(

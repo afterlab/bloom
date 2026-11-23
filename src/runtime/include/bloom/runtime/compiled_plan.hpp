@@ -125,6 +125,11 @@ struct EvaluatedOperationBounds final {
     document::LayerId layerId;
     std::array<document::Vec2d, 4> polygon{};
     document::Vec2d anchor;
+    // #774: the box of the ink a rotated or sheared Shape Source layer draws, when it is smaller
+    // than `output` (the box of the content box's mapped corners). Absent when `output` already
+    // is the ink's box. `output` stays the content box's, so what is built from it is unchanged;
+    // layerOutputBounds() reports the ink's.
+    std::optional<ContentBounds> ink = std::nullopt;
     friend bool operator==(const EvaluatedOperationBounds&,
                            const EvaluatedOperationBounds&) = default;
 };

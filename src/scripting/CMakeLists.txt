@@ -188,6 +188,16 @@ if(BUILD_TESTING)
         LABELS unit scripting host commands runtime
         TIMEOUT 120
     )
+    # #774: a path layer's reported bounds are its drawn ink's, after trim, stroke and transform.
+    add_executable(bloom_scripting_path_layer_bounds_test tests/path_layer_bounds_tests.cpp)
+    target_link_libraries(bloom_scripting_path_layer_bounds_test PRIVATE bloom_scripting)
+    bloom_enable_warnings(bloom_scripting_path_layer_bounds_test)
+    bloom_add_test(
+        NAME bloom.scripting.path-layer-bounds
+        COMMAND bloom_scripting_path_layer_bounds_test
+        LABELS unit scripting runtime
+        TIMEOUT 120
+    )
     # ADR 0033 "One runner": Render::run through host::ExportJobRunner writes the same files and
     # bytes as the previous direct attempt/publication route, kept verbatim in the test.
     add_executable(bloom_scripting_render_parity_test tests/render_parity_tests.cpp)

@@ -40,7 +40,7 @@ align and distribute.
    layers against a target:
    - **Bounds** are each layer's evaluated visual bounds at the time: the axis-aligned
      composition-space rectangle around its transformed content (`EvaluatedOperationBounds::output`,
-     not clipped by the frame).
+     not clipped by the frame; a rotated shape's is its drawn ink's box, `EvaluatedOperationBounds::ink`).
    - **Targets.** Composition is the composition frame. Selection is the union of the requested
      layers' bounds. Key Object is one layer's bounds, the key object of vector illustration
      applications; the key never moves.

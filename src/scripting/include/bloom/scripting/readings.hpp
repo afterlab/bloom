@@ -50,7 +50,8 @@ struct LayerBoundsReading final {
     // composition pixels: x to the right, y down, origin at the frame's top-left. Order: top-left,
     // top-right, bottom-right, bottom-left of the content.
     std::array<std::array<double, 2>, 4> corners{};
-    // The axis-aligned box around those corners, in composition pixels. Not clipped to the frame.
+    // The axis-aligned box around those corners, in composition pixels, or around the drawn ink of
+    // a rotated or sheared shape (after trim, stroke and transform). Not clipped to the frame.
     double boundsLeft = 0.0;
     double boundsTop = 0.0;
     double boundsRight = 0.0;

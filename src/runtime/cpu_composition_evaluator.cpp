@@ -27,6 +27,7 @@
 #include "plan_time_scopes.hpp"
 #include "resize_fit_geometry.hpp"
 #include "shape_geometry.hpp"
+#include "shape_ink_bounds.hpp"
 #include "sharpen_image_effect.hpp"
 #include "statistics_image_effect.hpp"
 #include "transform_2d_geometry.hpp"
@@ -5662,6 +5663,19 @@ EvaluationResult CpuCompositionEvaluator::evaluate(
                                 geometry.output.top = std::min(geometry.output.top, point.y);
                                 geometry.output.right = std::max(geometry.output.right, point.x);
                                 geometry.output.bottom = std::max(geometry.output.bottom, point.y);
+                            }
+                            // #774: a rotated shape's ink is smaller than the box of its rotated content box.
+                            if (!scaledContent && vectors[index]) {
+                                const auto& inkChain = *vectors[index];
+                                if (const auto* inkShape =
+                                        std::get_if<CompiledShape>(&plan->operations()[inkChain.source])) {
+                                    geometry.ink = detail::shapeInkOutputBounds(
+                                        *inkShape, *plan,
+                                        detail::resolvedForClock(
+                                            frameResolved,
+                                            plan->operationClock(OperationIndex::fromRaw(inkChain.source))),
+                                        map, [&cancellation] { return cancellation.isCancellationRequested(); });
+                                }
                             }
                             geometry.anchor =
                                 map({(centre.x + anchor->value.x) * contentScale,
